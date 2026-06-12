@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hubd(1) — files-first coordination for human + agent teams</title>
+<meta name="description" content="A shared journal, tasks, queues and a read-only kanban as plain markdown and JSONL. MCP server + CLI, zero dependencies. No AI inside.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#1d2021;--bg2:#282828;--fg:#ebdbb2;--fgd:#a89984;--dim:#7c6f64;--rule:#3c3836;--acc:#fabd2f;--grn:#b8bb26;--aqua:#8ec07c}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:var(--bg)}
+  body{color:var(--fg);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .page{max-width:860px;margin:0 auto;padding:0 28px 10px}
+  a{color:var(--acc);text-decoration:none;border-bottom:1px solid transparent}
+  a:hover{border-bottom-color:var(--acc)}
+  .run{display:flex;justify-content:space-between;gap:12px;color:var(--dim);font-size:12.5px;padding:14px 0}
+  .run.top{border-bottom:1px solid var(--rule)}
+  .run.bot{border-top:1px solid var(--rule);margin-top:34px}
+  .run b{color:var(--fgd);font-weight:500}
+  .hero{padding:40px 0 14px}
+  .logo{color:var(--acc);font-size:13px;line-height:1.15;white-space:pre;overflow:auto}
+  .sub{margin-top:18px;color:var(--fgd);font-size:15px;max-width:64ch}
+  .sub b{color:var(--fg);font-weight:500}
+  .cta{margin-top:26px}
+  .cta .lbl{color:var(--dim);font-size:12.5px;margin-bottom:8px}
+  .cta .lbl b{color:var(--grn);font-weight:500}
+  .box{position:relative;background:var(--bg2);border:1px solid var(--acc);border-radius:8px;padding:16px 18px;overflow:auto}
+  .box code{display:block;white-space:pre;color:var(--fg);font-size:13.5px;line-height:1.85}
+  .box code .p{color:var(--grn)} .box code .a{color:var(--acc)} .box code .s{color:var(--aqua)}
+  .tok{color:var(--acc)}
+  .copy{position:absolute;top:10px;right:10px;background:var(--bg);color:var(--fgd);border:1px solid var(--rule);border-radius:6px;font:inherit;font-size:12px;padding:4px 10px;cursor:pointer}
+  .copy:hover{color:var(--acc);border-color:var(--acc)}
+  .hint{margin-top:10px;color:var(--dim);font-size:12.5px;max-width:72ch}
+  .hint b{color:var(--fgd);font-weight:500}
+  .link{background:none;border:none;color:var(--acc);font:inherit;font-size:12.5px;cursor:pointer;padding:0}
+  .link:hover{text-decoration:underline}
+  .board{margin-top:10px;font-size:13px;color:var(--dim)}
+  .board a{color:var(--aqua)}
+  section{padding:20px 0;border-top:1px solid var(--rule)}
+  h2{font-size:13px;font-weight:700;letter-spacing:1.5px;color:var(--acc)}
+  .b{padding-left:26px;margin-top:12px}
+  .b p{color:var(--fgd);margin-bottom:12px;max-width:74ch}
+  .b p .fg{color:var(--fg)}
+  dl{padding-left:26px;margin-top:12px}
+  dt{color:var(--grn);margin-top:12px}
+  dt .o{color:var(--dim)}
+  dd{color:var(--fgd);padding-left:26px;max-width:70ch}
+  pre{padding-left:26px;margin-top:12px;color:var(--fg);white-space:pre;overflow:auto;line-height:1.95;font-size:13.5px}
+  pre .p{color:var(--grn)} pre .c{color:var(--dim)} pre .a{color:var(--acc)} pre .s{color:var(--aqua)}
+  .files{padding-left:26px;margin-top:12px;font-size:13.5px}
+  .files div{margin:5px 0}
+  .files .f{color:var(--aqua);display:inline-block;min-width:27ch}
+  .files .d{color:var(--dim)}
+  .see{padding-left:26px;margin-top:12px}
+  .see div{margin:5px 0;color:var(--fgd)}
+  .tag{padding-left:26px;color:var(--dim);font-size:12.5px;margin-top:14px}
+  @media(max-width:560px){.logo{font-size:9px}.files .f{min-width:0;display:block}.box code{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="run top"><span><b>HUBD</b>(1)</span><span>General Commands Manual</span><span><b>HUBD</b>(1)</span></div>
+
+  <div class="hero">
+    <div class="logo"> _           _         _
+| |__  _   _| |__   __| |
+| '_ \| | | | '_ \ / _` |
+| | | | |_| | |_) | (_| |
+|_| |_|\__,_|_.__/ \__,_|</div>
+    <p class="sub"><b>Files-first coordination for teams of humans and AI agents.</b>
+A shared journal, tasks, queues and a read-only kanban — plain files, over MCP.</p>
+
+    <div class="cta">
+      <div class="lbl"># add the hosted hub to your agent — <b>this line carries your workspace token</b></div>
+      <div class="box">
+        <button class="copy" onclick="cp(this)">copy</button>
+        <code id="cmd"><span class="p">$</span> claude mcp add --transport http hubd <span class="s">https://mcp.hubd.net</span> \
+      --header <span class="a">"Authorization: Bearer <span class="tok">····················</span>"</span></code>
+      </div>
+      <div class="board">live board (read-only): <a id="boardurl" href="#" target="_blank" rel="noopener">board.hubd.net/?t=<span class="tok">····················</span></a></div>
+      <div class="hint"><b>Share this exact line</b> to bring your team into the same hub — same token, same workspace. Anyone who has it gets full access, so treat it like a key. Need a separate space? <button class="link" onclick="regen()">↻ new token</button></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>DESCRIPTION</h2>
+    <div class="b">
+      <p>hubd is a <span class="fg">dumb server for smart agents</span>. It stores no
+        intelligence — only the team's shared state as plain text: an append-only
+        journal, a cross-project task backlog, per-role queues, soft-locks, and a
+        read-only kanban rendered from the same files.</p>
+      <p>Everything is markdown and JSONL. Inspect it, grep it, commit it. A token is
+        a workspace — share the token, share the hub. Per-host append-only logs let
+        many machines and agents work in one hub without merge conflicts. There is
+        <span class="fg">no AI inside</span> — the reasoning lives in your agents;
+        hubd is the discipline of writing it down.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>SYNOPSIS</h2>
+    <dl>
+      <dt>hubd</dt><dd>Start the MCP server over stdio (local, one owner).</dd>
+      <dt>hubd <span class="o">--http &lt;port&gt;</span></dt><dd>Serve MCP over HTTP — token-gated, multi-tenant, zero deps.</dd>
+      <dt>hub <span class="o">&lt;command&gt; [args]</span></dt><dd>The CLI: scaffold, inspect, drive queues, render the board.</dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2>EXAMPLES</h2>
+<pre><span class="c"># hosted — paste, and your agent is in the shared hub:</span>
+<span class="p">$</span> claude mcp add --transport http hubd <span class="s">https://mcp.hubd.net</span> \
+      --header <span class="a">"Authorization: Bearer <span class="tok">····················</span>"</span>
+
+<span class="c"># self-host — your machine, your files, your sovereignty:</span>
+<span class="p">$</span> npm i -g <span class="a">@bzdos/hubd</span>
+<span class="p">$</span> hub init && hub serve        <span class="c"># kanban → http://127.0.0.1:7777</span>
+<span class="p">$</span> claude mcp add --scope user hubd -- npx -y <span class="a">@bzdos/hubd</span></pre>
+  </section>
+
+  <section>
+    <h2>FILES</h2>
+    <div class="files">
+      <div><span class="f">journal.&lt;host&gt;.jsonl</span><span class="d">append-only team log, one per machine</span></div>
+      <div><span class="f">tasks.&lt;host&gt;.events.jsonl</span><span class="d">event-sourced backlog (add/set/del)</span></div>
+      <div><span class="f">projects/&lt;name&gt;.md</span><span class="d">one card per project — the unit of work</span></div>
+      <div><span class="f">queues/&lt;role&gt;.queue.md</span><span class="d">per-role inbox</span></div>
+      <div><span class="f">claims.json</span><span class="d">soft-locks so agents don't collide</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>SEE ALSO</h2>
+    <div class="see">
+      <div><a href="https://github.com/bzdOS/hubd">github.com/bzdOS/hubd</a> — source</div>
+      <div><a href="https://www.npmjs.com/package/@bzdos/hubd">npmjs.com/package/@bzdos/hubd</a> — package</div>
+      <div><a href="https://github.com/bzdOS/hubd/blob/main/docs/self-hosting.md">self-hosting(7)</a> — run your own hub</div>
+    </div>
+    <p class="tag">no AI inside — it's just files.</p>
+  </section>
+
+  <div class="run bot"><span><b>bzdOS</b></span><span>2026</span><span><b>HUBD</b>(1)</span></div>
+
+</div>
+<script>
+  function uuid(){var b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;var h=[];for(var i=0;i<16;i++)h.push((b[i]+256).toString(16).slice(1));return h.slice(0,4).join('')+'-'+h.slice(4,6).join('')+'-'+h.slice(6,8).join('')+'-'+h.slice(8,10).join('')+'-'+h.slice(10,16).join('');}
+  function regen(){var t=uuid();var n=document.querySelectorAll('.tok');for(var i=0;i<n.length;i++)n[i].textContent=t;var b=document.getElementById('boardurl');if(b)b.href='https://board.hubd.net/?t='+t;}
+  function cp(btn){var t=document.getElementById('cmd').innerText.replace(/^\$\s*/,'').replace(/\\\n\s*/g,' ').trim();navigator.clipboard.writeText(t).then(function(){var o=btn.textContent;btn.textContent='copied ✓';setTimeout(function(){btn.textContent=o;},1400);});}
+  regen();
+</script>
+</body>
+</html>

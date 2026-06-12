@@ -1,0 +1,14 @@
+# runtime artifacts (ignored at any depth)
+.qstate/
+node_modules/
+*.log
+
+# this repo's own operational files (root-anchored, so they never clobber the
+# hubd-company/ template, which legitimately ships its own INBOX.md / queues/)
+/queues/
+/INBOX.md
+/AGENTS_team.md
+/HUBD_CTO_*.md
+/.hubd-local
+/.claude/
+/hub/spec_*_ru.md
