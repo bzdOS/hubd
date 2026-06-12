@@ -1,0 +1,38 @@
+{
+  "name": "@bzdos/hubd",
+  "version": "0.1.1",
+  "description": "Files-first project hub for mixed teams of AI agents and humans — shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
+  "repository": { "type": "git", "url": "git+https://github.com/bzdOS/hubd.git" },
+  "homepage": "https://github.com/bzdOS/hubd#readme",
+  "bugs": "https://github.com/bzdOS/hubd/issues",
+  "type": "module",
+  "bin": {
+    "hubd": "hub/index.mjs",
+    "hub": "hub/cli.mjs"
+  },
+  "files": [
+    "hub/index.mjs",
+    "hub/cli.mjs",
+    "hub/lib/",
+    "prompts/",
+    "README.md",
+    "LICENSE",
+    "HARVEST.md",
+    "docs/self-hosting.md",
+    "docs/interop.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "agents",
+    "ai-agents",
+    "cli",
+    "kanban",
+    "files-first",
+    "zero-dependencies",
+    "stdio"
+  ]
+}
