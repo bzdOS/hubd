@@ -107,3 +107,13 @@ If this repo (or any part of it) may ever become public: code, commit messages
 and docs are written in English and neutral tone from day one, with no personal
 data and no internal kitchen. Operational files (journal, queues, role files
 with real context) go to `.gitignore` — check before every commit.
+
+## Upgrades & migrations
+
+Upgrading hubd to a new version **never deletes task or card fields.** The event
+logs (`tasks.*.events.jsonl`) are append-only truth: a migration **appends**
+`set`/backfill events (rename, fill gaps) — it never rewrites a file or strips
+fields. The data is intentionally richer than the engine's schema (harvest
+captures fields the tools don't yet surface — `channel`, `owner_kind`, `note`, …);
+an unrecognized field is meaning, not cruft. Any "migration" that drops fields is
+a bug — refuse it. `hub doctor` flags a non-append-only rewrite.

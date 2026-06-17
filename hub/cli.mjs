@@ -365,6 +365,18 @@ if (cmd === 'doctor') {
   console.log('');
   console.log('rules source: ' + (rulesSource || 'none found'));
 
+  // append-only guard: task event logs only grow. A destructive "migration" that
+  // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
+  if (fs.existsSync(path.join(HUB, '.git'))) {
+    const removed = sh("git diff HEAD -- '*.events.jsonl'", HUB).split('\n').filter(l => /^-[^-]/.test(l)).length;
+    if (removed) {
+      warnings++;
+      console.log('');
+      console.log('event logs:  WARNING ' + removed + ' line(s) removed/changed in tasks.*.events.jsonl');
+      console.log('  append-only — migrations ADD events, never strip fields. Restore: git checkout -- "*.events.jsonl"');
+    }
+  }
+
   console.log('');
   if (warnings) {
     console.log('doctor: ' + warnings + ' warning(s)');
