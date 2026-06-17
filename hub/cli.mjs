@@ -31,6 +31,18 @@ const cmd = args[0];
 function pad(s, n) { s = String(s ?? ''); return s.length >= n ? s.slice(0, n - 2) + '… ' : s + ' '.repeat(n - s.length); }
 function die(msg) { console.error('Error: ' + msg); process.exit(1); }
 
+// rulesFile:start
+//   purpose: locate the team constitution (AGENTS.md). HUB (the real instance) wins; the team-root
+//     (HUBD_TEAM_DIR / cwd walk-up / fallback) is only a secondary location. ONE source — used by
+//     both `hub doctor` and the board's Rules, so they can never diverge or re-introduce a hardcode.
+// rulesFile:end
+function rulesFile() {
+  for (const p of [path.join(HUB, 'AGENTS.md'), path.join(resolveQueueRoot(), 'AGENTS.md')]) {
+    try { if (fs.existsSync(p)) return p; } catch {}
+  }
+  return null;
+}
+
 function getFlag(name) {
   const i = args.indexOf(name);
   return i !== -1 ? (args[i + 1] ?? true) : null;
@@ -355,20 +367,15 @@ if (cmd === 'doctor') {
     }
   }
 
-  // rules source
-  const rulesCandidates = [
-    path.join(teamRoot, 'AGENTS.md'),
-    path.join(os.homedir(), '.hubd', 'AGENTS.md'),
-    path.join(HUB, 'AGENTS.md'),
-  ];
-  const rulesSource = rulesCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+  // rules source — shared rulesFile() (HUB wins, team-root fallback)
+  const rulesSource = rulesFile();
   console.log('');
   console.log('rules source: ' + (rulesSource || 'none found'));
 
   // append-only guard: task event logs only grow. A destructive "migration" that
   // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
   if (fs.existsSync(path.join(HUB, '.git'))) {
-    const removed = sh("git diff HEAD -- '*.events.jsonl'", HUB).split('\n').filter(l => /^-[^-]/.test(l)).length;
+    const removed = sh("git diff --numstat HEAD -- '*.events.jsonl'", HUB).split('\n').reduce((s, l) => s + (parseInt(l.split('\t')[1], 10) || 0), 0);
     if (removed) {
       warnings++;
       console.log('');
@@ -498,7 +505,7 @@ if (cmd === 'gc') {
       const full = path.join(HUB, f);
       if (f.endsWith('.lock')) {                       // stale locks (live ones are stolen after 30s)
         try { if (nowMs - fs.statSync(full).mtimeMs > 60000) { fs.unlinkSync(full); console.log('  removed stale lock ' + f); removed++; } } catch {}
-      } else if (f.includes('.bak')) {                 // old generated backups (tasks.json.bak.*)
+      } else if (f.startsWith('tasks.json.bak')) {     // ONLY the generated task-cache backup — never a user .bak file
         try { fs.unlinkSync(full); console.log('  removed backup ' + f); removed++; } catch {}
       }
     }
@@ -765,16 +772,8 @@ setInterval(load,3000);
 </html>`;
 
   function getRules() {
-    const candidates = [
-      path.join(resolveQueueRoot(), 'AGENTS.md'),
-      path.join(os.homedir(), '.hubd', 'AGENTS.md'),
-      path.join(HUB, 'AGENTS.md'),
-    ];
-    for (const p of candidates) {
-      try {
-        if (fs.existsSync(p)) return { text: fs.readFileSync(p, 'utf8') };
-      } catch {}
-    }
+    const p = rulesFile();
+    if (p) { try { return { text: fs.readFileSync(p, 'utf8') }; } catch {} }
     return { text: 'No AGENTS.md found. Run "hub init" to scaffold a team folder, or create ~/.hubd/AGENTS.md to define team rules.' };
   }
 
