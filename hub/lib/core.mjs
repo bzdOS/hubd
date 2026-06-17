@@ -141,7 +141,12 @@ export function readCard(name) {
  * Events: {ts,node,ev:'add',id,t} · {ts,node,ev:'set',id,patch} · {ts,node,ev:'del',id}.
  * The fold is a deterministic reducer (order by ts,node,line) and resolves the
  * one residual hazard — two offline machines minting the same numeric id — by
- * keeping the first and remapping the later add to a fresh id. */
+ * keeping the first and remapping the later add to a fresh id.
+ * APPEND-ONLY CONTRACT: these logs only grow. A migration/upgrade MUST append
+ * set/backfill events — never rewrite a file or drop fields. The data is
+ * intentionally richer than the engine schema (harvest captures fields the tools
+ * don't yet surface); an unrecognized field is meaning, not cruft. `hub doctor`
+ * flags a non-append-only rewrite. */
 // TASK_EVENTS is defined per-base in setHubBase() above.
 
 export function taskEventFiles() {
