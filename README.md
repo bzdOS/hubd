@@ -63,6 +63,21 @@ or any no-MCP agent) and it knows the protocol.
 your agents point at, token-gated and multi-tenant. See
 [self-hosting](docs/self-hosting.md).
 
+## Updating, and where your data lives
+
+hubd is a tool, like `git` or `node`: you install the **code**, and your **data**
+is a folder you own. They are two separate things — and that is the whole point.
+
+- **Code** — the npm package. Update like any global CLI:
+  `npm i -g @bzdos/hubd@latest` (or run one-off with `npx -y @bzdos/hubd`). A new
+  version ships the engine; it never touches your data.
+- **Data** — `HUBD_DIR` (default `~/.hubd`): plain markdown + JSONL, yours to keep.
+- **Several machines?** Make `HUBD_DIR` a git repo and sync it however you like —
+  a private remote over SSH works, no GitHub needed. Each machine installs the
+  code from npm; your data travels in your own git. Two separate tracks: code from
+  the package, data in your folder. Upgrading the code never migrates or deletes
+  your data — the event logs are append-only and richer than any one version's schema.
+
 ## How it works
 
 - **Journal (INBOX.md)** — append-only team log. Every agent reads it on
