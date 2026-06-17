@@ -4,9 +4,17 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 
-// Base dir: HUBD_DIR (preferred) → PROJECT_HUB_DIR (legacy env) → ~/.hubd, but
-// if no ~/.hubd yet and a legacy ~/.project-hub base exists, keep using it
-// (graceful: rebrand never orphans an owner's existing base).
+// resolveHub:start
+//   purpose: choose the hub base dir — the SINGLE source of truth for where data lives.
+//   output: absolute path. Order: HUBD_DIR | PROJECT_HUB_DIR (env) wins; else ~/.hubd; else the
+//     legacy ~/.project-hub if it exists and ~/.hubd does not (graceful rebrand — never orphan an old base).
+//   INVARIANT: this is the ONLY place the hub location is decided. `os.homedir()` + '.hubd'/'.project-hub'
+//     may appear ONLY inside this function. Every other reference to hub paths goes through the exported
+//     HUB / PROJ / HISTORY / JOURNAL / TASKS / CLAIMS / TASK_EVENTS (set by setHubBase) — never rebuild a
+//     hub path from os.homedir() or a literal '~/.hubd' anywhere else.
+//   why: HUBD_DIR override, the multi-tenant per-request setHubBase(tenant) repoint, and the legacy base
+//     each break the instant a path is hardcoded — a stray ~/.hubd then SHADOWS the real hub. This is the
+//     exact bug that was in `hub doctor` / `hub serve` (a hardcoded ~/.hubd/AGENTS.md candidate); fixed.
 function resolveHub() {
   const env = process.env.HUBD_DIR || process.env.PROJECT_HUB_DIR;
   if (env) return env;
@@ -15,6 +23,7 @@ function resolveHub() {
   if (!fs.existsSync(fresh) && fs.existsSync(legacy)) return legacy;
   return fresh;
 }
+// resolveHub:end
 // Per-host journal: each machine appends to journal.<node>.jsonl so that several
 // machines syncing the same hub never conflict on one append-only file. node id
 // defaults to the hostname (override with HUBD_NODE). journalFiles() merges all
@@ -180,15 +189,17 @@ export function foldTasks() {
   const evs = readTaskEvents();
   const tasks = new Map();   // finalId -> task (insertion order preserved)
   const remap = new Map();   // `${node}::${origId}` -> finalId
+  const seen = new Set();    // every finalId ever assigned (incl. since-deleted) — never reuse across nodes
   let maxNum = 0;
   const numeric = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; };
   for (const e of evs) {
     const key = `${e._node}::${e.id}`;
     if (e.ev === 'add') {
       let fid = e.id;
-      if (tasks.has(fid) && remap.get(key) !== fid) fid = maxNum + 1; // cross-node id collision → remap later add
+      if ((tasks.has(fid) || seen.has(fid)) && remap.get(key) !== fid) fid = maxNum + 1; // id taken (even if since-deleted) → remap later add
       const t = { ...(e.t || {}), id: fid };
       tasks.set(fid, t);
+      seen.add(fid);
       remap.set(key, fid);
       maxNum = Math.max(maxNum, numeric(fid));
     } else if (e.ev === 'set') {
@@ -257,7 +268,9 @@ export function journalAppend(entry) {
     try {
       if (fs.existsSync(JOURNAL) && fs.statSync(JOURNAL).size > 2 * 1024 * 1024) {
         const ym = new Date().toISOString().slice(0, 7);
-        fs.renameSync(JOURNAL, path.join(HUB, `journal.${JOURNAL_NODE}-${ym}.jsonl`));
+        let archive = path.join(HUB, `journal.${JOURNAL_NODE}-${ym}.jsonl`);
+        for (let n = 2; fs.existsSync(archive); n++) archive = path.join(HUB, `journal.${JOURNAL_NODE}-${ym}.${n}.jsonl`);
+        fs.renameSync(JOURNAL, archive);   // unique name — never overwrite an existing month-archive (was silent data loss)
       }
     } catch {}
     fs.appendFileSync(JOURNAL, JSON.stringify(entry) + '\n');
