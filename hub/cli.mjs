@@ -68,8 +68,9 @@ function formatBrief(data, hours) {
       const mark = od ? '‼' : t.importance === 'high' ? '!' : ' ';
       const dl = t.deadline ? (od ? `  ⏰${t.deadline} OVERDUE` : `  ⏰${t.deadline}`) : '';
       const ass = t.assignee ? `  @${t.assignee}` : '';
-      const txt = t.text.length > 42 ? t.text.slice(0, 40) + '…' : t.text;
-      lines.push(` ${mark} #${t.id} [${t.project}] ${txt}${dl}${ass}`);
+      const tx = t.text || '';
+      const txt = tx.length > 42 ? tx.slice(0, 40) + '…' : tx;
+      lines.push(` ${mark} #${t.id} [${t.project || '?'}] ${txt}${dl}${ass}`);
     }
   }
   lines.push(`JOURNAL (${hours}h):`);
@@ -77,7 +78,7 @@ function formatBrief(data, hours) {
     lines.push('  no entries');
   } else {
     for (const e of data.journalRecent) {
-      lines.push(` ${e.ts.slice(5, 16)} [${e.project}/${e.agent}] ${e.kind}: ${e.text.slice(0, 60)}`);
+      lines.push(` ${(e.ts || '').slice(5, 16)} [${e.project || '?'}/${e.agent || '?'}] ${e.kind || 'note'}: ${(e.text || '').slice(0, 60)}`);
     }
   }
   lines.push('LOCKS:');

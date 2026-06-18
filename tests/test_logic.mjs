@@ -85,5 +85,15 @@ ok(r.out.includes(path.join(HUBD, 'AGENTS.md')), 'rules source: HUB/AGENTS.md wi
 ok(!r.out.includes(path.join(TEAM, 'AGENTS.md')), 'rules source: team-root not chosen when HUB has its own');
 fs.rmSync(HUBD, { recursive: true, force: true }); fs.rmSync(TEAM, { recursive: true, force: true });
 
+// ── CLI: hub brief must not crash on a journal entry missing fields (malformed/old/mesh) ──
+const T4 = mktmp();
+const recentTs = new Date(Date.now() - 3600000).toISOString().slice(0, 16).replace('T', ' ');
+fs.writeFileSync(path.join(T4, 'journal.cowork.jsonl'),
+  JSON.stringify({ ts: recentTs, project: 'x', agent: 'a', kind: 'note' }) + '\n');   // no `text` field
+const b = run('brief', { HUBD_DIR: T4, HUBD_TEAM_DIR: T4 });
+ok(b.code === 0, `hub brief: no crash on a journal entry missing 'text' (exit ${b.code})`);
+ok(/JOURNAL/.test(b.out), 'hub brief: still renders the JOURNAL section');
+fs.rmSync(T4, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
