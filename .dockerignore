@@ -1,0 +1,8 @@
+.git
+.gitignore
+tests
+*.log
+*.tgz
+node_modules
+.hubd
+.project-hub
