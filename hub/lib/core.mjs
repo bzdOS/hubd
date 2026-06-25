@@ -322,13 +322,24 @@ function cardFrontmatter(text) {
   return '';
 }
 
-function cardHandFacts(text) {
+// The writer regenerates ONLY the meta block, ## Digest and (on sync) ## Facts (auto).
+// EVERY other section the owner wrote — the plain "## Facts" plus any hand sections
+// (roadmap, gates, market, decisions, ...) — must survive a rewrite verbatim, in order.
+// why: an earlier version kept only "## Facts" and silently dropped the rest, deleting
+// curated card content on every sync/card-set. Cards only grow unless the owner edits
+// them by hand; a tool rewrite must never strip a section it does not own.
+function cardPreservedSections(text, owned) {
   if (!text) return '';
-  const m = text.match(/^## Facts[ \t]*$/m); // exact heading; "## Facts (auto)" does not match
-  if (!m) return '';
-  const body = text.slice(m.index + m[0].length);
-  const next = body.search(/^## /m);
-  return ('## Facts' + (next === -1 ? body : body.slice(0, next))).trimEnd() + '\n';
+  const heads = [];
+  const re = /^## .+$/gm;
+  let m;
+  while ((m = re.exec(text))) heads.push({ i: m.index, h: m[0].replace(/[ \t]+$/, '') });
+  const keep = [];
+  for (let k = 0; k < heads.length; k++) {
+    const end = k + 1 < heads.length ? heads[k + 1].i : text.length;
+    if (!owned.has(heads[k].h)) keep.push(text.slice(heads[k].i, end).trimEnd());
+  }
+  return keep.length ? keep.join('\n\n') + '\n' : '';
 }
 
 export function runSync(a) {
@@ -348,12 +359,12 @@ export function runSync(a) {
   }
 
   const frontmatter = cardFrontmatter(prev);
-  const handFacts = cardHandFacts(prev);
+  const preserved = cardPreservedSections(prev, new Set(['## Digest', '## Facts (auto)']));
   const card = frontmatter +
     `# ${pname}\n\n` +
     `- slug: ${slug}\n- path: ${dir}\n- synced: ${now()} by ${a.agent || 'unknown'}\n\n` +
     `## Digest\n\n${digest}\n\n` +
-    (handFacts ? handFacts + '\n' : '') +
+    (preserved ? preserved + '\n' : '') +
     `## Facts (auto)\n\n` +
     (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : '- no git\n') +
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
@@ -378,12 +389,12 @@ export function runCardSet(a) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${a.by || 'unknown'})\n${oldDigest}\n`);
   }
-  const handFacts = cardHandFacts(prev);
+  const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const card = cardFrontmatter(prev) +
     `# ${pname}\n\n` +
     `- slug: ${slug}\n- set: ${now()} by ${a.by || 'unknown'}\n\n` +
     `## Digest\n\n${digest}\n\n` +
-    (handFacts ? handFacts + '\n' : '');
+    (preserved ? preserved + '\n' : '');
   atomicWrite(cardPath(pname), card);
   journalAppend({ ts: now(), project: slug, agent: a.by || 'unknown', kind: 'note', text: 'card set: ' + digest.split('\n')[0].slice(0, 80) });
   return { ok: true, project: slug, card: cardPath(pname) };

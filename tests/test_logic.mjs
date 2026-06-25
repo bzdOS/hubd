@@ -95,5 +95,31 @@ ok(b.code === 0, `hub brief: no crash on a journal entry missing 'text' (exit ${
 ok(/JOURNAL/.test(b.out), 'hub brief: still renders the JOURNAL section');
 fs.rmSync(T4, { recursive: true, force: true });
 
+// ── core: card-set / sync must preserve ALL owner sections, not just "## Facts" ──
+// regression: the writer used to keep only "## Facts" and silently drop any other
+// hand section (roadmap/gates/decisions) — card data loss on every rewrite.
+const TC = mktmp();
+core.setHubBase(TC);            // creates projects/ + projects/history/
+fs.writeFileSync(path.join(TC, 'projects', 'demo.md'),
+  '---\nslug: demo\nowner_kind: mixed\n---\n# demo\n\n- slug: demo\n\n' +
+  '## Digest\n\nold digest\n\n' +
+  '## Facts\n\n- hand fact\n\n' +
+  '## Roadmap\n\n- ship it\n\n' +
+  '## Decisions\n\n- chose files-first\n');
+core.runCardSet({ project: 'demo', digest: 'fresh digest v6', by: 'test' });
+const cs = core.readCard('demo');
+ok(/fresh digest v6/.test(cs), 'card-set: digest updated');
+ok(/## Facts[\s\S]*hand fact/.test(cs), 'card-set: hand "## Facts" preserved');
+ok(/## Roadmap[\s\S]*ship it/.test(cs), 'card-set: custom "## Roadmap" preserved (no data loss)');
+ok(/## Decisions[\s\S]*files-first/.test(cs), 'card-set: custom "## Decisions" preserved');
+ok(/owner_kind: mixed/.test(cs), 'card-set: frontmatter preserved');
+ok(fs.existsSync(path.join(TC, 'projects', 'history', 'demo.md')), 'card-set: old digest archived to history');
+core.runSync({ path: TC, name: 'demo', digest: 'synced digest', agent: 'test' });
+const sy = core.readCard('demo');
+ok(/## Roadmap[\s\S]*ship it/.test(sy), 'sync: custom "## Roadmap" preserved');
+ok(/## Decisions[\s\S]*files-first/.test(sy), 'sync: custom "## Decisions" preserved');
+ok(/## Facts \(auto\)/.test(sy), 'sync: regenerates its own "## Facts (auto)"');
+fs.rmSync(TC, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
