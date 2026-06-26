@@ -113,6 +113,7 @@ ok(/## Facts[\s\S]*hand fact/.test(cs), 'card-set: hand "## Facts" preserved');
 ok(/## Roadmap[\s\S]*ship it/.test(cs), 'card-set: custom "## Roadmap" preserved (no data loss)');
 ok(/## Decisions[\s\S]*files-first/.test(cs), 'card-set: custom "## Decisions" preserved');
 ok(/owner_kind: mixed/.test(cs), 'card-set: frontmatter preserved');
+ok(!/## Next step/.test(cs), 'card-set: existing card NOT re-scaffolded with the template');
 ok(fs.existsSync(path.join(TC, 'projects', 'history', 'demo.md')), 'card-set: old digest archived to history');
 core.runSync({ path: TC, name: 'demo', digest: 'synced digest', agent: 'test' });
 const sy = core.readCard('demo');
@@ -120,6 +121,34 @@ ok(/## Roadmap[\s\S]*ship it/.test(sy), 'sync: custom "## Roadmap" preserved');
 ok(/## Decisions[\s\S]*files-first/.test(sy), 'sync: custom "## Decisions" preserved');
 ok(/## Facts \(auto\)/.test(sy), 'sync: regenerates its own "## Facts (auto)"');
 fs.rmSync(TC, { recursive: true, force: true });
+
+// ── core: a NEW card is scaffolded from the card template; HUB/card-template.md overrides ──
+const TN = mktmp();
+core.setHubBase(TN);
+core.runCardSet({ project: 'fresh', digest: 'kickoff', by: 'test' });
+const nc = core.readCard('fresh');
+ok(/kickoff/.test(nc), 'new card: digest set');
+ok(/## Next step/.test(nc), 'new card: scaffolds "## Next step"');
+ok(/## Gates/.test(nc), 'new card: scaffolds "## Gates"');
+ok(/## Decisions/.test(nc), 'new card: scaffolds "## Decisions"');
+ok(/## Communication/.test(nc), 'new card: scaffolds "## Communication"');
+fs.writeFileSync(path.join(TN, 'card-template.md'), '## Custom Section\n\noverride body\n');
+core.runCardSet({ project: 'fresh2', digest: 'd2', by: 'test' });
+const oc = core.readCard('fresh2');
+ok(/## Custom Section[\s\S]*override body/.test(oc), 'new card: HUB/card-template.md override is used');
+ok(!/## Gates/.test(oc), 'new card: override replaces the built-in template');
+fs.rmSync(TN, { recursive: true, force: true });
+
+// ── core: sync of a NEW project scaffolds the template + auto "open tasks" in Facts (auto) ──
+const TG = mktmp();
+core.setHubBase(TG);
+const proj = path.join(TG, 'proj');
+fs.mkdirSync(proj, { recursive: true });
+core.runSync({ path: proj, name: 'proj', digest: 'first', agent: 'test' });
+const gc = core.readCard('proj');
+ok(/## Next step/.test(gc) && /## Communication/.test(gc), 'sync new card: template scaffolded');
+ok(/## Facts \(auto\)[\s\S]*open tasks: 0/.test(gc), 'sync: Facts (auto) carries the auto open-tasks count');
+fs.rmSync(TG, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

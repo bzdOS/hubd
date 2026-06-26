@@ -342,6 +342,35 @@ function cardPreservedSections(text, owned) {
   return keep.length ? keep.join('\n\n') + '\n' : '';
 }
 
+// Section skeleton scaffolded into a NEW card (no prior card). The engine owns ## Digest
+// and ## Facts (auto); these are the owner-written sections every project carries. An
+// instance can override the whole block with HUB/card-template.md (e.g. to localise the
+// headings) — its content replaces CARD_TEMPLATE verbatim for new cards.
+const CARD_TEMPLATE =
+  '## Next step\n\n<the one next action — who, by when>\n\n' +
+  '## Gates\n\n<kill / scale criteria — name the honest metric to judge by, not vanity>\n\n' +
+  '## Metrics\n\n<current honest readings>\n\n' +
+  '## Market\n\n<who it is for; is paying demand proven?>\n\n' +
+  '## Facts & hypotheses\n\n<what is known (fact) vs what is being tested (hypothesis)>\n\n' +
+  '## Decisions\n\n<append-only log: decision · why · date>\n\n' +
+  '## Communication\n\n<what has gone out externally vs what is still queued>\n';
+
+function cardScaffold() {
+  try {
+    const override = path.join(HUB, 'card-template.md');
+    if (fs.existsSync(override)) {
+      const t = fs.readFileSync(override, 'utf8').trim();
+      if (t) return t + '\n';
+    }
+  } catch { /* fall through to built-in */ }
+  return CARD_TEMPLATE;
+}
+
+function openTaskCount(slug) {
+  try { return loadTasks().tasks.filter(t => t.project === slug && t.status === 'open').length; }
+  catch { return 0; }
+}
+
 export function runSync(a) {
   const dir = a.path;
   if (!dir || !fs.existsSync(dir)) throw new Error('path does not exist: ' + dir);
@@ -360,12 +389,14 @@ export function runSync(a) {
 
   const frontmatter = cardFrontmatter(prev);
   const preserved = cardPreservedSections(prev, new Set(['## Digest', '## Facts (auto)']));
+  const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
   const card = frontmatter +
     `# ${pname}\n\n` +
     `- slug: ${slug}\n- path: ${dir}\n- synced: ${now()} by ${a.agent || 'unknown'}\n\n` +
     `## Digest\n\n${digest}\n\n` +
-    (preserved ? preserved + '\n' : '') +
+    (ownerBody ? ownerBody + '\n' : '') +
     `## Facts (auto)\n\n` +
+    `- open tasks: ${openTaskCount(slug)}\n` +
     (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : '- no git\n') +
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
   atomicWrite(cardPath(pname), card);
@@ -390,11 +421,12 @@ export function runCardSet(a) {
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${a.by || 'unknown'})\n${oldDigest}\n`);
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
+  const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
   const card = cardFrontmatter(prev) +
     `# ${pname}\n\n` +
     `- slug: ${slug}\n- set: ${now()} by ${a.by || 'unknown'}\n\n` +
     `## Digest\n\n${digest}\n\n` +
-    (preserved ? preserved + '\n' : '');
+    (ownerBody ? ownerBody + '\n' : '');
   atomicWrite(cardPath(pname), card);
   journalAppend({ ts: now(), project: slug, agent: a.by || 'unknown', kind: 'note', text: 'card set: ' + digest.split('\n')[0].slice(0, 80) });
   return { ok: true, project: slug, card: cardPath(pname) };
