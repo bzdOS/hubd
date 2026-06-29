@@ -84,7 +84,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   with your eyes. At session end an agent files a `hub report` of prefix-tagged
   lines (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`) that fan into
   the project card's sections — structure in fields, not one prose blob. "What
-  changed" is read from git, not retyped.
+  changed" is read from git, not retyped. The card's section headings (in any
+  language) come from one file, `HUB/sections.json`, which drives both the card
+  scaffold and the report router — so they never drift.
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
   prodding them. A queue has one live consumer — run a single waiting session per role.

@@ -208,13 +208,26 @@ ok(jp.filter(e => e.kind === 'decision').length === 2, 'report: decisions emit k
 ok(jp.some(e => e.kind === 'note' && /distribution session/.test(e.text) && /unprefixed trailing/.test(e.text)), 'report: NOTE + unprefixed → one note entry');
 fs.rmSync(TRP, { recursive: true, force: true });
 
-// ── report-sections.json overrides a section heading (instance localisation) ──
+// ── sections.json: ONE i18n source drives BOTH the scaffold AND report routing (0.2.0) ──
 const TRO = mktmp();
 core.setHubBase(TRO);
-fs.writeFileSync(path.join(TRO, 'report-sections.json'), JSON.stringify({ decide: 'Verdicts' }));
+fs.writeFileSync(path.join(TRO, 'sections.json'), JSON.stringify({ decisions: 'Verdicts', next: { heading: 'Up next', hint: 'do this' } }));
+core.runCardSet({ project: 'p2', digest: 'kick', by: 'test' });            // new card → scaffolded from sections.json
+const p2 = core.readCard('p2');
+ok(/## Verdicts/.test(p2) && !/## Decisions/.test(p2), 'sections.json: scaffold uses the overridden heading');
+ok(/## Up next[\s\S]*do this/.test(p2), 'sections.json: {heading,hint} override applies to the scaffold');
 core.runReport({ project: 'p2', by: 'test', text: 'DECIDE: do X | because Y' });
-ok(/## Verdicts[\s\S]*do X — because Y/.test(core.readCard('p2')), 'report: HUB/report-sections.json overrides the decisions heading');
+ok(/## Verdicts[\s\S]*do X — because Y/.test(core.readCard('p2')), 'sections.json: report routes into the SAME heading as scaffold (no drift)');
+ok(core.sectionsConfig().find(s => s.key === 'decisions').heading === 'Verdicts', 'sectionsConfig: merge-by-key override');
 fs.rmSync(TRO, { recursive: true, force: true });
+
+// ── report-sections.json still honoured as a deprecated alias ──
+const TRA = mktmp();
+core.setHubBase(TRA);
+fs.writeFileSync(path.join(TRA, 'report-sections.json'), JSON.stringify({ communication: 'Outbound' }));
+core.runReport({ project: 'p3', by: 'test', text: 'COMM: shipped X' });
+ok(/## Outbound[\s\S]*shipped X/.test(core.readCard('p3')), 'report-sections.json: deprecated alias still routes');
+fs.rmSync(TRA, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

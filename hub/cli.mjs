@@ -18,6 +18,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban,
   runResourceSet, runResourceList, runResourceGet, runGraph,
+  sectionsConfig,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
 } from './lib/core.mjs';
@@ -428,6 +429,21 @@ if (cmd === 'doctor') {
     }
   } catch {}
 
+  // sections i18n: one source (sections.json) drives both card scaffold and report routing.
+  // Flag the deprecated split files — if they disagree, the report writes to a heading the
+  // card scaffold doesn't use → duplicate sections (the exact drift 0.2.0 removes).
+  {
+    const hasNew = fs.existsSync(path.join(HUB, 'sections.json'));
+    const hasTpl = fs.existsSync(path.join(HUB, 'card-template.md'));
+    const hasRep = fs.existsSync(path.join(HUB, 'report-sections.json'));
+    if (hasTpl || hasRep) {
+      console.log('');
+      console.log('sections: ' + (hasNew ? 'sections.json present (authoritative)' : 'using legacy/defaults'));
+      if (hasTpl) console.log('  note: card-template.md is deprecated — fold its headings into sections.json (one source for scaffold + report routing)');
+      if (hasRep && !hasNew) console.log('  note: rename report-sections.json → sections.json (it now drives the card scaffold too)');
+    }
+  }
+
   // append-only guard: task event logs only grow. A destructive "migration" that
   // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
   if (fs.existsSync(path.join(HUB, '.git'))) {
@@ -653,6 +669,14 @@ if (cmd === 'graph') {
   process.exit(0);
 }
 
+if (cmd === 'sections') {
+  console.log('section key      heading   (single source for card scaffold + report routing)');
+  for (const s of sectionsConfig()) console.log('  ' + pad(s.key, 16) + s.heading);
+  console.log('\nlocalise in ONE file → HUB/sections.json  (merged by key onto the defaults)');
+  console.log('  e.g. { "decisions": "<your heading>", "next": {"heading":"...","hint":"..."} }');
+  process.exit(0);
+}
+
 if (cmd === 'gc') {
   let removed = 0;
   const nowMs = Date.now();
@@ -792,6 +816,7 @@ else if (!cmd) {
     '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
     '  resource get <slug>              one resource + its in/out relationships',
     '  graph [-p <proj>] [--type <t>]   typed relationship graph (runs_on/depends_on/deploys_to/...)',
+    '  sections                         card section keys → headings (localise via HUB/sections.json)',
     '  claim <proj> <area> [-t min]     soft lock',
     '  release <id>                     release a lock',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
