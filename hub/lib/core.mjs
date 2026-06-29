@@ -555,10 +555,92 @@ export function runGraph(a = {}) {
   return { nodes: g.nodes, edges, dangling };
 }
 
+/* ── Structured report ──
+ * Agents recall the hub at session end and dump a BATCH. So `hub report` takes a
+ * batch of prefix-tagged lines and deterministically (NO AI — pure prefix match)
+ * fans them into the card's structured sections + task events, instead of one prose
+ * blob. Multiplicity = more lines. Unprefixed lines degrade to a plain note (prose
+ * still accepted). "What changed" (files/commits) is NOT typed — derive from git.
+ * Section headings are English by default; an instance localises them with
+ * HUB/report-sections.json (so the public code stays ASCII while a localised card
+ * template routes correctly). */
+const REPORT_PREFIX = {
+  DECIDE: 'decide', DECISION: 'decide',
+  FACT: 'fact', GOTCHA: 'fact', LEARNED: 'fact', LEARN: 'fact', DISCOVERY: 'fact',
+  HYPO: 'hypo', HYPOTHESIS: 'hypo',
+  COMM: 'comm', COMMS: 'comm', COMMUNICATION: 'comm', SHIPPED: 'comm',
+  NEXT: 'next',
+  DONE: 'done', CLOSED: 'done', CLOSE: 'done',
+  TASK: 'task', TODO: 'task',
+  NOTE: 'note',
+};
+function reportSections() {
+  const def = { decide: 'Decisions', fact: 'Facts & hypotheses', hypo: 'Facts & hypotheses', comm: 'Communication', next: 'Next step' };
+  try {
+    const f = path.join(HUB, 'report-sections.json');
+    if (fs.existsSync(f)) return { ...def, ...JSON.parse(fs.readFileSync(f, 'utf8')) };
+  } catch {}
+  return def;
+}
+function cardBaseFor(name) {
+  const slug = slugify(name);
+  return `# ${name}\n\n- slug: ${slug}\n\n## Digest\n\n<no digest yet — run hub card ${slug} -m "...">\n\n` + cardScaffold();
+}
+// Append (or set) one line under a "## Heading" of a card, preserving everything else;
+// replaces a lone "<placeholder>" body or creates the section if it is missing.
+function editSection(text, heading, payload, mode) {
+  const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp('^## ' + esc + '[ \\t]*$', 'm').exec(text);
+  if (!m) return text.replace(/\s*$/, '') + '\n\n## ' + heading + '\n\n' + payload + '\n';
+  const bodyStart = m.index + m[0].length;
+  const rest = text.slice(bodyStart);
+  const nm = rest.match(/\n## /);
+  const end = nm ? bodyStart + nm.index : text.length;
+  const body = text.slice(bodyStart, end).replace(/^\n+/, '').replace(/\s+$/, '');
+  const placeholder = /^<[^>]*>$/.test(body.trim());
+  const next = (mode === 'set' || placeholder || !body) ? payload : body + '\n' + payload;
+  return text.slice(0, bodyStart) + '\n\n' + next + '\n' + text.slice(end);
+}
+
 export function runReport(a) {
-  const e = { ts: now(), project: slugify(a.project), agent: a.agent, kind: a.kind || 'note', text: a.text };
-  journalAppend(e);
-  return { ok: true, logged: e };
+  const project = a.project || 'general';
+  const slug = slugify(project);
+  const by = a.by || a.agent || 'unknown';
+  const SEC = reportSections();
+  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [] };
+  for (const raw of String(a.text || '').split('\n')) {
+    const ln = raw.replace(/\s+$/, '');
+    if (!ln.trim()) continue;
+    const m = ln.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
+    const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
+    if (tag) b[tag].push(m[2].trim()); else b.note.push(ln.trim());
+  }
+  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], tasks: [], note: false };
+  if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
+    let text = readCard(project) || cardBaseFor(project);
+    for (const d of b.decide) {
+      const [what, why] = d.split('|').map(s => s.trim());
+      text = editSection(text, SEC.decide, `- ${now()}: ${what}${why ? ' — ' + why : ''}`, 'append');
+      summary.decisions++;
+      journalAppend({ ts: now(), project: slug, agent: by, kind: 'decision', text: what + (why ? ' — ' + why : '') });
+    }
+    for (const f of b.fact) { text = editSection(text, SEC.fact, `- fact: ${f}`, 'append'); summary.facts++; }
+    for (const h of b.hypo) { text = editSection(text, SEC.hypo, `- hypothesis: ${h}`, 'append'); summary.hypos++; }
+    for (const c of b.comm) { text = editSection(text, SEC.comm, `- ${now()}: ${c}`, 'append'); summary.comms++; }
+    if (b.next.length) { text = editSection(text, SEC.next, b.next.map(n => '- ' + n).join('\n'), 'set'); summary.next = true; }
+    fs.mkdirSync(PROJ, { recursive: true });
+    atomicWrite(cardPath(project), text);
+  }
+  for (const list of b.done) for (const part of list.split(',')) {
+    const id = parseInt(part.trim(), 10);
+    if (id) { try { runTaskUpdate({ id, status: 'done', by }); summary.done.push(id); } catch {} }
+  }
+  for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
+  if (b.note.length) {
+    journalAppend({ ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: b.note.join(' · ') });
+    summary.note = true;
+  }
+  return summary;
 }
 
 export function runStatus() {
