@@ -344,28 +344,45 @@ function cardPreservedSections(text, owned) {
   return keep.length ? keep.join('\n\n') + '\n' : '';
 }
 
-// Section skeleton scaffolded into a NEW card (no prior card). The engine owns ## Digest
-// and ## Facts (auto); these are the owner-written sections every project carries. An
-// instance can override the whole block with HUB/card-template.md (e.g. to localise the
-// headings) — its content replaces CARD_TEMPLATE verbatim for new cards.
-const CARD_TEMPLATE =
-  '## Next step\n\n<the one next action — who, by when>\n\n' +
-  '## Gates\n\n<kill / scale criteria — name the honest metric to judge by, not vanity>\n\n' +
-  '## Metrics\n\n<current honest readings>\n\n' +
-  '## Market\n\n<who it is for; is paying demand proven?>\n\n' +
-  '## Facts & hypotheses\n\n<what is known (fact) vs what is being tested (hypothesis)>\n\n' +
-  '## Decisions\n\n<append-only log: decision · why · date>\n\n' +
-  '## Communication\n\n<what has gone out externally vs what is still queued>\n';
-
+// The canonical card sections — the SINGLE i18n source for BOTH the new-card scaffold
+// AND the structured-report router, so the two can never drift (the whole point of 0.2.0).
+// The engine owns ## Digest and ## Facts (auto); these are the owner sections. Default
+// headings/hints are English (public code stays ASCII). An instance localises ALL of them
+// in ONE file, HUB/sections.json: { "<key>": "<heading>" | {"heading":..,"hint":..} },
+// merged by key. (card-template.md is a deprecated freeform escape hatch; report-sections.json
+// is a deprecated alias of sections.json — both still honoured for back-compat.)
+const SECTIONS_DEFAULT = [
+  { key: 'next',          heading: 'Next step',          hint: 'the one next action — who, by when' },
+  { key: 'gates',         heading: 'Gates',              hint: 'kill / scale criteria — name the honest metric to judge by, not vanity' },
+  { key: 'metrics',       heading: 'Metrics',            hint: 'current honest readings' },
+  { key: 'market',        heading: 'Market',             hint: 'who it is for; is paying demand proven?' },
+  { key: 'facts',         heading: 'Facts & hypotheses', hint: 'what is known (fact) vs what is being tested (hypothesis)' },
+  { key: 'decisions',     heading: 'Decisions',          hint: 'append-only log: decision · why · date' },
+  { key: 'communication', heading: 'Communication',      hint: 'what has gone out externally vs what is still queued' },
+];
+export function sectionsConfig() {
+  const cfg = SECTIONS_DEFAULT.map(s => ({ ...s }));
+  for (const fname of ['sections.json', 'report-sections.json']) {   // report-sections.json = deprecated alias
+    try {
+      const f = path.join(HUB, fname);
+      if (!fs.existsSync(f)) continue;
+      const o = JSON.parse(fs.readFileSync(f, 'utf8'));
+      for (const s of cfg) {
+        const ov = o[s.key];
+        if (typeof ov === 'string') s.heading = ov;
+        else if (ov && typeof ov === 'object') { if (ov.heading) s.heading = ov.heading; if (ov.hint) s.hint = ov.hint; }
+      }
+      return cfg;   // first file found wins (sections.json preferred)
+    } catch {}
+  }
+  return cfg;
+}
 function cardScaffold() {
   try {
-    const override = path.join(HUB, 'card-template.md');
-    if (fs.existsSync(override)) {
-      const t = fs.readFileSync(override, 'utf8').trim();
-      if (t) return t + '\n';
-    }
-  } catch { /* fall through to built-in */ }
-  return CARD_TEMPLATE;
+    const override = path.join(HUB, 'card-template.md');   // deprecated freeform escape hatch
+    if (fs.existsSync(override)) { const t = fs.readFileSync(override, 'utf8').trim(); if (t) return t + '\n'; }
+  } catch {}
+  return sectionsConfig().map(s => `## ${s.heading}\n\n<${s.hint}>\n`).join('\n');
 }
 
 function openTaskCount(slug) {
@@ -575,12 +592,9 @@ const REPORT_PREFIX = {
   NOTE: 'note',
 };
 function reportSections() {
-  const def = { decide: 'Decisions', fact: 'Facts & hypotheses', hypo: 'Facts & hypotheses', comm: 'Communication', next: 'Next step' };
-  try {
-    const f = path.join(HUB, 'report-sections.json');
-    if (fs.existsSync(f)) return { ...def, ...JSON.parse(fs.readFileSync(f, 'utf8')) };
-  } catch {}
-  return def;
+  const byKey = {};
+  for (const s of sectionsConfig()) byKey[s.key] = s.heading;   // same single source as the scaffold → no drift
+  return { decide: byKey.decisions, fact: byKey.facts, hypo: byKey.facts, comm: byKey.communication, next: byKey.next };
 }
 function cardBaseFor(name) {
   const slug = slugify(name);
