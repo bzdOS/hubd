@@ -88,6 +88,13 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **Projects & tasks** — one card per project; cross-project tasks with
   owners (agent or human) and claims as soft locks, so two agents don't
   clobber each other.
+- **Resources & relationships** — infra is a card too: hosts, vms, services,
+  endpoints, providers under `resources/`, with structured frontmatter
+  (type, address, os, provider, status) and **typed `[[wikilink]]` edges**
+  (`runs_on`, `depends_on`, `deploys_to`, `exposes`, `part_of`, ...). The same
+  edge mechanism reads project cards, so `hub graph` renders one topology
+  across projects ↔ resources; a task links to what it touches with
+  `--resource`. Facts go in fields, not prose.
 - **Kanban (read-only)** — cards move because agents move them. The only
   button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
   agents — you manage the rules.
