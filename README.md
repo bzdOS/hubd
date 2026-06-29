@@ -80,8 +80,11 @@ is a folder you own. They are two separate things — and that is the whole poin
 
 ## How it works
 
-- **Journal (INBOX.md)** — append-only team log. Every agent reads it on
-  wake-up, writes to it on handoff. You read it with your eyes.
+- **Journal & structured reports** — append-only team log (INBOX.md) you read
+  with your eyes. At session end an agent files a `hub report` of prefix-tagged
+  lines (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`) that fan into
+  the project card's sections — structure in fields, not one prose blob. "What
+  changed" is read from git, not retyped.
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
   prodding them. A queue has one live consumer — run a single waiting session per role.

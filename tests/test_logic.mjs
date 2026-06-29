@@ -173,5 +173,48 @@ ok(Array.isArray(tk.task.resources) && tk.task.resources[0] === 'myvm', 'task: r
 ok(core.runTaskList({ project: 'hubd' }).tasks[0].resources[0] === 'myvm', 'task list: resources survive the event fold');
 fs.rmSync(TR, { recursive: true, force: true });
 
+// ── structured report: prefix batch → card sections + task events + note ──
+const TRP = mktmp();
+core.setHubBase(TRP);
+const seed = core.runTaskAdd({ project: 'proj', text: 'old task', by: 'test' }).task.id;
+const batch = [
+  'DECIDE: ship docs in release | npm README drifted',
+  'DECISION: register 0.1.8 | mcpservers approved',   // synonym → decide
+  'FACT: registry JWT expires in minutes',
+  'GOTCHA: pkg ABI is FreeBSD-15-aarch64',            // synonym → fact
+  'HYPO: kolkhoz in fundraising',
+  'COMM: 0.1.8 live on mcpservers',
+  'NEXT: redeploy myvm',
+  'DONE: ' + seed,
+  'TASK: write the changelog',
+  'NOTE: distribution session',
+  'an unprefixed trailing thought',                   // → note
+].join('\n');
+const rep = core.runReport({ project: 'proj', by: 'test', text: batch });
+const rc = core.readCard('proj');
+ok(rep.decisions === 2, `report: 2 decisions incl. DECISION synonym (got ${rep.decisions})`);
+ok(/## Decisions[\s\S]*ship docs in release — npm README drifted/.test(rc), 'report: decision+why → ## Decisions');
+ok(/## Decisions[\s\S]*register 0\.1\.8 — mcpservers approved/.test(rc), 'report: 2nd decision present (multiplicity)');
+ok(/## Facts & hypotheses[\s\S]*fact: registry JWT expires/.test(rc), 'report: FACT → Facts & hypotheses');
+ok(/## Facts & hypotheses[\s\S]*fact: pkg ABI is FreeBSD-15-aarch64/.test(rc), 'report: GOTCHA synonym → fact');
+ok(/## Facts & hypotheses[\s\S]*hypothesis: kolkhoz in fundraising/.test(rc), 'report: HYPO → hypothesis');
+ok(/## Communication[\s\S]*0\.1\.8 live on mcpservers/.test(rc), 'report: COMM → ## Communication');
+const nextBody = rc.split('## Next step')[1].split(/\n## /)[0];
+ok(/redeploy myvm/.test(nextBody) && !/<the one next action/.test(nextBody), 'report: NEXT set ## Next step (replaced placeholder)');
+ok(core.runTaskList({ project: 'proj', status: 'done' }).tasks.some(t => t.id === seed), 'report: DONE closed the seeded task');
+ok(core.runTaskList({ project: 'proj', status: 'open' }).tasks.some(t => /changelog/.test(t.text)), 'report: TASK opened a new task');
+const jp = core.journalTail('proj', 50);
+ok(jp.filter(e => e.kind === 'decision').length === 2, 'report: decisions emit kind:decision journal events');
+ok(jp.some(e => e.kind === 'note' && /distribution session/.test(e.text) && /unprefixed trailing/.test(e.text)), 'report: NOTE + unprefixed → one note entry');
+fs.rmSync(TRP, { recursive: true, force: true });
+
+// ── report-sections.json overrides a section heading (instance localisation) ──
+const TRO = mktmp();
+core.setHubBase(TRO);
+fs.writeFileSync(path.join(TRO, 'report-sections.json'), JSON.stringify({ decide: 'Verdicts' }));
+core.runReport({ project: 'p2', by: 'test', text: 'DECIDE: do X | because Y' });
+ok(/## Verdicts[\s\S]*do X — because Y/.test(core.readCard('p2')), 'report: HUB/report-sections.json overrides the decisions heading');
+fs.rmSync(TRO, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

@@ -6,12 +6,12 @@
     "url": "https://github.com/bzdOS/hubd",
     "source": "github"
   },
-  "version": "0.1.8",
+  "version": "0.1.9",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@bzdos/hubd",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "transport": {
         "type": "stdio"
       }

@@ -58,6 +58,29 @@ function getFlags(name) {
   return out;
 }
 
+// Skeleton printed by `hub report` with no input — make structure the default path.
+const REPORT_TEMPLATE = [
+  '# Session report — one item per line, then pipe back in (heredoc) or pass with -m.',
+  '# Each prefix routes into the project card; unprefixed lines become a NOTE.',
+  '# Do NOT list files/commits — "what changed" is read from git by `hub brief`.',
+  '',
+  'DECIDE: <what> | <why>        # → ## Decisions  (repeat for each decision)',
+  'FACT:   <reusable fact learned>   # → ## Facts & hypotheses',
+  'HYPO:   <belief, not yet proven>  # → ## Facts & hypotheses',
+  'COMM:   <what went out / queued>  # → ## Communication',
+  'NEXT:   <the single next action>  # → ## Next step (set)',
+  'DONE:   <task-ids, comma-sep>     # closes tasks',
+  'TASK:   <new task text>           # opens a task',
+  'NOTE:   <one-line anything-else>',
+  '',
+  '# Example:  hub report -p hubd <<EOF',
+  '#   DECIDE: ship docs in the release | npm README drifted',
+  '#   FACT: registry JWT expires in minutes',
+  '#   NEXT: redeploy myvm under 0.1.8',
+  '#   DONE: 42, 43',
+  '#   EOF',
+].join('\n');
+
 function claimRemaining(c) {
   const ms = parseTs(c.since).getTime() + c.ttlMin * 60000 - Date.now();
   if (ms <= 0) return 'expired';
@@ -125,12 +148,21 @@ role queue.
 
 ## Reporting
 
-Before stopping or handing off, append a handoff entry to INBOX.md describing
-what you did and what is left. Use the format:
+Record into the project card with a STRUCTURED report, not a prose blob. One item per
+line; each prefix routes into a card section. Many decisions/facts = many lines:
 
-  YYYY-MM-DD HH:MM | <role> | done: <summary> | next: <suggestion>
+  hub report -p <proj> <<EOF
+  DECIDE: <what> | <why>      # -> ## Decisions
+  FACT:   <reusable fact>     # -> ## Facts & hypotheses
+  HYPO:   <belief, unproven>  # -> ## Facts & hypotheses
+  COMM:   <shipped / queued>  # -> ## Communication
+  NEXT:   <the one next action>
+  DONE:   <task-ids>          # closes tasks
+  EOF
 
-Use "hub report" for per-project journal entries that go into the structured log.
+Do NOT list files/commits - "what changed" is read from git. Unprefixed lines become a
+note. Shortcuts: hub decide "<what>" --why "<why>"; hub next "<...>".
+Then one INBOX.md handoff line for the humans: YYYY-MM-DD HH:MM | <role> | done | next.
 
 ## Queues
 
@@ -446,14 +478,48 @@ if (cmd === 'log') {
 }
 
 if (cmd === 'report') {
-  const text = args[1] && !args[1].startsWith('-') ? args[1] : getFlag('-m');
   const pf = getFlag('-p');
   const proj = (typeof pf === 'string') ? pf : 'general';
-  if (!text || typeof text !== 'string') die('Text required: hub report "<text>" [-p <proj>] [-k done|broken|blocked|note]');
   const kind = getFlag('-k') || 'note';
   const agent = getFlag('--agent') || process.env.USER || 'cli';
-  runReport({ project: proj, agent, text, kind });
-  console.log(`Reported to ${slugify(proj)} journal (${kind})`);
+  let text = (args[1] && !args[1].startsWith('-')) ? args[1] : getFlag('-m');
+  if ((!text || text === true) && !process.stdin.isTTY) {           // batch piped via stdin (heredoc)
+    try { text = fs.readFileSync(0, 'utf8'); } catch {}
+  }
+  if (!text || typeof text !== 'string' || !text.trim()) {           // no input → print the skeleton
+    console.log(REPORT_TEMPLATE);
+    process.exit(0);
+  }
+  const r = runReport({ project: proj, agent, text, kind });
+  const parts = [];
+  if (r.decisions) parts.push(r.decisions + ' decision' + (r.decisions > 1 ? 's' : ''));
+  if (r.facts) parts.push(r.facts + ' fact' + (r.facts > 1 ? 's' : ''));
+  if (r.hypos) parts.push(r.hypos + ' hypothesis');
+  if (r.comms) parts.push(r.comms + ' comm' + (r.comms > 1 ? 's' : ''));
+  if (r.next) parts.push('next set');
+  if (r.done.length) parts.push('closed #' + r.done.join(' #'));
+  if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
+  if (r.note) parts.push('note');
+  console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
+  process.exit(0);
+}
+
+if (cmd === 'decide') {
+  const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
+  if (!what) die('Usage: hub decide "<decision>" --why "<why>" -p <proj>');
+  const why = getFlag('--why');
+  const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
+  const r = runReport({ project: proj, by: getFlag('--by') || process.env.USER || 'cli', text: `DECIDE: ${what}${typeof why === 'string' ? ' | ' + why : ''}` });
+  console.log(`Decided on ${r.project}: +${r.decisions} → ## Decisions`);
+  process.exit(0);
+}
+
+if (cmd === 'next') {
+  const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
+  if (!what) die('Usage: hub next "<the one next action>" -p <proj>');
+  const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
+  const r = runReport({ project: proj, by: getFlag('--by') || process.env.USER || 'cli', text: `NEXT: ${what}` });
+  console.log(`Next step set on ${r.project}`);
   process.exit(0);
 }
 
@@ -714,7 +780,10 @@ else if (!cmd) {
     '  status                           project table',
     '  brief [-h <hours>]               morning brief',
     '  log [project] [-n 20]            journal tail',
-    '  report "<text>" [-p <proj>] [-k done|broken|blocked|note]',
+    '  report [-p <proj>]               structured report → card sections (no input prints the template)',
+    '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
+    '  decide "<what>" --why "<why>" -p <proj>   append a decision to ## Decisions',
+    '  next "<the one next action>" -p <proj>    set ## Next step',
     '  task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>]',
     '  task done <id>',
     '  task list [-p proj]',
