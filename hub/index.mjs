@@ -11,6 +11,7 @@ import {
   runSync, runCardSet, runReport, runStatus, runGet, runSearch,
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
+  runResourceSet, runResourceList, runResourceGet, runGraph,
 } from './lib/core.mjs';
 
 const TOOLS = [
@@ -58,6 +59,7 @@ const TOOLS = [
       assignee: { type: 'string', description: 'agent name or owner, optional' },
       by: { type: 'string', description: 'who adds' },
       depends_on: { type: 'array', items: { type: 'integer' }, description: 'task ids this task waits on' },
+      resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches (host/vm/service/...) — a structured link task → resource, not prose' },
     }, required: ['project', 'text'] } },
 
   { name: 'hub_task_list',
@@ -73,6 +75,7 @@ const TOOLS = [
       text: { type: 'string' }, deadline: { type: 'string' }, cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'] },
       assignee: { type: 'string' }, by: { type: 'string' },
       depends_on: { type: 'array', items: { type: 'integer' }, description: 'task ids this task waits on' },
+      resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
     }, required: ['id'] } },
 
   { name: 'hub_brief',
@@ -99,6 +102,35 @@ const TOOLS = [
       id: { type: 'string' },
       project: { type: 'string' }, area: { type: 'string' }, agent: { type: 'string' },
     } } },
+
+  { name: 'hub_resource_set',
+    description: 'Create or update a resource — an infrastructure/topology entity: host, vm, service, endpoint, or provider. Structured attributes (type, address, os, provider, status) and typed relationships go in fields, NOT prose. Use this instead of describing infra inside a card digest.',
+    inputSchema: { type: 'object', properties: {
+      slug: { type: 'string', description: 'resource id, e.g. "myvm" or "board.hubd.net"' },
+      type: { type: 'string', description: 'host | vm | service | endpoint | provider | ... (open vocabulary)' },
+      address: { type: 'string', description: 'ip / hostname / url, optional' },
+      os: { type: 'string' },
+      provider: { type: 'string', description: 'libvirt | cloudflare | bare-metal | ...' },
+      status: { type: 'string', description: 'live | down | planned | retired' },
+      digest: { type: 'string', description: 'one-line description (keep prose minimal)' },
+      edges: { type: 'object', description: 'typed relationships, merged with existing: {"runs_on":["hubd"],"depends_on":["postgres"]}. Values are target slugs.', additionalProperties: { type: 'array', items: { type: 'string' } } },
+      by: { type: 'string', description: 'who is writing' },
+    }, required: ['slug'] } },
+
+  { name: 'hub_resource_list',
+    description: 'List resource cards (hosts, vms, services, endpoints, providers). Optionally filter by type.',
+    inputSchema: { type: 'object', properties: { type: { type: 'string' } } } },
+
+  { name: 'hub_resource_get',
+    description: 'One resource card plus its inbound and outbound typed relationships.',
+    inputSchema: { type: 'object', properties: { slug: { type: 'string' } }, required: ['slug'] } },
+
+  { name: 'hub_graph',
+    description: 'The typed relationship graph across projects AND resources: who runs where, what depends on / deploys to / exposes what. Edges are frontmatter [[links]] keyed by relation (runs_on, depends_on, deploys_to, exposes, part_of, ...). Returns nodes, edges, and dangling links. Filter by project or type.',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string', description: 'only edges touching this project/resource slug' },
+      type: { type: 'string', description: 'only edges touching a node of this type' },
+    } } },
 ];
 
 const DISPATCH = {
@@ -106,6 +138,7 @@ const DISPATCH = {
   hub_get: runGet, hub_search: runSearch,
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
   hub_brief: runBrief, hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
+  hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
 };
 
 // Tools that touch the server's own filesystem / run subprocesses. Safe when the

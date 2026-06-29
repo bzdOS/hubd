@@ -150,5 +150,28 @@ ok(/## Next step/.test(gc) && /## Communication/.test(gc), 'sync new card: templ
 ok(/## Facts \(auto\)[\s\S]*open tasks: 0/.test(gc), 'sync: Facts (auto) carries the auto open-tasks count');
 fs.rmSync(TG, { recursive: true, force: true });
 
+// ── resources: card with structured attrs + typed edges, the graph, and task↔resource ──
+const TR = mktmp();
+core.setHubBase(TR);
+core.runResourceSet({ slug: 'myvm', type: 'host', address: '10.0.0.1', status: 'live', by: 'test' });
+core.runResourceSet({ slug: 'myvm', edges: { runs_on: ['hubd'] }, by: 'test' });   // 2nd set: add edge, keep attrs
+const rcard = core.readResource('myvm');
+ok(/kind: resource/.test(rcard), 'resource: kind in frontmatter');
+ok(/type: host/.test(rcard) && /address: 10\.0\.0\.1/.test(rcard), 'resource: structured attrs in frontmatter');
+ok(/status: live/.test(rcard), 'resource: attrs survive a 2nd set (merge, no clobber)');
+ok(/runs_on: \[\[hubd\]\]/.test(rcard), 'resource: typed edge written to frontmatter');
+ok(core.runResourceList().count === 1, 'resource list: counts the card');
+const g = core.runGraph();
+ok(g.edges.some(e => e.from === 'myvm' && e.rel === 'runs_on' && e.to === 'hubd'), 'graph: myvm —runs_on→ hubd');
+ok(g.dangling.some(d => d.to === 'hubd'), 'graph: dangling [[hubd]] flagged (no card yet)');
+fs.writeFileSync(path.join(TR, 'projects', 'hubd.md'), '---\nslug: hubd\nruns_on: [[myvm]]\n---\n# hubd\n\n## Digest\n\nx\n');
+const g2 = core.runGraph();
+ok(!g2.dangling.some(d => d.to === 'hubd'), 'graph: link resolves once the card exists');
+ok(g2.edges.some(e => e.from === 'hubd' && e.rel === 'runs_on' && e.to === 'myvm'), 'graph: project→resource edge read from project frontmatter');
+const tk = core.runTaskAdd({ project: 'hubd', text: 'patch the box', resources: ['myvm'], by: 'test' });
+ok(Array.isArray(tk.task.resources) && tk.task.resources[0] === 'myvm', 'task: resources field stored on add');
+ok(core.runTaskList({ project: 'hubd' }).tasks[0].resources[0] === 'myvm', 'task list: resources survive the event fold');
+fs.rmSync(TR, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

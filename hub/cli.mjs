@@ -12,11 +12,12 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  HUB, PROJ, HISTORY, JOURNAL, CLAIMS, setHubBase,
+  HUB, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
   now, parseTs, slugify, sh, cardPath, readCard,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch,
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban,
+  runResourceSet, runResourceList, runResourceGet, runGraph,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
 } from './lib/core.mjs';
@@ -46,6 +47,15 @@ function rulesFile() {
 function getFlag(name) {
   const i = args.indexOf(name);
   return i !== -1 ? (args[i + 1] ?? true) : null;
+}
+// repeatable flag: every `--name value` occurrence, plus comma-splitting (so
+// `--resource a,b --resource c` → [a,b,c]). For task↔resource links, --link, etc.
+function getFlags(name) {
+  const out = [];
+  for (let i = 0; i < args.length; i++)
+    if (args[i] === name && typeof args[i + 1] === 'string')
+      for (const part of String(args[i + 1]).split(',')) { const v = part.trim(); if (v) out.push(v); }
+  return out;
 }
 
 function claimRemaining(c) {
@@ -253,6 +263,7 @@ if (cmd === 'doctor') {
 
   // hub base
   const projFiles = (() => { try { return fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch { return []; } })();
+  const resFiles = (() => { try { return fs.readdirSync(RESOURCES).filter(f => f.endsWith('.md')); } catch { return []; } })();
   const allTasks = (() => { try { const db = JSON.parse(fs.readFileSync(path.join(HUB, 'tasks.json'), 'utf8')); return db.tasks || []; } catch { return []; } })();
   const openTasks = allTasks.filter(t => t.status === 'open').length;
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -275,6 +286,7 @@ if (cmd === 'doctor') {
   console.log('hub base:');
   console.log('  path:     ' + HUB);
   console.log('  projects: ' + projFiles.length);
+  console.log('  resources:' + resFiles.length);
   console.log('  tasks:    ' + openTasks + ' open' + (overdueTasks ? ', ' + overdueTasks + ' overdue' : ''));
   console.log('  claims:   ' + active.length + ' active, ' + expired + ' expired');
   console.log('  journal:  ' + jfiles.length + ' file(s), ' + totalJournalEntries + ' entries' +
@@ -373,6 +385,17 @@ if (cmd === 'doctor') {
   console.log('');
   console.log('rules source: ' + (rulesSource || 'none found'));
 
+  // typed-edge graph hygiene: a [[link]] whose target has no card (informational, not a failure —
+  // external refs like [[cloudflare]] are fine; this just surfaces what to turn into a resource card)
+  try {
+    const dangling = runGraph().dangling;
+    if (dangling.length) {
+      console.log('');
+      console.log('links: ' + dangling.length + ' dangling (target has no card)');
+      for (const d of dangling.slice(0, 8)) console.log('  ' + d.from + ' —' + d.rel + '→ ' + d.to);
+    }
+  } catch {}
+
   // append-only guard: task event logs only grow. A destructive "migration" that
   // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
   if (fs.existsSync(path.join(HUB, '.git'))) {
@@ -445,8 +468,11 @@ if (cmd === 'task') {
     const dl = getFlag('-d');
     const needsRaw = getFlag('--needs');
     const depends_on = needsRaw ? String(needsRaw).split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
-    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, by: 'cli', depends_on });
-    console.log(`Task #${t.task.id} added: ${t.task.text}`);
+    const resources = getFlags('--resource');   // structured link task → resource(s)
+    const cat = getFlag('--cat');
+    const assignee = getFlag('--assignee');
+    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, assignee: assignee || null, by: 'cli', depends_on, resources });
+    console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : ''));
   } else if (sub === 'done') {
     const id = parseInt(args[2]);
     if (!id) die('Id required: hub task done <id>');
@@ -459,7 +485,8 @@ if (cmd === 'task') {
       const dl = t.deadline ? ` ⏰${t.deadline}` : '';
       const ass = t.assignee ? ` @${t.assignee}` : '';
       const mark = t.importance === 'high' ? '!' : t.importance === 'med' ? '~' : ' ';
-      console.log(`${mark} #${t.id} [${t.project}]${dl}${ass} ${t.text}`);
+      const res = (t.resources && t.resources.length) ? ' ' + t.resources.map(r => '⛬' + r).join(' ') : '';
+      console.log(`${mark} #${t.id} [${t.project}]${dl}${ass}${res} ${t.text}`);
     }
     console.log(`(${data.count} tasks)`);
   } else {
@@ -495,6 +522,68 @@ if (cmd === 'card') {
   const by = getFlag('--by') || process.env.USER || 'cli';
   const res = runCardSet({ project: slug, digest, by });
   console.log(`Card set: ${res.project} → ${res.card}`);
+  process.exit(0);
+}
+
+if (cmd === 'resource' || cmd === 'res') {
+  const sub = args[1];
+  if (sub === 'set') {
+    const slug = args[2] && !args[2].startsWith('-') ? args[2] : null;
+    if (!slug) die('Usage: hub resource set <slug> [-m "<note>"] [--type host] [--addr <ip/url>] [--os <o>] [--provider <p>] [--status live] [--link <rel>:<slug> ...]');
+    const edges = {};                                    // --link rel:slug  (rel = runs_on|depends_on|deploys_to|part_of|exposes|connects|...)
+    for (const l of getFlags('--link')) {
+      const mm = String(l).match(/^([A-Za-z0-9_-]+)[:=](.+)$/);
+      if (mm) (edges[mm[1]] = edges[mm[1]] || []).push(mm[2]);
+      else die('--link expects <rel>:<slug>, got: ' + l);
+    }
+    const res = runResourceSet({
+      slug, type: getFlag('--type'), address: getFlag('--addr') || getFlag('--address'),
+      os: getFlag('--os'), provider: getFlag('--provider'), status: getFlag('--status'),
+      digest: (typeof (getFlag('-m') || getFlag('--digest')) === 'string') ? (getFlag('-m') || getFlag('--digest')) : null,
+      edges, by: getFlag('--by') || process.env.USER || 'cli',
+    });
+    console.log(`Resource set: ${res.resource} → ${res.card}`);
+  } else if (sub === 'list') {
+    const data = runResourceList({ type: (typeof getFlag('--type') === 'string') ? getFlag('--type') : undefined });
+    for (const r of data.resources) console.log(`  ${pad(r.slug, 22)}${pad(r.type, 11)}${pad(r.status || '·', 9)}${r.address || ''}`);
+    console.log(`(${data.count} resources)`);
+  } else if (sub === 'get') {
+    const slug = args[2];
+    if (!slug || slug.startsWith('-')) die('Usage: hub resource get <slug>');
+    const data = runResourceGet({ slug });
+    process.stdout.write(data.card.endsWith('\n') ? data.card : data.card + '\n');
+    if (data.out.length) { console.log('→ out:'); for (const e of data.out) console.log(`   ${e.rel} → ${e.to}`); }
+    if (data.in.length) { console.log('← in:'); for (const e of data.in) console.log(`   ${e.from} —${e.rel}→`); }
+  } else {
+    die('resource subcommands: set, list, get');
+  }
+  process.exit(0);
+}
+
+if (cmd === 'graph') {
+  const pf = getFlag('-p') || getFlag('--project');
+  const data = runGraph({
+    project: (typeof pf === 'string') ? pf : undefined,
+    type: (typeof getFlag('--type') === 'string') ? getFlag('--type') : undefined,
+  });
+  const label = (s) => {
+    const n = data.nodes[s];
+    if (!n) return s + ' ⚠missing';
+    const meta = [n.type && n.type !== 'project' ? n.type : null, n.address].filter(Boolean).join('·');
+    return s + (meta ? ` (${meta})` : '');
+  };
+  const byFrom = {};
+  for (const e of data.edges) (byFrom[e.from] = byFrom[e.from] || []).push(e);
+  const froms = Object.keys(byFrom).sort();
+  if (!froms.length) console.log('(no relationships yet — add edges in card frontmatter, e.g. runs_on: [[myvm]], or: hub resource set myvm --link runs_on:hubd)');
+  for (const f of froms) {
+    console.log(label(f));
+    for (const e of byFrom[f]) console.log(`  └─ ${e.rel} → ${label(e.to)}`);
+  }
+  if (data.dangling.length) {
+    console.log('\n⚠ dangling (target has no card — create it or it stays a note):');
+    for (const d of data.dangling) console.log(`  ${d.from} —${d.rel}→ ${d.to}`);
+  }
   process.exit(0);
 }
 
@@ -626,10 +715,14 @@ else if (!cmd) {
     '  brief [-h <hours>]               morning brief',
     '  log [project] [-n 20]            journal tail',
     '  report "<text>" [-p <proj>] [-k done|broken|blocked|note]',
-    '  task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2]',
+    '  task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>]',
     '  task done <id>',
     '  task list [-p proj]',
     '  card <slug> -m "<digest>"        set a project card without a folder',
+    '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
+    '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
+    '  resource get <slug>              one resource + its in/out relationships',
+    '  graph [-p <proj>] [--type <t>]   typed relationship graph (runs_on/depends_on/deploys_to/...)',
     '  claim <proj> <area> [-t min]     soft lock',
     '  release <id>                     release a lock',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
