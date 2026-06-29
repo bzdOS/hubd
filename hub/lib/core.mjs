@@ -36,17 +36,19 @@ export const JOURNAL_NODE = (process.env.HUBD_NODE || os.hostname() || 'node')
 // the CLI just use the one default base. Safe ONLY because every run* tool is fully
 // synchronous: never add `await` inside a tool implementation, or a concurrent HTTP
 // request could swap the base mid-call.
-export let HUB, PROJ, HISTORY, JOURNAL, TASKS, CLAIMS, TASK_EVENTS;
+export let HUB, PROJ, HISTORY, JOURNAL, TASKS, CLAIMS, TASK_EVENTS, RESOURCES;
 export function setHubBase(dir) {
   HUB = dir;
   PROJ = path.join(HUB, 'projects');
   HISTORY = path.join(PROJ, 'history');
+  RESOURCES = path.join(HUB, 'resources');
   JOURNAL = path.join(HUB, `journal.${JOURNAL_NODE}.jsonl`);
   TASKS = path.join(HUB, 'tasks.json');
   CLAIMS = path.join(HUB, 'claims.json');
   TASK_EVENTS = path.join(HUB, `tasks.${JOURNAL_NODE}.events.jsonl`);
   fs.mkdirSync(PROJ, { recursive: true });
   fs.mkdirSync(HISTORY, { recursive: true });
+  fs.mkdirSync(RESOURCES, { recursive: true });
 }
 setHubBase(resolveHub());
 
@@ -432,6 +434,127 @@ export function runCardSet(a) {
   return { ok: true, project: slug, card: cardPath(pname) };
 }
 
+/* ── Resources (infra/topology as cards) + typed relationship graph ──
+ * A resource is a card under resources/<slug>.md — a host, vm, service, endpoint,
+ * provider, ... Its STRUCTURED attributes live in frontmatter (type/address/os/
+ * provider/status); RELATIONSHIPS are typed frontmatter edges whose values are
+ * [[wikilinks]] (runs_on / depends_on / deploys_to / part_of / exposes / connects).
+ * The SAME edge mechanism reads project cards too (related: [[x]] etc.), so the graph
+ * spans projects ↔ resources uniformly. Structure-first: facts go in fields, prose
+ * only in ## Digest. Frontmatter is preserved verbatim by the card writer (no YAML dep —
+ * a tiny key: value parser is enough; edges are any frontmatter value with [[links]]). */
+export function resourcePath(name) { return path.join(RESOURCES, slugify(name) + '.md'); }
+export function readResource(name) {
+  const p = resourcePath(name);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+function extractLinks(value) {
+  const re = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g; const out = []; let m;
+  while ((m = re.exec(String(value)))) out.push(slugify(m[1]));
+  return out;
+}
+function parseFront(text) {            // frontmatter as ordered [{key,value}] (no YAML dep)
+  const fm = cardFrontmatter(text); const out = [];
+  if (!fm) return out;
+  for (const line of fm.split('\n')) {
+    const m = line.match(/^([A-Za-z0-9_-]+):\s?(.*)$/);
+    if (m) out.push({ key: m[1], value: m[2] });
+  }
+  return out;
+}
+function frontToText(pairs) {
+  return pairs.length ? '---\n' + pairs.map(p => `${p.key}: ${p.value}`).join('\n') + '\n---\n' : '';
+}
+
+// Create/update a resource card. Structured attrs (type/address/os/provider/status) and
+// typed edges (a.edges = {rel:[slug,...]}) land in frontmatter; edges UNION with existing
+// targets (append-friendly). Body = one-line ## Digest + any hand sections, preserved.
+export function runResourceSet(a) {
+  const name = a.slug || a.name || a.resource;
+  if (!name) throw new Error('resource slug required');
+  const slug = slugify(name);
+  const prev = readResource(name);
+  const pairs = parseFront(prev);
+  const set = (k, v) => { const p = pairs.find(x => x.key === k); if (p) p.value = v; else pairs.push({ key: k, value: v }); };
+  if (!pairs.find(p => p.key === 'kind')) pairs.unshift({ key: 'kind', value: 'resource' });
+  for (const [k, v] of [['type', a.type], ['address', a.address], ['os', a.os], ['provider', a.provider], ['status', a.status]])
+    if (v != null && v !== '') set(k, String(v));
+  if (a.edges) for (const rel of Object.keys(a.edges)) {
+    const targets = new Set(extractLinks((pairs.find(p => p.key === rel) || {}).value || ''));
+    for (const t of a.edges[rel]) targets.add(slugify(t));
+    set(rel, [...targets].map(s => `[[${s}]]`).join(', '));
+  }
+  const oldDigest = prev ? (prev.split('## Digest')[1] || '').split(/\n## /)[0].trim() : null;
+  const digest = (a.digest != null && String(a.digest).trim()) || oldDigest || '<what this is, in one line>';
+  if (prev && oldDigest && a.digest != null && String(a.digest).trim() && String(a.digest).trim() !== oldDigest) {
+    fs.appendFileSync(path.join(HISTORY, 'resource-' + slug + '.md'), `\n---\n### until ${now()} (resource set by ${a.by || 'unknown'})\n${oldDigest}\n`);
+  }
+  const preserved = cardPreservedSections(prev, new Set(['## Digest']));
+  const card = frontToText(pairs) +
+    `# ${name}\n\n` +
+    `- slug: ${slug}\n- set: ${now()} by ${a.by || 'unknown'}\n\n` +
+    `## Digest\n\n${digest}\n\n` +
+    (preserved ? preserved + '\n' : '');
+  fs.mkdirSync(RESOURCES, { recursive: true });
+  atomicWrite(resourcePath(name), card);
+  journalAppend({ ts: now(), project: slug, agent: a.by || 'unknown', kind: 'resource', text: 'resource set: ' + slug });
+  return { ok: true, resource: slug, card: resourcePath(name) };
+}
+
+function listCards() {
+  const out = [];
+  for (const [dir, kind] of [[PROJ, 'project'], [RESOURCES, 'resource']]) {
+    try { for (const f of fs.readdirSync(dir)) if (f.endsWith('.md')) out.push({ slug: f.replace(/\.md$/, ''), kind, file: path.join(dir, f) }); } catch {}
+  }
+  return out;
+}
+
+// The typed relationship graph across ALL cards. A frontmatter value containing
+// [[links]] is an edge whose TYPE is the key (runs_on, depends_on, related, ...).
+export function buildGraph() {
+  const nodes = {}; const edges = [];
+  for (const c of listCards()) {
+    let text = ''; try { text = fs.readFileSync(c.file, 'utf8'); } catch {}
+    const front = parseFront(text); const attrs = {};
+    for (const p of front) attrs[p.key] = p.value;
+    nodes[c.slug] = { slug: c.slug, kind: c.kind, type: attrs.type || c.kind, status: attrs.status || null, address: attrs.address || null };
+    for (const p of front) for (const to of extractLinks(p.value)) edges.push({ from: c.slug, rel: p.key, to });
+  }
+  return { nodes, edges };
+}
+
+export function runResourceList(a = {}) {
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(RESOURCES)) {
+      if (!f.endsWith('.md')) continue;
+      const attrs = {}; for (const p of parseFront(fs.readFileSync(path.join(RESOURCES, f), 'utf8'))) attrs[p.key] = p.value;
+      if (a.type && attrs.type !== a.type) continue;
+      out.push({ slug: f.replace(/\.md$/, ''), type: attrs.type || 'resource', status: attrs.status || null, address: attrs.address || null });
+    }
+  } catch {}
+  out.sort((x, y) => (x.slug < y.slug ? -1 : 1));
+  return { count: out.length, resources: out };
+}
+
+export function runResourceGet(a) {
+  const name = a.slug || a.resource;
+  const card = readResource(name);
+  if (!card) throw new Error('no resource: ' + name + ' (create with: hub resource set ' + slugify(name || '') + ')');
+  const slug = slugify(name);
+  const g = buildGraph();
+  return { card, out: g.edges.filter(e => e.from === slug), in: g.edges.filter(e => e.to === slug) };
+}
+
+export function runGraph(a = {}) {
+  const g = buildGraph();
+  let edges = g.edges;
+  if (a.project) { const s = slugify(a.project); edges = edges.filter(e => e.from === s || e.to === s); }
+  if (a.type) edges = edges.filter(e => (g.nodes[e.from] && g.nodes[e.from].type === a.type) || (g.nodes[e.to] && g.nodes[e.to].type === a.type));
+  const dangling = g.edges.filter(e => !g.nodes[e.to]);
+  return { nodes: g.nodes, edges, dangling };
+}
+
 export function runReport(a) {
   const e = { ts: now(), project: slugify(a.project), agent: a.agent, kind: a.kind || 'note', text: a.text };
   journalAppend(e);
@@ -497,6 +620,7 @@ export function runTaskAdd(a) {
       cat: a.cat || null, assignee: a.assignee || null, status: 'open',
       created: now(), by: a.by || 'unknown',
       depends_on: Array.isArray(a.depends_on) ? a.depends_on : [],
+      resources: Array.isArray(a.resources) ? a.resources.map(slugify) : [],
     };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: JOURNAL_NODE, ev: 'add', id, t }) + '\n');
     rebuildTaskCache();
@@ -522,6 +646,7 @@ export function runTaskUpdate(a) {
     const patch = {};
     for (const k of ['status', 'text', 'deadline', 'cat', 'assignee']) if (a[k] != null) patch[k] = a[k];
     if (Array.isArray(a.depends_on)) patch.depends_on = a.depends_on;
+    if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
     if (a.status === 'done') patch.done = now();
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: JOURNAL_NODE, ev: 'set', id: t.id, patch }) + '\n');
     rebuildTaskCache();
@@ -627,6 +752,7 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
       id: t.id, project: t.project, text: t.text,
       importance: t.importance, deadline: t.deadline || null,
       assignee: t.assignee || null, depends_on: t.depends_on || [],
+      resources: t.resources || [],
       blocked: isBlocked(t), overdue: !!(t.deadline && t.deadline < todayStr),
     };
   }
