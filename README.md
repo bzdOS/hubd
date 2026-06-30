@@ -108,6 +108,11 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **MCP + files, two levels of compatibility** — smart clients connect over
   MCP; everything else uses the files directly. If hubd is down, your data
   is still just markdown.
+- **Instructions that stay current** — your team rules live in `AGENTS.md` (yours
+  to write); hubd's own mechanics live in `HUBD.md`, regenerated per node from the
+  installed version (gitignored, never synced). Update the code → the next `hub`
+  run (or `hub upgrade`) refreshes `HUBD.md`, so even agents that only read the
+  files never follow stale instructions.
 
 ## Principles (violating these = not this product)
 
