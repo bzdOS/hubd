@@ -12,6 +12,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
+  ensureProtocol,
 } from './lib/core.mjs';
 
 const TOOLS = [
@@ -292,4 +293,5 @@ const httpPortArg = (() => {
   return null;
 })();
 
+try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
 if (httpPortArg) serveHttp(httpPortArg); else serveStdio();
