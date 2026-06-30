@@ -4,6 +4,13 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 
+// Installed hubd version (stamps the generated HUBD.md so each node can tell if its
+// materialised protocol matches the code actually running there).
+export const VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version; }
+  catch { return '0'; }
+})();
+
 // resolveHub:start
 //   purpose: choose the hub base dir — the SINGLE source of truth for where data lives.
 //   output: absolute path. Order: HUBD_DIR | PROJECT_HUB_DIR (env) wins; else ~/.hubd; else the
@@ -377,6 +384,33 @@ export function sectionsConfig() {
   }
   return cfg;
 }
+
+// Materialise the agent-facing protocol (prompts/protocol.md, shipped with the code) into
+// HUB/HUBD.md, stamped with the installed version. GENERATED per-node artifact (like tasks.json):
+// gitignored, never mesh-synced — so two nodes on different versions never fight over it and each
+// node's HUBD.md matches the code running there. Any `hub` run / daemon start / `hub upgrade`
+// refreshes it when the stamp != installed version. This is how a hubd upgrade's new instructions
+// reach every ~/.hubd (yours and other users'), including agents that read the files directly.
+export function ensureProtocol(force) {
+  let body;
+  try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
+  catch { return { ok: false }; }
+  const target = path.join(HUB, 'HUBD.md');
+  let cur = '';
+  try { cur = fs.readFileSync(target, 'utf8'); } catch {}
+  const curVer = (cur.match(/hubd-protocol v([0-9][0-9A-Za-z.\-]*)/) || [])[1] || null;
+  if (!force && curVer === VERSION) return { ok: true, version: VERSION, wrote: false, current: curVer };
+  const stamp = `<!-- hubd-protocol v${VERSION} — GENERATED from the installed hubd; do not edit. Team rules go in AGENTS.md. Refresh: hub upgrade -->\n\n`;
+  try {
+    fs.mkdirSync(HUB, { recursive: true });
+    atomicWrite(target, stamp + body);
+    const gi = path.join(HUB, '.gitignore');           // keep the generated file out of the data git (per-node)
+    let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
+    if (!/^HUBD\.md$/m.test(g)) { try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + 'HUBD.md\n'); } catch {} }
+  } catch { return { ok: false }; }
+  return { ok: true, version: VERSION, wrote: true, from: curVer };
+}
+
 function cardScaffold() {
   try {
     const override = path.join(HUB, 'card-template.md');   // deprecated freeform escape hatch

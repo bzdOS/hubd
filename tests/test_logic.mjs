@@ -229,5 +229,18 @@ core.runReport({ project: 'p3', by: 'test', text: 'COMM: shipped X' });
 ok(/## Outbound[\s\S]*shipped X/.test(core.readCard('p3')), 'report-sections.json: deprecated alias still routes');
 fs.rmSync(TRA, { recursive: true, force: true });
 
+// ── protocol: ensureProtocol materialises HUBD.md (versioned, gitignored, per-node) ──
+const TP = mktmp();
+core.setHubBase(TP);
+const e1 = core.ensureProtocol();
+ok(e1.wrote === true && e1.version === core.VERSION, 'ensureProtocol: writes HUBD.md stamped with the installed version');
+const hubmd = fs.readFileSync(path.join(TP, 'HUBD.md'), 'utf8');
+ok(new RegExp('hubd-protocol v' + core.VERSION.replace(/\./g, '\\.')).test(hubmd), 'protocol: HUBD.md carries the version stamp');
+ok(/hub claim/.test(hubmd) && /hub report/.test(hubmd) && /play-by-play/.test(hubmd), 'protocol: HUBD.md teaches claim-vs-report');
+ok(core.ensureProtocol().wrote === false, 'ensureProtocol: idempotent when current (no rewrite)');
+ok(core.ensureProtocol(true).wrote === true, 'ensureProtocol: force rewrites');
+ok(/^HUBD\.md$/m.test(fs.readFileSync(path.join(TP, '.gitignore'), 'utf8')), 'protocol: HUBD.md is gitignored (per-node, not mesh-synced)');
+fs.rmSync(TP, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

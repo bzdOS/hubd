@@ -18,7 +18,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  sectionsConfig,
+  sectionsConfig, ensureProtocol, VERSION,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
 } from './lib/core.mjs';
@@ -133,54 +133,28 @@ function formatBrief(data, hours) {
 
 const AGENTS_MD = `# AGENTS.md — Team Constitution
 
-Every agent reads this file at the start of each session.
-
-## What this file is
-
-The rules every agent on this team must follow. If you are an agent waking up
-in this repository, read this file first, then tail INBOX.md, then check your
-role queue.
+Your team's rules: roles, project policy, who decides what. This file is YOURS to
+write and own. hubd MECHANICS — how to report, claim, queue, the card sections,
+resources — live in HUBD.md, which the tool regenerates to match the installed
+version. Read HUBD.md for "how"; do not copy its mechanics here (they would go stale).
 
 ## Session-start ritual
 
-1. Read AGENTS.md (this file).
-2. Read the top ~20 lines of INBOX.md to catch up on recent activity.
+1. Read AGENTS.md (this file) + HUBD.md (hub mechanics, auto-maintained).
+2. Read the top ~20 lines of INBOX.md to catch up.
 3. Check your role queue: hub queue wait <your-role> --timeout 10
 
-## Reporting
+## The one rule worth repeating: pick the right channel
 
-Record into the project card with a STRUCTURED report, not a prose blob. One item per
-line; each prefix routes into a card section. Many decisions/facts = many lines:
+Report SUBSTANCE, not play-by-play. "I'm on it / in progress" is a transient
+\`hub claim\`; a decision / fact / shipped thing / blocker is a durable \`hub report\`;
+a trivial step is nothing. Full ritual and prefixes are in HUBD.md.
 
-  hub report -p <proj> <<EOF
-  DECIDE: <what> | <why>      # -> ## Decisions
-  FACT:   <reusable fact>     # -> ## Facts & hypotheses
-  HYPO:   <belief, unproven>  # -> ## Facts & hypotheses
-  COMM:   <shipped / queued>  # -> ## Communication
-  NEXT:   <the one next action>
-  DONE:   <task-ids>          # closes tasks
-  EOF
+## Roles & policy
 
-Do NOT list files/commits - "what changed" is read from git. Unprefixed lines become a
-note. Shortcuts: hub decide "<what>" --why "<why>"; hub next "<...>".
-Then one INBOX.md handoff line for the humans: YYYY-MM-DD HH:MM | <role> | done | next.
-
-## Queues
-
-One live waiting session per role at a time (single-consumer contract).
-Send a message:   hub queue send <role> "<text>" --from <your-role>
-Receive:          hub queue wait <role>
-
-## Claims (soft locks)
-
-Before editing a shared area, claim it:   hub claim <proj> <area>
-Release when done:                        hub release <id>
-This prevents two agents from clobbering the same file simultaneously.
-
-## Full org template
-
-Roles, projects, onboarding files and recipes live in the hubd-company/
-directory of the hubd repository. Use it as a starting point for your team.
+Define your roles, their queues, and decision rights here. Conflicts are resolved
+per the rules you write in this section. (Full org template: hubd-company/ in the
+hubd repository.)
 `;
 
 const INBOX_MD = `# INBOX — team journal
@@ -239,7 +213,19 @@ deviations, test output); the cto appends "## Acceptance".*
 <out of scope; tempting-but-wrong; leave for later>
 `;
 
-const GITIGNORE_ENTRY = '.qstate/\n';
+const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\n';
+
+// Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when
+// already current (a stat + version compare); rewrites only after a hubd version change.
+try { ensureProtocol(); } catch {}
+
+if (cmd === 'upgrade') {
+  const r = ensureProtocol(true);
+  if (!r.ok) die('could not materialise HUBD.md (protocol source missing?)');
+  console.log(r.wrote ? `HUBD.md → v${r.version}` + (r.from ? ` (was v${r.from})` : ' (new)') : `HUBD.md already current (v${r.version})`);
+  console.log('  agents read it for hub mechanics; team rules stay in AGENTS.md');
+  process.exit(0);
+}
 
 if (cmd === 'init') {
   const pathArg = args.filter(a => !a.startsWith('-'))[1] ?? null;
@@ -444,6 +430,15 @@ if (cmd === 'doctor') {
     }
   }
 
+  // protocol: HUBD.md is (re)materialised by ensureProtocol() on every hub run; surface its version
+  {
+    const pv = (() => { try { return (fs.readFileSync(path.join(HUB, 'HUBD.md'), 'utf8').match(/hubd-protocol v([0-9][0-9A-Za-z.\-]*)/) || [])[1]; } catch { return null; } })();
+    console.log('');
+    if (!pv) { warnings++; console.log('protocol: HUBD.md missing — run `hub upgrade` (agents read it for hub mechanics)'); }
+    else if (pv !== VERSION) { warnings++; console.log('protocol: HUBD.md v' + pv + ' ≠ installed hub v' + VERSION + ' — run `hub upgrade`'); }
+    else console.log('protocol: HUBD.md v' + pv + ' (current)');
+  }
+
   // append-only guard: task event logs only grow. A destructive "migration" that
   // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
   if (fs.existsSync(path.join(HUB, '.git'))) {
@@ -517,6 +512,8 @@ if (cmd === 'report') {
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
+  const onlyNote = r.note && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
+  if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   process.exit(0);
 }
 
@@ -801,6 +798,7 @@ else if (!cmd) {
     '',
     '  init [path]                      scaffold a team folder (AGENTS.md, INBOX.md, queues/)',
     '  doctor                           check hub base, team root, locks and queues',
+    '  upgrade                          refresh HUBD.md (the agent protocol) to the installed version',
     '  status                           project table',
     '  brief [-h <hours>]               morning brief',
     '  log [project] [-n 20]            journal tail',
