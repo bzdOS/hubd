@@ -411,6 +411,17 @@ export function ensureProtocol(force) {
   return { ok: true, version: VERSION, wrote: true, from: curVer };
 }
 
+// The Harvest Protocol prompt (the paste-able block inside the shipped HARVEST.md) — served
+// via the MCP `harvest` prompt and `hub harvest`, so the prompt travels with the package and
+// nobody has to fetch it from the repo.
+export function harvestPrompt() {
+  let md;
+  try { md = fs.readFileSync(new URL('../../HARVEST.md', import.meta.url), 'utf8'); }
+  catch { return null; }
+  const m = md.match(/```[a-z]*\n([\s\S]*?)\n```/);   // first fenced block = the paste-able prompt
+  return (m ? m[1] : md).trim();
+}
+
 function cardScaffold() {
   try {
     const override = path.join(HUB, 'card-template.md');   // deprecated freeform escape hatch

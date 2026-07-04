@@ -46,15 +46,21 @@ TRUTH DISCIPLINE (this is the point):
 - Record what I actually said over what would be tidy.
 - If you revise an earlier entry, LOG the correction — don't silently overwrite.
 
-OUTPUT:
-- With hubd MCP tools: hub_task_list first (skip duplicates) → hub_card_set each
-  project digest → hub_task_add each task → hub_report decisions, themes and
-  questions to the journal.
-- Without hubd tools: output ONE shell code block of ready-to-paste commands
-  using this exact syntax, properly quoted, nothing else in the block:
-    hub card "<slug>" -m "<3–6 line digest>"
+OUTPUT (structured — facts land in card fields, never one prose blob):
+- With hubd MCP tools: hub_task_list first (skip duplicates) -> hub_card_set each
+  project digest -> hub_task_add each task -> hub_report the decisions / facts /
+  hypotheses / communication as structured lines (below).
+- Without hubd tools: output ONE shell code block of ready-to-paste commands,
+  this exact syntax, properly quoted, nothing else in the block:
+    hub card "<slug>" -m "<3-6 line digest>"
     hub task add "<text>" -p <slug> [-i high|med] [-d YYYY-MM-DD]
-    hub report "<decisions, themes, open questions>"
+    hub report -p <slug> <<EOF
+    DECIDE: <decision> | <why>
+    FACT: <confirmed fact>
+    HYPO: <inferred connection, still unproven>
+    COMM: <what went out / what is waiting on a reply>
+    NEXT: <the one next action>
+    EOF
 ```
 
 ## Tips

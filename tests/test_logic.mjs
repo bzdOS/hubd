@@ -242,5 +242,21 @@ ok(core.ensureProtocol(true).wrote === true, 'ensureProtocol: force rewrites');
 ok(/^HUBD\.md$/m.test(fs.readFileSync(path.join(TP, '.gitignore'), 'utf8')), 'protocol: HUBD.md is gitignored (per-node, not mesh-synced)');
 fs.rmSync(TP, { recursive: true, force: true });
 
+// ── harvest: package-shipped prompt via core + MCP (not fetched from the repo) ──
+const hp = core.harvestPrompt();
+ok(hp && /Harvest this dialog/.test(hp), 'harvestPrompt: returns the paste-able Harvest Protocol prompt');
+ok(/DECIDE:/.test(hp) && !/hub report "<decisions/.test(hp), 'harvestPrompt: OUTPUT uses the structured report, not the old prose blob');
+const idxReqs = [
+  JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }),
+  JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'prompts/list', params: {} }),
+  JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'prompts/get', params: { name: 'harvest' } }),
+].join('\n') + '\n';
+let mcpOut = '';
+try { mcpOut = execSync(`node ${REPO}/hub/index.mjs`, { input: idxReqs, encoding: 'utf8', env: { ...process.env, HUBD_DIR: mktmp() }, timeout: 15000 }); }
+catch (e) { mcpOut = (e.stdout || ''); }
+ok(/"prompts"\s*:\s*\{/.test(mcpOut), 'MCP: initialize advertises the prompts capability');
+ok(/"name"\s*:\s*"harvest"/.test(mcpOut), 'MCP: prompts/list advertises harvest');
+ok(/Harvest this dialog/.test(mcpOut), 'MCP: prompts/get returns the harvest prompt text');
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
