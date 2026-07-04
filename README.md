@@ -46,7 +46,7 @@ hub serve            # read-only kanban on localhost
 # one-off, without install: npx -p @bzdos/hubd hub status
 ```
 
-The npm package ships: `hub/` (binaries + lib), `prompts/`, `README.md`,
+The npm package ships: `hub/` (binaries + lib), `prompts/`, `docs/`, `README.md`,
 `LICENSE`, and `HARVEST.md`. It does NOT include `hubd-company/`.
 
 Connect your agent (any MCP client):
@@ -57,7 +57,8 @@ claude mcp add --scope user hubd -- npx -y @bzdos/hubd
 
 No MCP? No problem — every model that can read and write files can join:
 paste the matching block from [`prompts/`](prompts/) (Claude Code, Cursor,
-or any no-MCP agent) and it knows the protocol.
+Codex/AGENTS.md, or an MCP chat) — it wires hubd in and points at `HUBD.md`,
+the always-current protocol.
 
 **Running it for a team?** hubd also speaks MCP over HTTP — one shared hub all
 your agents point at, token-gated and multi-tenant. See
@@ -152,16 +153,18 @@ plan ever exists, the line is simple: **agents are free, humans are billed.**
 
 ## Roadmap
 
-Already shipped: multi-machine sync (per-host append-only logs, conflict-free)
-and remote access over HTTP (token-gated, multi-tenant) — see
-[self-hosting](docs/self-hosting.md).
+Shipped: multi-machine sync (per-host append-only logs, conflict-free); remote
+access over HTTP (token-gated, multi-tenant, see [self-hosting](docs/self-hosting.md));
+a typed **relationship graph** (`[[wikilink]]` edges across projects and resources,
+`hub graph`); **resources** as first-class cards (hosts / services / endpoints);
+**structured reports** that fan into card sections; one-file section **i18n**
+(`sections.json`); a per-node **`HUBD.md`** protocol that regenerates to match the
+installed version; and **harvest** as an MCP prompt.
 
-Next (v0.2) — a graph/semantic layer: `[[project]] / #task / @role` links the
-tools resolve, task kinds with their own lifecycles (a *communicative* task
-knows it's waiting on a reply), and `hub next` to surface your top unblocked
-task. Later: an end-to-end remote mode (the server never reads your work) and a
-gateway that proxies your personal MCP servers. The file format is the stable
-contract; everything else is negotiable.
+Next: task kinds with their own lifecycles (a *communicative* task knows it's
+waiting on a reply); an end-to-end remote mode (the server never reads your
+work); and a gateway that proxies your personal MCP servers. The file format is
+the stable contract; everything else is negotiable.
 
 ## License
 

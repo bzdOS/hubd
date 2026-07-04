@@ -83,8 +83,9 @@ intake for agents, over the network.
 ## What changes in HTTP mode
 
 - **`hub_sync` is disabled.** It reads an arbitrary filesystem path and runs
-  `git` on the host — safe locally, a hole on a shared server. The remaining ten
-  tools (tasks, journal, status, search, brief, claims) are available.
+  `git` on the host — safe locally, a hole on a shared server. Every other tool
+  (tasks, journal, status, search, brief, claims, cards, resources, graph) is
+  available.
 - Every other tool behaves exactly as over stdio — the transport is the only
   difference.
 
