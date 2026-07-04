@@ -11,6 +11,7 @@ vanished tomorrow, your hub is still fully readable as-is.
 | Layer | Format | Notes |
 |---|---|---|
 | Project cards | Markdown + YAML frontmatter | `projects/<slug>.md`, one per project |
+| Resource cards | Markdown + YAML frontmatter | `resources/<slug>.md` — hosts / services / endpoints, with typed `[[edge]]` links |
 | Notes / views | Markdown | cross-cutting docs (system view, themes, channels) |
 | Team journal (human) | Markdown | `INBOX.md` — the log you read with your eyes |
 | Roles, queues | Markdown | role onboardings, per-role message queues |
@@ -33,7 +34,9 @@ appends to its own file, so several machines syncing one hub never conflict.
 - **hubd itself** — the CLI (`hub status`, `hub brief`) and the read-only kanban
   (`hub serve`) give the live operational view; agents use the MCP tools.
 
-None of these are exclusive — the same files serve all of them at once.
+None of these are exclusive — the same files serve all of them at once. The
+`[[slug]]` edges in card frontmatter form hubd's own typed graph too (`hub graph`)
+— the same links a Markdown tool renders as backlinks.
 
 ## The format is the contract
 
@@ -55,10 +58,3 @@ of truth. You should never need a particular program to read your own work.
 > formal spec — tools differ slightly in how they resolve a link. hubd uses the
 > most portable rule (resolve by file name / slug), so Obsidian, Logseq and Foam
 > all agree.
-
-## Coming in 0.2.0: tasks as Markdown too
-
-The task backlog stays JSONL at its core (for conflict-free multi-machine sync),
-but hubd will also render a read-only `tasks.md` — GFM checkboxes with inline
-fields — so a Markdown reader shows your board natively, no hubd required. Same
-rule as the kanban: read-only for humans, writes flow through hubd.
