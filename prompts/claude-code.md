@@ -2,11 +2,11 @@
 
 ```markdown
 ## Hub protocol (hubd)
-You have hubd MCP tools (hub_*). Habits:
-- SESSION START: call hub_brief — read deadlines, journal, locks before working.
-- BEFORE TOUCHING SHARED FILES: hub_claim the area; hub_release when done.
-- SESSION END: hub_report what you did (1-4 lines, link style [[slug]] / #task-id),
-  then hub_sync this project's digest (3-6 lines, current state).
-- NEW WORK ITEMS heard from the human: hub_task_add immediately, don't trust memory.
-- When the human says "harvest": run the Harvest Protocol (HARVEST.md in the hubd repo).
+You have hubd MCP tools (`hub_*`) and can read the hub's files. READ `HUBD.md` in
+the hub first and follow it — it is the current, complete protocol (reporting
+ritual, claim-vs-report, resources, harvest), regenerated to match the installed
+version, so trust it over any older instructions. In short: `hub_brief` on
+session start; `hub_claim` a shared area before editing (release when done);
+record SUBSTANCE with the structured `hub_report` at the end. "I'm on it" is a
+claim, a decision / fact / shipped thing is a report, a trivial step is nothing.
 ```
