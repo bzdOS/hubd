@@ -103,8 +103,10 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **Kanban (read-only)** — cards move because agents move them. The only
   button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
   agents — you manage the rules.
-- **Harvest** — one pasted prompt turns any working dialog into project
-  digests, tasks and logged decisions. See [HARVEST.md](HARVEST.md).
+- **Harvest** — one prompt turns any working dialog into project digests, tasks
+  and logged decisions. Served as an MCP prompt (`harvest`) and `hub harvest`, so
+  you invoke it straight from your client — no fetching the file. See
+  [HARVEST.md](HARVEST.md).
 - **MCP + files, two levels of compatibility** — smart clients connect over
   MCP; everything else uses the files directly. If hubd is down, your data
   is still just markdown.

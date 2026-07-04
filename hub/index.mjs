@@ -12,7 +12,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  ensureProtocol,
+  ensureProtocol, harvestPrompt,
 } from './lib/core.mjs';
 
 const TOOLS = [
@@ -157,12 +157,22 @@ function toolsFor(mode) {
 function handleMessage(msg, mode = 'stdio') {
   const { id, method, params } = msg;
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
-    protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false } },
+    protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     serverInfo: { name: 'hubd', version: VERSION },
     instructions: 'Shared sync point for all project folders and agents. Call hub_report after each work session; hub_status to see everything; hub_brief gives a morning overview. Create work with hub_task_add.' } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };
+  if (method === 'prompts/list') return { jsonrpc: '2.0', id, result: { prompts: [
+    { name: 'harvest', description: 'Harvest this dialog into the hub — projects, tasks, decisions, links, open questions (the Harvest Protocol). No need to fetch HARVEST.md.' },
+  ] } };
+  if (method === 'prompts/get') {
+    if (params?.name === 'harvest') {
+      const text = harvestPrompt() || 'HARVEST.md not found in this hubd package.';
+      return { jsonrpc: '2.0', id, result: { description: 'Harvest this dialog into the hub', messages: [{ role: 'user', content: { type: 'text', text } }] } };
+    }
+    return { jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown prompt: ' + params?.name } };
+  }
   if (method === 'tools/call') {
     const name = params?.name;
     if (mode === 'http' && LOCAL_ONLY_TOOLS.has(name))

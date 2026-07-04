@@ -18,7 +18,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  sectionsConfig, ensureProtocol, VERSION,
+  sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
 } from './lib/core.mjs';
@@ -674,6 +674,13 @@ if (cmd === 'sections') {
   process.exit(0);
 }
 
+if (cmd === 'harvest') {
+  const p = harvestPrompt();
+  if (!p) die('HARVEST.md not found in this hubd package');
+  console.log(p);   // paste-able Harvest Protocol prompt — ships with the code, not the repo
+  process.exit(0);
+}
+
 if (cmd === 'gc') {
   let removed = 0;
   const nowMs = Date.now();
@@ -815,6 +822,7 @@ else if (!cmd) {
     '  resource get <slug>              one resource + its in/out relationships',
     '  graph [-p <proj>] [--type <t>]   typed relationship graph (runs_on/depends_on/deploys_to/...)',
     '  sections                         card section keys → headings (localise via HUB/sections.json)',
+    '  harvest                          print the Harvest Protocol prompt (also served as an MCP prompt)',
     '  claim <proj> <area> [-t min]     soft lock',
     '  release <id>                     release a lock',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
