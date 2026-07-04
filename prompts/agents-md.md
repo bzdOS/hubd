@@ -2,10 +2,11 @@
 
 ```markdown
 ## Coordination via hubd
-This project is coordinated through hubd (shared journal, tasks, claims).
-- Start: run `hub brief` (CLI) or call hub_brief (MCP) and read it.
-- Finish: `hub report "<what you did>" -p <slug>` + `hub sync <path> -m "<fresh digest>"`.
-- New tasks: `hub task add "<text>" -p <slug>` the moment they appear.
-- Soft-lock shared areas with `hub claim` / `hub release`.
-- On "harvest": see HARVEST.md — extract structure from the dialog into the hub.
+This project is coordinated through hubd. You have the `hub` CLI (and `hub_*`
+MCP tools if connected). READ `HUBD.md` in the hub and follow it — it is the
+current, complete protocol (reporting ritual, claim-vs-report, resources,
+harvest) and is regenerated to match the installed version, so trust it over any
+older instructions. In short: `hub brief` on start; `hub claim` a shared area
+before touching it; at the end record SUBSTANCE with the structured `hub report`
+(a decision / fact / shipped thing — never a play-by-play blob).
 ```
