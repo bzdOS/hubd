@@ -2,15 +2,28 @@
  * queue.mjs — Node.js port of queue/qsend.py and queue/qwait.py.
  * Zero external dependencies (Node stdlib only).
  *
- * On-disk format (identical to the Python originals):
- *   queues/<role>.queue.md  — append-only markdown blocks
- *   .qstate/<role>.offset   — byte offset of the last-read position
+ * On-disk format:
+ *   queues/<role>.<node>.queue.md — PER-HOST append-only markdown blocks.
+ *     Each machine appends only to its OWN file (like journal.<node>.jsonl and
+ *     tasks.<node>.events.jsonl), so several machines syncing one hub never
+ *     collide on a queue — no git merge conflict, so mesh-sync never aborts on
+ *     queues, so cross-node delivery actually works. (The legacy shared file
+ *     queues/<role>.queue.md is still READ for back-compat, never written.)
+ *   .qstate/<file>.offset — byte offset of the last-read position, PER source
+ *     file. Local to the node (.qstate/ is gitignored).
  *
  * Block format:
  *   \n## YYYY-MM-DD HH:MM · from <sender>\n<text>\n
+ *
+ * Why per-host: a single shared queues/<role>.queue.md is shared mutable state;
+ * two offline nodes appending both edit the same file → git merge conflict →
+ * mesh-sync aborts → the waiting node never sees the message. Per-host files are
+ * conflict-free by construction (single writer each), and the byte offset stays
+ * valid because each file only ever grows by clean append from one writer.
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { HUB } from './core.mjs';
 
@@ -21,10 +34,6 @@ import { HUB } from './core.mjs';
  *   1. HUBD_TEAM_DIR (or legacy HUBD_QUEUE_DIR) env var   -> via "env"
  *   2. Walk UP from process.cwd() (max 8 levels): first dir with queues/ or .git -> via "walk-up"
  *   3. Fall back to HUB (~/.hubd)                                                 -> via "fallback"
- *
- * Walking from cwd rather than from the binary path is correct because `hub`
- * is installed globally — its realpath would point into node_modules, not the
- * team repo.
  *
  * @returns {{ root: string, via: 'env' | 'walk-up' | 'fallback' }}
  */
@@ -50,29 +59,34 @@ export function resolveQueueRootInfo() {
 
 /**
  * Resolve the queue root directory.
- * Delegates to resolveQueueRootInfo() so queue.mjs stays the single owner of that logic.
- *
  * @returns {string}
  */
 export function resolveQueueRoot() {
   return resolveQueueRootInfo().root;
 }
 
+/** This node's short name (first hostname component), matching mesh-sync's NODE. */
+function nodeName() {
+  try { return (os.hostname() || 'node').split('.')[0] || 'node'; }
+  catch { return 'node'; }
+}
+
 /**
- * Append a message block to <root>/queues/<role>.queue.md.
- * Creates the queues/ directory if it does not exist.
+ * Append a message block to <root>/queues/<role>.<node>.queue.md (this node's
+ * own file). Creates the queues/ directory if it does not exist.
  * Returns the path to the queue file.
  *
  * @param {string} role
  * @param {string} text
- * @param {{ from?: string, root?: string }} options
+ * @param {{ from?: string, root?: string, node?: string }} options
  * @returns {string} path to the queue file
  */
-export function queueSend(role, text, { from = 'unknown', root } = {}) {
+export function queueSend(role, text, { from = 'unknown', root, node } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   fs.mkdirSync(qdir, { recursive: true });
-  const qfile = path.join(qdir, `${role}.queue.md`);
+  const nd = node || nodeName();
+  const qfile = path.join(qdir, `${role}.${nd}.queue.md`);
 
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const entry = `\n## ${ts} · from ${from}\n${String(text).trim()}\n`;
@@ -83,19 +97,17 @@ export function queueSend(role, text, { from = 'unknown', root } = {}) {
 }
 
 /**
- * Block until new content appears in <root>/queues/<role>.queue.md.
+ * Block until new content appears in ANY of this role's queue files
+ * (<role>.<node>.queue.md for every node, plus the legacy <role>.queue.md).
  *
- * Faithful port of queue/qwait.py:
- *   - State file: <root>/.qstate/<role>.offset (byte offset, plain integer).
- *   - If file size > offset: read new bytes, update offset, return changed result.
- *   - If file size < offset (truncated/recreated): reset offset to 0, keep waiting.
+ *   - Per-file byte offset in <root>/.qstate/<file>.offset.
+ *   - Each poll: for every source file, deliver bytes past its offset; if a file
+ *     shrank (truncated/recreated) reset that file's offset to 0.
+ *   - New content from several files in one poll is concatenated.
  *   - Poll every 2000 ms until `timeout` seconds elapse.
- *   - Creates the queue file (empty) if it does not exist yet.
  *
- * Single-consumer guard: advisory warning if another live waiter is detected.
- *   Marker file: <root>/.qstate/<role>.waiter, JSON {"pid": <N>, "since": "<ISO>"}.
- *   Written on entry, refreshed on every poll, removed before returning (try/finally).
- *   Dead-pid or stale (>10s) markers are silently overwritten.
+ * Single-consumer guard: advisory warning if another live waiter is detected
+ *   (marker <root>/.qstate/<role>.waiter, refreshed each poll, removed on exit).
  *
  * @param {string} role
  * @param {{ timeout?: number, root?: string }} options
@@ -103,95 +115,74 @@ export function queueSend(role, text, { from = 'unknown', root } = {}) {
  */
 export async function queueWait(role, { timeout = 540, root } = {}) {
   const r = root ?? resolveQueueRoot();
-  const qfile = path.join(r, 'queues', `${role}.queue.md`);
+  const qdir = path.join(r, 'queues');
   const stateDir = path.join(r, '.qstate');
 
-  fs.mkdirSync(path.dirname(qfile), { recursive: true });
+  fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
 
-  // Create queue file if missing (same as Python: open(qfile, 'a').close())
-  if (!fs.existsSync(qfile)) {
-    fs.writeFileSync(qfile, '', 'utf8');
-  }
+  // Ensure this node's own file exists (so a fresh waiter has a file to track).
+  const ownFile = path.join(qdir, `${role}.${nodeName()}.queue.md`);
+  if (!fs.existsSync(ownFile)) fs.writeFileSync(ownFile, '', 'utf8');
 
-  const stateFile = path.join(stateDir, `${role}.offset`);
+  // Match <role>.queue.md (legacy) and <role>.<node>.queue.md (per-host). Node
+  // names have no dots, so a single optional [^.]+ segment is exact per role.
+  const esc = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const fileRe = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
   const waiterFile = path.join(stateDir, `${role}.waiter`);
 
-  function readOffset() {
-    try { return parseInt(fs.readFileSync(stateFile, 'utf8').trim(), 10) || 0; } catch { return 0; }
-  }
+  const sourceFiles = () => {
+    try { return fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return []; }
+  };
+  const offPath = (f) => path.join(stateDir, `${f}.offset`);
+  const readOff = (f) => { try { return parseInt(fs.readFileSync(offPath(f), 'utf8').trim(), 10) || 0; } catch { return 0; } };
+  const writeOff = (f, n) => fs.writeFileSync(offPath(f), String(n), 'utf8');
+  const sizeOf = (f) => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
 
-  function writeOffset(n) {
-    fs.writeFileSync(stateFile, String(n), 'utf8');
-  }
-
-  function fileSize() {
-    try { return fs.statSync(qfile).size; } catch { return 0; }
-  }
-
-  // pid liveness check: returns true if the process is alive
   function pidAlive(pid) {
     try { process.kill(pid, 0); return true; }
     catch (e) { return e.code === 'EPERM'; }
   }
-
   function writeWaiter() {
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
   }
 
-  // Single-consumer guard: check for a live competing waiter
+  // Single-consumer guard: warn if a fresh, live competing waiter exists.
   try {
-    const raw = fs.readFileSync(waiterFile, 'utf8');
-    const w = JSON.parse(raw);
-    const otherPid = w.pid;
-    if (otherPid !== process.pid) {
-      const ageMsRaw = Date.now() - new Date(w.since).getTime();
-      const fresh = ageMsRaw < 10000;
-      if (fresh && pidAlive(otherPid)) {
-        process.stderr.write(`warning: another waiter (pid ${otherPid}) is active — one live consumer per role\n`);
-      }
+    const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
+    if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
+      process.stderr.write(`warning: another waiter (pid ${w.pid}) is active — one live consumer per role\n`);
     }
   } catch { /* no marker or unreadable — fine */ }
 
-  // Register own marker; always clean up on exit
   writeWaiter();
   try {
     const deadline = Date.now() + timeout * 1000;
-
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const off = readOffset();
-      const sz = fileSize();
-
-      if (sz > off) {
-        // New content available — read from offset to end
-        const fd = fs.openSync(qfile, 'r');
-        const len = sz - off;
-        const buf = Buffer.allocUnsafe(len);
-        fs.readSync(fd, buf, 0, len, off);
-        fs.closeSync(fd);
-        writeOffset(sz);
-        return { changed: true, text: buf.toString('utf8').trim() };
+      const parts = [];
+      for (const f of sourceFiles()) {
+        const off = readOff(f);
+        const sz = sizeOf(f);
+        if (sz > off) {
+          const fd = fs.openSync(path.join(qdir, f), 'r');
+          const buf = Buffer.allocUnsafe(sz - off);
+          fs.readSync(fd, buf, 0, sz - off, off);
+          fs.closeSync(fd);
+          writeOff(f, sz);
+          const t = buf.toString('utf8').trim();
+          if (t) parts.push(t);
+        } else if (sz < off) {
+          writeOff(f, 0); // truncated/recreated — reset this file
+        }
       }
+      if (parts.length) return { changed: true, text: parts.join('\n').trim() };
+      if (Date.now() >= deadline) return { changed: false };
 
-      if (sz < off) {
-        // File was truncated or recreated — reset offset and keep waiting
-        writeOffset(0);
-        continue;
-      }
-
-      if (Date.now() >= deadline) {
-        return { changed: false };
-      }
-
-      // Refresh waiter marker on each poll iteration
       writeWaiter();
-
-      // Poll every 2000 ms using a real async sleep (no busy-wait, no Atomics)
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   } finally {
-    // Always remove own marker (both changed and timeout paths)
     try { fs.unlinkSync(waiterFile); } catch {}
   }
 }
