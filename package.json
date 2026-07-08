@@ -1,9 +1,12 @@
 {
   "name": "@bzdos/hubd",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "mcpName": "io.github.bzdOS/hubd",
   "description": "Files-first project hub for mixed teams of AI agents and humans — shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
-  "repository": { "type": "git", "url": "git+https://github.com/bzdOS/hubd.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bzdOS/hubd.git"
+  },
   "homepage": "https://github.com/bzdOS/hubd#readme",
   "bugs": "https://github.com/bzdOS/hubd/issues",
   "type": "module",
