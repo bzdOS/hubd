@@ -27,13 +27,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { HUB } from './core.mjs';
 
+// A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
+// code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
+// bare `queues/` — a MISROUTED send creates exactly `queues/<role>.<node>.queue.md`
+// and nothing else, so `queues/` is precisely the false-positive we must reject.
+// (This is the bug that silently wrote a handoff into a source repo's queues/
+// instead of the real hub, and the waiting node never saw it.)
+const HUB_DATA_FILES = ['sections.json', 'tasks.json', 'claims.json', 'HUBD.md'];
+function isHubRoot(d) {
+  if (HUB_DATA_FILES.some(f => fs.existsSync(path.join(d, f)))) return true;
+  try { return fs.readdirSync(d).some(f => /^journal.*\.jsonl$/.test(f)); }
+  catch { return false; }
+}
+
+let _warnedFallback = false;
+
 /**
  * Resolve the queue root directory, returning both the path and how it was found.
  *
  * Priority:
- *   1. HUBD_TEAM_DIR (or legacy HUBD_QUEUE_DIR) env var   -> via "env"
- *   2. Walk UP from process.cwd() (max 8 levels): first dir with queues/ or .git -> via "walk-up"
- *   3. Fall back to HUB (~/.hubd)                                                 -> via "fallback"
+ *   1. HUBD_TEAM_DIR (or legacy HUBD_QUEUE_DIR) env var                         -> via "env"
+ *   2. Walk UP from process.cwd() (max 8 levels): first dir that is a real hub
+ *      (has hub DATA — sections/tasks/claims/HUBD/journal, NOT just .git|queues/) -> via "walk-up"
+ *   3. Fall back to HUB (~/.hubd)                                                -> via "fallback"
+ *
+ * On fallback from inside a git repo (a likely misroute site) warn ONCE to stderr,
+ * so a queue silently landing in ~/.hubd instead of the repo is visible.
  *
  * @returns {{ root: string, via: 'env' | 'walk-up' | 'fallback' }}
  */
@@ -42,18 +61,21 @@ export function resolveQueueRootInfo() {
   if (env) return { root: env, via: 'env' };
 
   let d = process.cwd();
+  let sawRepo = false;
   for (let i = 0; i < 8; i++) {
-    if (
-      fs.existsSync(path.join(d, 'queues')) ||
-      fs.existsSync(path.join(d, '.git'))
-    ) {
-      return { root: d, via: 'walk-up' };
-    }
+    if (isHubRoot(d)) return { root: d, via: 'walk-up' };
+    if (fs.existsSync(path.join(d, '.git'))) sawRepo = true;
     const parent = path.dirname(d);
     if (parent === d) break;
     d = parent;
   }
 
+  if (sawRepo && !_warnedFallback) {
+    _warnedFallback = true;
+    process.stderr.write(
+      `hubd: cwd is inside a git repo but no hub found above it — using ${HUB}. ` +
+      `Set HUBD_TEAM_DIR to be explicit.\n`);
+  }
   return { root: HUB, via: 'fallback' };
 }
 

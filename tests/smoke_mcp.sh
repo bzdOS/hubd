@@ -38,7 +38,17 @@ ok(byId[1] && byId[1].result && byId[1].result.serverInfo.name === "hubd", "init
 ok(byId[1].result.serverInfo.version && /^[0-9]+\./.test(byId[1].result.serverInfo.version), "version present (" + byId[1].result.serverInfo.version + ")");
 // notifications (no id) must produce NO response line
 ok(!lines.some(m => m.id == null && (m.error || m.result)), "notifications got no response");
-ok(byId[2] && Array.isArray(byId[2].result.tools) && byId[2].result.tools.length === 13, "tools/list -> 13 tools (got " + (byId[2] && byId[2].result.tools.length) + ")");
+// Assert the KNOWN tools are present rather than an exact count — the count
+// grows as tools are added (queue_send/wait/wait_all, onboarding, whatsnew, …)
+// and a brittle === N assertion just goes stale on every addition.
+ok(byId[2] && Array.isArray(byId[2].result.tools), "tools/list returns an array");
+{
+  const names = new Set((byId[2] && byId[2].result.tools || []).map(t => t.name));
+  const required = ["hub_status","hub_report","hub_task_add","hub_task_list","hub_brief",
+                    "hub_queue_send","hub_queue_wait","hub_onboarding","hub_whatsnew"];
+  const missing = required.filter(n => !names.has(n));
+  ok(missing.length === 0, "tools/list has required tools (" + names.size + " total, missing: " + (missing.join(",") || "none") + ")");
+}
 ok(byId[3] && byId[3].result && byId[3].result.isError === false, "hub_status ok");
 ok(byId[4] && byId[4].result && byId[4].result.isError === false, "hub_task_add with >64KB payload ok");
 ok(byId[5] && byId[5].result && byId[5].result.isError === false, "hub_brief ok");
