@@ -186,3 +186,90 @@ export async function queueWait(role, { timeout = 540, root } = {}) {
     try { fs.unlinkSync(waiterFile); } catch {}
   }
 }
+
+/**
+ * Block until new content appears in ANY queue file, across every role — a
+ * supervisory subscription for an orchestrator that reacts to whichever agent
+ * reports first, instead of polling role-by-role or ssh-ing into each host to
+ * check.
+ *
+ * NOT the same consumer as a role's own `queueWait(role)` — this uses a
+ * SEPARATE offset namespace (.qstate/__watchall__/<file>.offset), so watching
+ * everything never steals a message from the one live consumer a role's queue
+ * is meant to have (the single-consumer contract queueWait enforces per role
+ * stays intact; this is a tap, not a competing reader).
+ *
+ * @param {{ timeout?: number, root?: string }} options
+ * @returns {Promise<{ changed: true, events: Array<{ role: string, node: string|null, text: string }> } | { changed: false }>}
+ */
+export async function queueWaitAll({ timeout = 540, root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate', '__watchall__');
+
+  fs.mkdirSync(qdir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  // Any <role>.queue.md or <role>.<node>.queue.md — no role filter.
+  const fileRe = /^[^.]+(\.[^.]+)?\.queue\.md$/;
+  const waiterFile = path.join(stateDir, 'waiter');
+
+  const sourceFiles = () => {
+    try { return fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return []; }
+  };
+  const offPath = (f) => path.join(stateDir, `${f}.offset`);
+  const readOff = (f) => { try { return parseInt(fs.readFileSync(offPath(f), 'utf8').trim(), 10) || 0; } catch { return 0; } };
+  const writeOff = (f, n) => fs.writeFileSync(offPath(f), String(n), 'utf8');
+  const sizeOf = (f) => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
+
+  function parseFile(f) {
+    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
+    return m ? { role: m[1], node: m[2] || null } : { role: f, node: null };
+  }
+
+  function pidAlive(pid) {
+    try { process.kill(pid, 0); return true; }
+    catch (e) { return e.code === 'EPERM'; }
+  }
+  function writeWaiter() {
+    fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
+  }
+
+  try {
+    const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
+    if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
+      process.stderr.write(`warning: another all-queues waiter (pid ${w.pid}) is active\n`);
+    }
+  } catch { /* no marker or unreadable — fine */ }
+
+  writeWaiter();
+  try {
+    const deadline = Date.now() + timeout * 1000;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const events = [];
+      for (const f of sourceFiles()) {
+        const off = readOff(f);
+        const sz = sizeOf(f);
+        if (sz > off) {
+          const fd = fs.openSync(path.join(qdir, f), 'r');
+          const buf = Buffer.allocUnsafe(sz - off);
+          fs.readSync(fd, buf, 0, sz - off, off);
+          fs.closeSync(fd);
+          writeOff(f, sz);
+          const t = buf.toString('utf8').trim();
+          if (t) { const { role, node } = parseFile(f); events.push({ role, node, text: t }); }
+        } else if (sz < off) {
+          writeOff(f, 0);
+        }
+      }
+      if (events.length) return { changed: true, events };
+      if (Date.now() >= deadline) return { changed: false };
+
+      writeWaiter();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  } finally {
+    try { fs.unlinkSync(waiterFile); } catch {}
+  }
+}

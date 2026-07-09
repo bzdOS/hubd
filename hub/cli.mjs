@@ -22,7 +22,7 @@ import {
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
 } from './lib/core.mjs';
-import { queueSend, queueWait, resolveQueueRoot, resolveQueueRootInfo } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -775,18 +775,32 @@ else if (cmd === 'queue') {
     process.exit(0);
   } else if (sub === 'wait') {
     const role = args[2];
-    if (!role) die('Usage: hub queue wait <role> [--timeout <N>]');
+    if (!role) die('Usage: hub queue wait <role|*> [--timeout <N>]');
     const timeoutRaw = getFlag('--timeout');
     const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
-    queueWait(role, { timeout }).then(result => {
-      if (result.changed) {
-        console.log(result.text);
-        process.exit(0);
-      } else {
-        console.log('NO_CHANGES');
-        process.exit(2);
-      }
-    }).catch(e => die(e.message));
+    if (role === '*') {
+      // Subscribe to every role's queue at once — a supervisory tap, own
+      // offset namespace, never steals a message from a role's own consumer.
+      queueWaitAll({ timeout }).then(result => {
+        if (result.changed) {
+          for (const e of result.events) console.log(`## from queue ${e.role}${e.node ? '.' + e.node : ''}\n${e.text}`);
+          process.exit(0);
+        } else {
+          console.log('NO_CHANGES');
+          process.exit(2);
+        }
+      }).catch(e => die(e.message));
+    } else {
+      queueWait(role, { timeout }).then(result => {
+        if (result.changed) {
+          console.log(result.text);
+          process.exit(0);
+        } else {
+          console.log('NO_CHANGES');
+          process.exit(2);
+        }
+      }).catch(e => die(e.message));
+    }
   } else {
     die('queue subcommands: send, wait');
   }
