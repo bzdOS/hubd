@@ -14,6 +14,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt,
 } from './lib/core.mjs';
+import { queueSend, queueWait } from './lib/queue.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -132,6 +133,21 @@ const TOOLS = [
       project: { type: 'string', description: 'only edges touching this project/resource slug' },
       type: { type: 'string', description: 'only edges touching a node of this type' },
     } } },
+
+  { name: 'hub_queue_send',
+    description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
+    inputSchema: { type: 'object', properties: {
+      role: { type: 'string', description: 'queue/role to deliver to, e.g. "zaika" or "owner"' },
+      text: { type: 'string' },
+      from: { type: 'string', description: 'sender id, default "mcp"' },
+    }, required: ['role', 'text'] } },
+
+  { name: 'hub_queue_wait',
+    description: 'Block until new content lands in <role>\'s queue (this node\'s file plus any mesh-synced peer files for that role), then return it — a real long-poll, not a snapshot you have to re-poll. Returns {changed:false} if nothing arrives within timeout. Local/stdio only (not available on the shared HTTP server). Use this instead of a sleep-and-recheck loop when waiting on an agent to report back via hub_queue_send.',
+    inputSchema: { type: 'object', properties: {
+      role: { type: 'string' },
+      timeout: { type: 'integer', description: 'seconds to block, default 170, max 540 — pick something under your own client\'s tool-call timeout' },
+    }, required: ['role'] } },
 ];
 
 const DISPATCH = {
@@ -140,21 +156,30 @@ const DISPATCH = {
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
   hub_brief: runBrief, hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
+  // root: HUB is captured HERE, synchronously, at call time — a plain string value,
+  // not a live reference — so it stays correct even if a later concurrent request
+  // repoints the HUB global while hub_queue_wait's promise is still pending.
+  hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from || 'mcp', root: HUB }) }),
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 170, 540), root: HUB }),
 };
 
-// Tools that touch the server's own filesystem / run subprocesses. Safe when the
-// daemon runs locally for one owner (stdio); a hole on a shared network server,
-// where a remote agent could point `path` at the host's disk. Disabled over HTTP.
-const LOCAL_ONLY_TOOLS = new Set(['hub_sync']);
+// Tools that touch the server's own filesystem / run subprocesses, or block for a
+// long time. Safe when the daemon runs locally for one owner (stdio); a hole (or a
+// resource-exhaustion risk, for the blocking wait) on a shared network server where
+// a remote agent could point `path` at the host's disk or hold a connection open for
+// minutes. Disabled over HTTP.
+const LOCAL_ONLY_TOOLS = new Set(['hub_sync', 'hub_queue_wait']);
 
 function toolsFor(mode) {
   return mode === 'http' ? TOOLS.filter(t => !LOCAL_ONLY_TOOLS.has(t.name)) : TOOLS;
 }
 
-// Pure: turn one JSON-RPC message into a response object (or null for a
-// notification that needs no reply). Transport-agnostic — stdio and HTTP both
-// route through here, so the protocol behaves identically on either.
-function handleMessage(msg, mode = 'stdio') {
+// Turn one JSON-RPC message into a response object (or null for a notification
+// that needs no reply). Transport-agnostic — stdio and HTTP both route through
+// here, so the protocol behaves identically on either. async because hub_queue_wait
+// blocks; every other tool is still synchronous internally, so `await fn(...)`
+// resolves on the next microtask with no observable delay for them.
+async function handleMessage(msg, mode = 'stdio') {
   const { id, method, params } = msg;
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
     protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
@@ -180,7 +205,7 @@ function handleMessage(msg, mode = 'stdio') {
     const fn = DISPATCH[name];
     if (!fn) return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: unknown tool: ' + name }], isError: true } };
     try {
-      const r = fn(params?.arguments || {});
+      const r = await fn(params?.arguments || {});
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(r, null, 1) }], isError: false } };
     } catch (e) {
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + e.message }], isError: true } };
@@ -193,14 +218,18 @@ function handleMessage(msg, mode = 'stdio') {
 function serveStdio() {
   const out = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
-  rl.on('line', (line) => {
+  // async: a hub_queue_wait call can be in flight for minutes without blocking
+  // the readline loop — other lines (other tool calls) keep being read and
+  // processed concurrently; each writes its own JSON-RPC response (matched by
+  // id) whenever its own promise settles, independent of call order.
+  rl.on('line', async (line) => {
     line = line.trim();
     if (!line) return;
     let msg;
     try { msg = JSON.parse(line); } catch {
       return out({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
     }
-    const r = handleMessage(msg, 'stdio');
+    const r = await handleMessage(msg, 'stdio');
     if (r) out(r);
   });
 }
@@ -276,18 +305,21 @@ async function serveHttp(port) {
     }
     let body = '', tooBig = false;
     req.on('data', (c) => { body += c; if (body.length > MAX_BODY) { tooBig = true; req.destroy(); } });
-    req.on('end', () => {
+    req.on('end', async () => {
       if (tooBig) return;
       let parsed;
       try { parsed = JSON.parse(body); } catch {
         return sendJson(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
       }
-      setHubBase(tenant);                          // route this request to its workspace; dispatch below is synchronous
+      // Every tool reachable over HTTP is still synchronous internally (LOCAL_ONLY_TOOLS
+      // keeps hub_queue_wait off this transport), so setHubBase(tenant) here is never
+      // at risk of being repointed mid-flight by a concurrent request's own setHubBase.
+      setHubBase(tenant);
       if (Array.isArray(parsed)) {
-        const out = parsed.map((m) => handleMessage(m, 'http')).filter(Boolean);
-        return sendJson(res, 200, out);
+        const results = await Promise.all(parsed.map((m) => handleMessage(m, 'http')));
+        return sendJson(res, 200, results.filter(Boolean));
       }
-      const r = handleMessage(parsed, 'http');
+      const r = await handleMessage(parsed, 'http');
       return sendJson(res, 200, r ?? {});
     });
   });
