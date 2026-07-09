@@ -12,7 +12,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew,
+  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll } from './lib/queue.mjs';
 
@@ -145,6 +145,12 @@ const TOOLS = [
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
     }, required: ['agent'] } },
 
+  { name: 'hub_inbox',
+    description: 'What needs a DECISION right now, distilled from hubd data (not a time window like hub_brief): blocked reports, overdue open tasks, unassigned open tasks, and claim locks whose TTL expired but were never released. Returns {empty:true} when nothing needs attention — poll this instead of re-reading hub_status/hub_brief every cycle.',
+    inputSchema: { type: 'object', properties: {
+      hours: { type: 'integer', description: 'window for blocked-report scan, default 72' },
+    } } },
+
   { name: 'hub_queue_send',
     description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
     inputSchema: { type: 'object', properties: {
@@ -173,7 +179,7 @@ const DISPATCH = {
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
   hub_brief: runBrief, hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
-  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew,
+  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew, hub_inbox: runInbox,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
