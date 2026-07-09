@@ -833,6 +833,54 @@ export function runBrief(a = {}) {
   return { tasksOpen, journalRecent, staleCards, activeClaims: activeClaims(claimsDb.claims), generated: now() };
 }
 
+/* ── Onboarding / what's-new ── */
+
+// One-time orientation for an agent that has never worked with this hub before.
+// Reuses the shipped protocol.md — the same source ensureProtocol() materializes
+// into HUBD.md — so there is exactly one copy of "how hubd works" to keep in
+// sync, never a duplicate onboarding text that quietly drifts from it.
+export function runOnboarding() {
+  ensureProtocol();
+  let body;
+  try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
+  catch { return { ok: false, error: 'protocol.md not found in this hubd install' }; }
+  return { ok: true, version: VERSION, protocol: body };
+}
+
+const checkinsFile = () => path.join(HUB, '.checkins.json');
+function readCheckins() { try { return JSON.parse(fs.readFileSync(checkinsFile(), 'utf8')); } catch { return {}; } }
+function writeCheckins(obj) { try { atomicWrite(checkinsFile(), JSON.stringify(obj, null, 1)); } catch {} }
+
+// Personalized "what did I miss" — delta since THIS agent's own last
+// hub_whatsnew call, backed by journalSince(). A never-seen agent has no prior
+// checkpoint to diff against, so its first call falls back to a plain window
+// (default 24h). Per-agent checkpoints live in .checkins.json (gitignored,
+// per-node like .qstate/ — never mesh-synced, so it never merge-conflicts).
+// Checkpoints store full-precision ISO (not now()'s minute-granularity, used
+// for human-facing journal entries) — two hub_whatsnew calls in the same
+// minute would otherwise both floor to the same instant and re-deliver the
+// same entry, since journal timestamps are minute-granular too.
+export function runWhatsNew(a = {}) {
+  const agent = a.agent || 'unknown';
+  const fallbackHours = a.hours || 24;
+  const checkins = readCheckins();
+  const lastSeen = checkins[agent] || null;
+  // No artificial minimum window: two calls seconds apart should see near-zero
+  // new entries, not get padded back out to a 36s+ floor that re-delivers what
+  // the previous call already returned. Only guard against negative (clock
+  // skew) making the cutoff run ahead of now.
+  const hours = lastSeen ? Math.max((Date.now() - parseTs(lastSeen).getTime()) / 3600000, 0) : fallbackHours;
+  const entries = journalSince(hours);
+  checkins[agent] = new Date().toISOString();
+  writeCheckins(checkins);
+  return {
+    agent, since: lastSeen, firstCheckin: !lastSeen,
+    windowHours: Math.round(hours * 10) / 10,
+    newEntries: entries.length,
+    entries: entries.slice(0, 50),
+  };
+}
+
 export function runClaim(a) {
   if (!a.project || !a.area || !a.agent) throw new Error('project, area, agent required');
   return withLock(CLAIMS, () => {
