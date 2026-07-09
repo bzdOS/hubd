@@ -881,6 +881,35 @@ export function runWhatsNew(a = {}) {
   };
 }
 
+// "What needs a decision" — distilled from hubd's OWN data (journal/tasks/claims),
+// not from scraping agent terminals. Sharper than hub_brief: not "everything in the
+// last 48h" but exactly the items where a human/owner has to act — blocked reports,
+// overdue and unassigned open tasks, and claim locks whose TTL expired but were never
+// released (stale locks that block other agents). Empty across the board = nothing to do.
+export function runInbox(a = {}) {
+  const hours = a.hours ?? 72;
+  const today = new Date().toISOString().slice(0, 10);
+  const db = loadTasks();
+  const open = db.tasks.filter(t => t.status === 'open');
+
+  const overdue = open.filter(t => t.deadline && t.deadline < today)
+    .map(t => ({ id: t.id, project: t.project, deadline: t.deadline, assignee: t.assignee || null, text: (t.text || '').slice(0, 120) }));
+  const unassigned = open.filter(t => !t.assignee)
+    .map(t => ({ id: t.id, project: t.project, importance: t.importance, text: (t.text || '').slice(0, 120) }));
+
+  const blocked = journalSince(hours).filter(e => e.kind === 'blocked')
+    .map(e => ({ ts: e.ts, project: e.project, agent: e.agent, text: (e.text || '').slice(0, 200) }));
+
+  const claims = loadClaims().claims;
+  const live = new Set(activeClaims(claims).map(c => `${c.project}\0${c.area}\0${c.agent}`));
+  const staleClaims = claims
+    .filter(c => (c.ttlMin ?? 240) !== 0 && !live.has(`${c.project}\0${c.area}\0${c.agent}`))
+    .map(c => ({ project: c.project, area: c.area, agent: c.agent, since: c.since, ttlMin: c.ttlMin ?? 240 }));
+
+  const counts = { blocked: blocked.length, overdue: overdue.length, unassigned: unassigned.length, staleClaims: staleClaims.length };
+  return { counts, empty: Object.values(counts).every(n => n === 0), blocked, overdue, unassigned, staleClaims, windowHours: hours, generated: now() };
+}
+
 export function runClaim(a) {
   if (!a.project || !a.area || !a.agent) throw new Error('project, area, agent required');
   return withLock(CLAIMS, () => {

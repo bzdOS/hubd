@@ -16,7 +16,7 @@ import {
   now, parseTs, slugify, sh, cardPath, readCard,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch,
   runTaskAdd, runTaskList, runTaskUpdate,
-  runBrief, runClaim, runRelease, runKanban,
+  runBrief, runClaim, runRelease, runKanban, runInbox,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
   journalTail, journalSince, journalFiles,
@@ -479,6 +479,18 @@ if (cmd === 'brief') {
   process.exit(0);
 }
 
+if (cmd === 'inbox') {
+  const hours = parseInt(getFlag('--hours') || '72');
+  const r = runInbox({ hours });
+  if (r.empty) { console.log('inbox: clear — nothing needs a decision'); process.exit(0); }
+  const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n## ${title} (${rows.length})`); for (const x of rows) console.log('  ' + fmt(x)); } };
+  P('BLOCKED', r.blocked, x => `${x.ts} [${x.project}/${x.agent}] ${x.text}`);
+  P('OVERDUE', r.overdue, x => `#${x.id} [${x.project}] due ${x.deadline}${x.assignee ? ' @' + x.assignee : ''} — ${x.text}`);
+  P('UNASSIGNED', r.unassigned, x => `#${x.id} [${x.project}] ${x.importance || ''} — ${x.text}`);
+  P('STALE CLAIMS', r.staleClaims, x => `${x.project}/${x.area} @${x.agent} since ${x.since} (ttl ${x.ttlMin}m, expired)`);
+  process.exit(0);
+}
+
 if (cmd === 'log') {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const n = parseInt(getFlag('-n') || '20');
@@ -822,6 +834,7 @@ else if (!cmd) {
     '  upgrade                          refresh HUBD.md (the agent protocol) to the installed version',
     '  status                           project table',
     '  brief [-h <hours>]               morning brief',
+    '  inbox [--hours <N>]              what needs a decision now (blocked/overdue/unassigned/stale locks)',
     '  log [project] [-n 20]            journal tail',
     '  report [-p <proj>]               structured report → card sections (no input prints the template)',
     '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
