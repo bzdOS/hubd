@@ -12,7 +12,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  ensureProtocol, harvestPrompt,
+  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew,
 } from './lib/core.mjs';
 import { queueSend, queueWait } from './lib/queue.mjs';
 
@@ -134,6 +134,17 @@ const TOOLS = [
       type: { type: 'string', description: 'only edges touching a node of this type' },
     } } },
 
+  { name: 'hub_onboarding',
+    description: 'One-time orientation for an agent that has never worked with this hub before: what hubd is, which channel to use for what (claim vs task vs report vs queue — the #1 mistake), how to write a report. Call this FIRST, before anything else, the first time you connect.',
+    inputSchema: { type: 'object', properties: {} } },
+
+  { name: 'hub_whatsnew',
+    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
+      hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
+    }, required: ['agent'] } },
+
   { name: 'hub_queue_send',
     description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
     inputSchema: { type: 'object', properties: {
@@ -156,6 +167,7 @@ const DISPATCH = {
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
   hub_brief: runBrief, hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
+  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
@@ -174,6 +186,23 @@ function toolsFor(mode) {
   return mode === 'http' ? TOOLS.filter(t => !LOCAL_ONLY_TOOLS.has(t.name)) : TOOLS;
 }
 
+// Nudge state: has THIS connection called hub_onboarding / hub_whatsnew yet.
+// stdio-only by construction (see call site below) — a module-level boolean is
+// correct there because one stdio process serves exactly one agent session. It
+// would be WRONG over HTTP, where one process serves many tenants concurrently
+// and a shared flag would leak "tenant A onboarded" into tenant B's responses;
+// hub_onboarding/hub_whatsnew themselves stay available over HTTP (their own
+// state is file-backed per agent name), only the auto-nudge is skipped there.
+let onboarded = false, whatsnewChecked = false;
+
+function nudges(name) {
+  if (name === 'hub_onboarding' || name === 'hub_whatsnew') return [];
+  const n = [];
+  if (!onboarded) n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' });
+  if (!whatsnewChecked) n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' });
+  return n;
+}
+
 // Turn one JSON-RPC message into a response object (or null for a notification
 // that needs no reply). Transport-agnostic — stdio and HTTP both route through
 // here, so the protocol behaves identically on either. async because hub_queue_wait
@@ -184,7 +213,7 @@ async function handleMessage(msg, mode = 'stdio') {
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
     protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     serverInfo: { name: 'hubd', version: VERSION },
-    instructions: 'Shared sync point for all project folders and agents. Call hub_report after each work session; hub_status to see everything; hub_brief gives a morning overview. Create work with hub_task_add.' } };
+    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. Returning? Call hub_whatsnew instead of re-reading hub_status from scratch. Call hub_report after each work session; hub_brief gives a morning overview. Create work with hub_task_add.' } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };
@@ -206,7 +235,10 @@ async function handleMessage(msg, mode = 'stdio') {
     if (!fn) return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: unknown tool: ' + name }], isError: true } };
     try {
       const r = await fn(params?.arguments || {});
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(r, null, 1) }], isError: false } };
+      if (name === 'hub_onboarding') onboarded = true;
+      if (name === 'hub_whatsnew') whatsnewChecked = true;
+      const extra = mode === 'stdio' ? nudges(name) : [];
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(r, null, 1) }, ...extra], isError: false } };
     } catch (e) {
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + e.message }], isError: true } };
     }
