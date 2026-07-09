@@ -14,7 +14,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew,
 } from './lib/core.mjs';
-import { queueSend, queueWait } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll } from './lib/queue.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -159,6 +159,12 @@ const TOOLS = [
       role: { type: 'string' },
       timeout: { type: 'integer', description: 'seconds to block, default 170, max 540 — pick something under your own client\'s tool-call timeout' },
     }, required: ['role'] } },
+
+  { name: 'hub_queue_wait_all',
+    description: 'Subscribe to EVERY role\'s queue at once and block until new content lands in ANY of them — for an orchestrator reacting to whichever agent reports first, instead of calling hub_queue_wait per role or ssh-ing into each host to poll. Returns {changed:true, events:[{role,node,text}, ...]} tagging which role/node each event came from, or {changed:false} on timeout. Uses its own offset bookkeeping — does NOT consume/steal messages from a role\'s own hub_queue_wait consumer, it only taps. Local/stdio only.',
+    inputSchema: { type: 'object', properties: {
+      timeout: { type: 'integer', description: 'seconds to block, default 170, max 540 — pick something under your own client\'s tool-call timeout' },
+    } } },
 ];
 
 const DISPATCH = {
@@ -173,6 +179,7 @@ const DISPATCH = {
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from || 'mcp', root: HUB }) }),
   hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 170, 540), root: HUB }),
+  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 170, 540), root: HUB }),
 };
 
 // Tools that touch the server's own filesystem / run subprocesses, or block for a
@@ -180,7 +187,7 @@ const DISPATCH = {
 // resource-exhaustion risk, for the blocking wait) on a shared network server where
 // a remote agent could point `path` at the host's disk or hold a connection open for
 // minutes. Disabled over HTTP.
-const LOCAL_ONLY_TOOLS = new Set(['hub_sync', 'hub_queue_wait']);
+const LOCAL_ONLY_TOOLS = new Set(['hub_sync', 'hub_queue_wait', 'hub_queue_wait_all']);
 
 function toolsFor(mode) {
   return mode === 'http' ? TOOLS.filter(t => !LOCAL_ONLY_TOOLS.has(t.name)) : TOOLS;
