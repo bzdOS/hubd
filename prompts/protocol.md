@@ -59,7 +59,25 @@ with structured frontmatter (type/address/os/status) and typed `[[wikilink]]` ed
 
 `hub queue send <role> "<text>" --from <you>` delivers work to a role; `hub queue wait
 <role>` blocks until something arrives (exit 0 with the lines, or exit 2 on timeout).
-One live waiter per role at a time.
+One live waiter per role at a time. `hub queue wait '*'` taps EVERY role at once (own
+offset — does not consume any role's messages), for a supervisor watching the fleet.
+
+### Handoff convention — the queue IS the channel, not the terminal
+When you hand a task to another agent, the task text goes in the QUEUE (`hub queue send`),
+a durable file that mesh/Zenoh-replicates across nodes. Do NOT paste task bodies into an
+agent's terminal — that is a fragile side-channel. If you must poke a running agent, send
+only a short pointer ("new work in your queue"); the substance lives in the queue.
+
+### Consumer loop — how an agent BECOMES addressable
+An agent should sit on its role queue and act on what arrives, so work reaches it without
+anyone hand-driving its terminal:
+
+    while :; do
+      msg=$(hub queue wait "$ROLE" --timeout 300) && [ -n "$msg" ] && handle "$msg"
+    done
+
+`hub queue wait` is the blocking primitive; a runner wraps it to wake the agent. hubd owns
+the queue + the wait; the runner (a separate layer) owns turning a message into agent work.
 
 ## Session ritual
 
