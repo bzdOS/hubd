@@ -16,7 +16,7 @@ import {
   now, parseTs, slugify, sh, cardPath, readCard,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch,
   runTaskAdd, runTaskList, runTaskUpdate,
-  runBrief, runClaim, runRelease, runKanban, runInbox,
+  runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
   journalTail, journalSince, journalFiles,
@@ -504,6 +504,20 @@ if (cmd === 'inbox') {
   process.exit(0);
 }
 
+if (cmd === 'plan' || cmd === 'trajectory') {
+  const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
+  const r = runTrajectory({ project: proj });
+  const label = (id) => { const t = r.ready.concat(r.blocked).find(x => String(x.id) === String(id)); return `#${id}${t ? ' ' + (t.text || '').slice(0, 40) : ''}`; };
+  console.log(`── TRAJECTORY${proj ? ' · ' + proj : ''} · ${r.generated} ──  open ${r.counts.open} · ready ${r.counts.ready} · blocked ${r.counts.blocked} · depth ${r.counts.depth}${r.counts.cyclic ? ' · ⚠cyclic ' + r.counts.cyclic : ''}`);
+  console.log(`\nREADY NOW (${r.ready.length}):`);
+  for (const t of r.ready) console.log(`  #${t.id} [${t.project}] ${t.importance === 'high' ? '! ' : ''}${(t.text || '').slice(0, 70)}`);
+  if (r.criticalPath.length) console.log(`\nCRITICAL PATH (${r.criticalPath.length}): ` + r.criticalPath.map(id => '#' + id).join(' → '));
+  if (r.layers.length > 1) { console.log('\nUNLOCK ORDER (topo layers):'); r.layers.forEach((l, i) => console.log(`  L${i}: ${l.map(id => '#' + id).join(' ')}`)); }
+  if (r.blocked.length) { console.log(`\nBLOCKED (${r.blocked.length}):`); for (const b of r.blocked) console.log(`  #${b.id} ← waiting on ${b.waitingOn.map(id => '#' + id).join(',')} — ${(b.text || '').slice(0, 50)}`); }
+  if (r.cycles.length) console.log(`\n⚠ CYCLES (fix these deps): ${r.cycles.map(id => '#' + id).join(' ')}`);
+  process.exit(0);
+}
+
 if (cmd === 'log') {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const n = parseInt(getFlag('-n') || '20');
@@ -588,7 +602,9 @@ if (cmd === 'task') {
     console.log(`Task #${id} closed`);
   } else if (sub === 'list') {
     const proj = getFlag('-p');
-    const data = runTaskList({ project: proj || undefined, status: 'open' });
+    const st = getFlag('--status');
+    const data = runTaskList({ project: proj || undefined, status: (typeof st === 'string') ? st : 'open' });
+    if (args.includes('--json')) { console.log(JSON.stringify(data)); process.exit(0); }
     for (const t of data.tasks) {
       const dl = t.deadline ? ` ⏰${t.deadline}` : '';
       const ass = t.assignee ? ` @${t.assignee}` : '';
@@ -880,6 +896,7 @@ else if (!cmd) {
     '  status                           project table',
     '  brief [-h <hours>]               morning brief',
     '  inbox [--hours <N>]              what needs a decision now (blocked/overdue/unassigned/stale locks)',
+    '  plan [project]                   dependency-graph trajectory: ready now · critical path · unlock order · cycles',
     '  log [project] [-n 20]            journal tail',
     '  report [-p <proj>]               structured report → card sections (no input prints the template)',
     '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
@@ -887,7 +904,7 @@ else if (!cmd) {
     '  next "<the one next action>" -p <proj>    set ## Next step',
     '  task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>]',
     '  task done <id>',
-    '  task list [-p proj]',
+    '  task list [-p proj] [--status open|done|all] [--json]',
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
     '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
