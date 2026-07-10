@@ -21,8 +21,9 @@ import {
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
+  runHeartbeat, runPresence,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -126,6 +127,17 @@ function formatBrief(data, hours) {
   if (data.staleCards.length) {
     lines.push('STALE CARDS: ' + data.staleCards.map(c => `${c.project} (${c.daysAgo}d)`).join(', '));
   }
+  if (data.queues && data.queues.length) {
+    lines.push('QUEUES:');
+    for (const q of data.queues) {
+      const seen = q.lastSeen ? `agent last-seen ${q.lastSeen}` : 'no agent seen';
+      const tag = q.isButton ? ' 🔘' : '';
+      lines.push(`  ${q.pending} queued for ${q.role}${tag}${q.oldestWaiting ? ` (oldest ${q.oldestWaiting})` : ''} — ${seen}`);
+    }
+  }
+  if (data.buttons && data.buttons.count > 0) {
+    lines.push(`BUTTONS: ${data.buttons.count} waiting (oldest ${data.buttons.oldestDays}d) — ${data.buttons.items.map(b => b.role).join(', ')}`);
+  }
   return lines.join('\n');
 }
 
@@ -213,7 +225,7 @@ deviations, test output); the cto appends "## Acceptance".*
 <out of scope; tempting-but-wrong; leave for later>
 `;
 
-const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\n';
+const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n';
 
 // Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when
 // already current (a stat + version compare); rewrites only after a hubd version change.
@@ -475,7 +487,8 @@ if (cmd === 'status') {
 
 if (cmd === 'brief') {
   const hours = parseInt(getFlag('--hours') || getFlag('-h') || '48');
-  console.log(formatBrief(runBrief({ hours }), hours));
+  const queues = queueSummaryForBrief({ root: resolveQueueRoot() });
+  console.log(formatBrief({ ...runBrief({ hours }), queues, buttons: buttonsSummary(queues) }, hours));
   process.exit(0);
 }
 
@@ -602,6 +615,34 @@ if (cmd === 'release') {
   if (!id) die('Usage: hub release <id>');
   const res = runRelease({ id });
   console.log(`Locks released: ${res.removed}`);
+  process.exit(0);
+}
+
+if (cmd === 'heartbeat') {
+  const agent = args[1] && !args[1].startsWith('-') ? args[1] : null;
+  if (!agent) die('Usage: hub heartbeat <agent> [--role <role>] [--status <text>] [--task <id>] [--cwd <path>] [--ttl <min>]');
+  const task = getFlag('--task');
+  const ttl = getFlag('--ttl');
+  const res = runHeartbeat({
+    agent, role: (typeof getFlag('--role') === 'string') ? getFlag('--role') : undefined,
+    status: (typeof getFlag('--status') === 'string') ? getFlag('--status') : undefined,
+    task_id: (typeof task === 'string') ? task : undefined,
+    cwd: (typeof getFlag('--cwd') === 'string') ? getFlag('--cwd') : undefined,
+    ttlMin: (typeof ttl === 'string') ? parseInt(ttl, 10) : undefined,
+  });
+  console.log(`Heartbeat: ${res.agent} -> ${res.presence}`);
+  process.exit(0);
+}
+
+if (cmd === 'presence') {
+  const roleFlag = getFlag('--role');
+  const data = runPresence({ role: (typeof roleFlag === 'string') ? roleFlag : undefined, aliveOnly: args.includes('--alive') });
+  if (!data.agents.length) { console.log('(no presence records)'); process.exit(0); }
+  for (const p of data.agents) {
+    const mark = p.alive ? '●' : '○';
+    console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}`);
+  }
+  console.log(`(${data.agents.length} agents, generated ${data.generated})`);
   process.exit(0);
 }
 
@@ -852,6 +893,8 @@ else if (!cmd) {
     '  harvest                          print the Harvest Protocol prompt (also served as an MCP prompt)',
     '  claim <proj> <area> [-t min]     soft lock',
     '  release <id>                     release a lock',
+    '  heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]   record liveness',
+    '  presence [--role r] [--alive]    fleet roster (who has heartbeated, alive/stale)',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
     '  gc                               remove stale locks and old backups',
     '  install-hook [path]              git post-commit hook',
