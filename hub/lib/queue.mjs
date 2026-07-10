@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB } from './core.mjs';
+import { HUB, loadPresence, ownerRoles, parseTs } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -294,4 +294,96 @@ export async function queueWaitAll({ timeout = 540, root } = {}) {
   } finally {
     try { fs.unlinkSync(waiterFile); } catch {}
   }
+}
+
+/**
+ * Non-consuming peek at how many messages are waiting in a role's queue — for
+ * hub_brief/hub_presence to show "N queued for role X" without stealing from
+ * the role's own hub_queue_wait consumer. Reads the SAME per-file byte offsets
+ * queueWait uses (.qstate/<file>.offset) but never writes them back, so calling
+ * this never advances anyone's read position.
+ *
+ * @param {string} role
+ * @param {{ root?: string }} options
+ * @returns {{ pending: number, oldestWaiting: string|null }}
+ */
+export function peekQueueDepth(role, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  const esc = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const fileRe = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { pending: 0, oldestWaiting: null }; }
+
+  let pending = 0, oldest = null;
+  for (const f of files) {
+    let off = 0; try { off = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10) || 0; } catch {}
+    let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
+    if (size <= off) continue;
+    const fd = fs.openSync(path.join(qdir, f), 'r');
+    const buf = Buffer.allocUnsafe(size - off);
+    fs.readSync(fd, buf, 0, size - off, off);
+    fs.closeSync(fd);
+    const heads = buf.toString('utf8').match(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/gm) || [];
+    pending += heads.length;
+    for (const h of heads) {
+      const ts = h.slice(3);
+      if (!oldest || ts < oldest) oldest = ts;
+    }
+  }
+  return { pending, oldestWaiting: oldest };
+}
+
+/**
+ * Every role's queue depth in one call, cross-referenced with presence
+ * (core.mjs's fleet registry) so a brief can show "N queued for role X, agent
+ * last-seen T" — visibility into delivery without screen-scraping to check who
+ * is even listening. Roles are discovered from queue FILENAMES: a role only
+ * shows up once something has been sent to it at least once. Rows with nothing
+ * pending and no known presence are dropped — this augments hub_brief's recent-
+ * attention view, not a permanent roster (that's hub_presence).
+ *
+ * @param {{ root?: string }} options
+ * @returns {Array<{ role: string, pending: number, oldestWaiting: string|null, lastSeen: string|null }>}
+ */
+export function queueSummaryForBrief({ root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
+
+  const roles = new Set();
+  for (const f of files) {
+    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
+    if (m) roles.add(m[1]);
+  }
+
+  let presence = [];
+  try { presence = loadPresence(); } catch {}
+  const owners = new Set(ownerRoles());
+
+  return [...roles].sort().map(role => {
+    const { pending, oldestWaiting } = peekQueueDepth(role, { root: r });
+    const forRole = presence.filter(p => p.role === role).sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
+    const ageDays = oldestWaiting ? Math.floor((Date.now() - parseTs(oldestWaiting).getTime()) / 86400000) : null;
+    return { role, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null, isButton: owners.has(role), ageDays };
+  }).filter(s => s.pending > 0 || s.lastSeen);
+}
+
+/**
+ * Roll up the owner-role rows from queueSummaryForBrief into the single line
+ * task #159 asks for: "N buttons waiting (oldest X days)". A "button" is a
+ * pending message in a HUMAN-owner's queue (HUB/owner-roles.json) — a decision
+ * only OWNER can make, packaged by an agent down to a <=30s call (see AGENTS.md's
+ * "prep vs button" split). Pure function over already-computed rows — no I/O.
+ *
+ * @param {Array<{ role: string, pending: number, oldestWaiting: string|null, isButton: boolean, ageDays: number|null }>} rows
+ * @returns {{ count: number, oldestDays: number|null, items: Array }}
+ */
+export function buttonsSummary(rows) {
+  const items = (rows || []).filter(r => r.isButton && r.pending > 0);
+  const count = items.reduce((n, r) => n + r.pending, 0);
+  const oldestDays = items.length ? Math.max(...items.map(r => r.ageDays ?? 0)) : null;
+  return { count, oldestDays, items };
 }

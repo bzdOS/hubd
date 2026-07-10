@@ -12,9 +12,10 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox,
+  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
+  runHeartbeat, runPresence,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -47,6 +48,12 @@ const TOOLS = [
 
   { name: 'hub_get', description: 'Everything about ONE project: its full card (digest + facts), recent journal entries for it, and any active soft-locks. Use after hub_status or hub_search points you at a project.',
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
+
+  { name: 'hub_context',
+    description: 'Auto-resolve which hub project YOUR working directory belongs to — call this at session start instead of hub_status/hub_get when you already know your cwd. Checks, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (returned with guessed:true — never silently trust a name coincidence). Returns {project, via, root, guessed, digest, openTasks, activeClaims}; project is null with a hint if nothing matched.',
+    inputSchema: { type: 'object', properties: {
+      cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
+    }, required: ['cwd'] } },
 
   { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. Use to find where something was discussed or decided.',
     inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'plain-text substring, case-insensitive' } }, required: ['query'] } },
@@ -81,7 +88,7 @@ const TOOLS = [
     }, required: ['id'] } },
 
   { name: 'hub_brief',
-    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims.',
+    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims, per-role queue depth with last-seen agent, and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'journal window, default 48' },
       staleDays: { type: 'integer', description: 'card considered stale after N days, default 7' },
@@ -103,6 +110,24 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       id: { type: 'string' },
       project: { type: 'string' }, area: { type: 'string' }, agent: { type: 'string' },
+    } } },
+
+  { name: 'hub_heartbeat',
+    description: 'Record that an agent is alive — call it each work cycle (right after hub_report, before the next hub_queue_wait) so MCP/headless agents show up in hub_presence the same way screen-scraped ones do, no human bridge needed. Overwrites this agent\'s one presence record; freshness is judged at read time from ttlMin (default 15min), the same pattern hub_claim uses.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string', description: 'your stable identity, e.g. your agent name' },
+      role: { type: 'string', description: 'the queue role you work under, e.g. "hubd" — lets hub_brief pair queue depth with who is listening' },
+      status: { type: 'string', description: 'free text, e.g. "working" / "waiting" / "blocked"' },
+      task_id: { type: ['integer', 'string'], description: 'the task/id you are currently on, optional' },
+      cwd: { type: 'string', description: 'your absolute working directory, optional' },
+      ttlMin: { type: 'integer', description: 'minutes before this record counts as stale, default 15' },
+    }, required: ['agent'] } },
+
+  { name: 'hub_presence',
+    description: 'The fleet roster: every agent that has called hub_heartbeat, each flagged alive/stale from its own ttlMin. hub_brief\'s queue section pairs with this ("N queued for role X, agent last-seen T") — visibility into delivery without screen-scraping to check who is even listening.',
+    inputSchema: { type: 'object', properties: {
+      role: { type: 'string', description: 'filter to agents heartbeating under this role' },
+      aliveOnly: { type: 'boolean', description: 'drop stale (TTL-expired) records, default false' },
     } } },
 
   { name: 'hub_resource_set',
@@ -175,9 +200,17 @@ const TOOLS = [
 
 const DISPATCH = {
   hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: () => runStatus(),
-  hub_get: runGet, hub_search: runSearch,
+  hub_get: runGet, hub_search: runSearch, hub_context: runContext,
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
-  hub_brief: runBrief, hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
+  // queues: HUB captured synchronously here, same reasoning as hub_queue_send/wait below —
+  // a plain string value, not a live reference, so a concurrent HTTP request repointing
+  // HUB can't retarget an in-flight call.
+  hub_brief: (a) => {
+    const queues = queueSummaryForBrief({ root: HUB });
+    return { ...runBrief(a), queues, buttons: buttonsSummary(queues) };
+  },
+  hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
+  hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
   hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew, hub_inbox: runInbox,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
@@ -226,7 +259,7 @@ async function handleMessage(msg, mode = 'stdio') {
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
     protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     serverInfo: { name: 'hubd', version: VERSION },
-    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. Returning? Call hub_whatsnew instead of re-reading hub_status from scratch. Call hub_report after each work session; hub_brief gives a morning overview. Create work with hub_task_add.' } };
+    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning? Call hub_whatsnew instead of re-reading hub_status from scratch. Working a queue in a loop? Call hub_heartbeat after each hub_report so you show up in hub_presence instead of being invisible between waits. hub_brief gives a morning overview. Create work with hub_task_add.' } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };

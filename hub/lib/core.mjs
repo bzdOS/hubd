@@ -43,12 +43,13 @@ export const JOURNAL_NODE = (process.env.HUBD_NODE || os.hostname() || 'node')
 // the CLI just use the one default base. Safe ONLY because every run* tool is fully
 // synchronous: never add `await` inside a tool implementation, or a concurrent HTTP
 // request could swap the base mid-call.
-export let HUB, PROJ, HISTORY, JOURNAL, TASKS, CLAIMS, TASK_EVENTS, RESOURCES;
+export let HUB, PROJ, HISTORY, JOURNAL, TASKS, CLAIMS, TASK_EVENTS, RESOURCES, PRESENCE;
 export function setHubBase(dir) {
   HUB = dir;
   PROJ = path.join(HUB, 'projects');
   HISTORY = path.join(PROJ, 'history');
   RESOURCES = path.join(HUB, 'resources');
+  PRESENCE = path.join(HUB, 'presence');
   JOURNAL = path.join(HUB, `journal.${JOURNAL_NODE}.jsonl`);
   TASKS = path.join(HUB, 'tasks.json');
   CLAIMS = path.join(HUB, 'claims.json');
@@ -56,6 +57,7 @@ export function setHubBase(dir) {
   fs.mkdirSync(PROJ, { recursive: true });
   fs.mkdirSync(HISTORY, { recursive: true });
   fs.mkdirSync(RESOURCES, { recursive: true });
+  fs.mkdirSync(PRESENCE, { recursive: true });
 }
 setHubBase(resolveHub());
 
@@ -206,7 +208,12 @@ export function foldTasks() {
     if (e.ev === 'add') {
       let fid = e.id;
       if ((tasks.has(fid) || seen.has(fid)) && remap.get(key) !== fid) fid = maxNum + 1; // id taken (even if since-deleted) → remap later add
-      const t = { ...(e.t || {}), id: fid };
+      // _origin = the (node,id) this task was ADDED under. Invariant: remap[origin.node::
+      // origin.id] === fid. Lets the write-path key set/del to origin so an UNCHANGED reducer
+      // resolves them to THIS canonical task from any node — even a node that historically
+      // collided on fid (the cross-node mis-close bug). Derived every fold; NOT an event →
+      // lazy migration, zero history rewrite.
+      const t = { ...(e.t || {}), id: fid, _origin: { node: e._node, id: e.id } };
       tasks.set(fid, t);
       seen.add(fid);
       remap.set(key, fid);
@@ -385,13 +392,40 @@ export function sectionsConfig() {
   return cfg;
 }
 
+// "Buttons" (task #159): which queue roles are HUMAN owners, not agents — the
+// distinction that turns a plain queue-depth number into "N buttons waiting".
+// A plain JSON array of role names in HUB/owner-roles.json (mirrors sectionsConfig's
+// file-config pattern); default empty so an instance that hasn't configured it just
+// gets no button rollup, not a guess at who "the owner" is.
+export function ownerRoles() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(path.join(HUB, 'owner-roles.json'), 'utf8'));
+    return Array.isArray(arr) ? arr.filter(r => typeof r === 'string' && r) : [];
+  } catch { return []; }
+}
+
 // Materialise the agent-facing protocol (prompts/protocol.md, shipped with the code) into
 // HUB/HUBD.md, stamped with the installed version. GENERATED per-node artifact (like tasks.json):
 // gitignored, never mesh-synced — so two nodes on different versions never fight over it and each
 // node's HUBD.md matches the code running there. Any `hub` run / daemon start / `hub upgrade`
 // refreshes it when the stamp != installed version. This is how a hubd upgrade's new instructions
 // reach every ~/.hubd (yours and other users'), including agents that read the files directly.
+// Ensure one literal line is present in HUB/.gitignore, appending it if missing.
+// Runs unconditionally (not just when HUBD.md is (re)written) so an upgraded
+// hubd on an EXISTING ~/.hubd still gets new runtime-only paths ignored before
+// anything writes to them — mesh-sync.sh runs a plain `git add -A`, so an
+// un-ignored runtime file becomes real (and noisy) mesh-synced history the
+// first sync after it appears.
+function ensureGitignored(entry) {
+  const gi = path.join(HUB, '.gitignore');
+  let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
+  const esc = entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp('^' + esc + '$', 'm').test(g)) return;
+  try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); } catch {}
+}
+
 export function ensureProtocol(force) {
+  try { fs.mkdirSync(HUB, { recursive: true }); ensureGitignored('HUBD.md'); ensureGitignored('presence/'); } catch {}
   let body;
   try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
   catch { return { ok: false }; }
@@ -401,13 +435,8 @@ export function ensureProtocol(force) {
   const curVer = (cur.match(/hubd-protocol v([0-9][0-9A-Za-z.\-]*)/) || [])[1] || null;
   if (!force && curVer === VERSION) return { ok: true, version: VERSION, wrote: false, current: curVer };
   const stamp = `<!-- hubd-protocol v${VERSION} — GENERATED from the installed hubd; do not edit. Team rules go in AGENTS.md. Refresh: hub upgrade -->\n\n`;
-  try {
-    fs.mkdirSync(HUB, { recursive: true });
-    atomicWrite(target, stamp + body);
-    const gi = path.join(HUB, '.gitignore');           // keep the generated file out of the data git (per-node)
-    let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
-    if (!/^HUBD\.md$/m.test(g)) { try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + 'HUBD.md\n'); } catch {} }
-  } catch { return { ok: false }; }
+  try { atomicWrite(target, stamp + body); }
+  catch { return { ok: false }; }
   return { ok: true, version: VERSION, wrote: true, from: curVer };
 }
 
@@ -748,6 +777,108 @@ export function runSearch(a) {
   return { query: a.query, hits: hits.slice(0, 40), total: hits.length };
 }
 
+/* ── Bootstrap: cwd → project (memory series #164) ──
+ * An agent's working directory rarely matches its hubd project slug (custom
+ * project names, harvested cards with no synced folder, mesh nodes where the
+ * same project lives at a different absolute path per host). resolveContext()
+ * answers "which project card is THIS checkout", so an agent can self-orient
+ * with one call instead of a manual hub_get — most to least certain:
+ *   1. a .hubd marker file (repo root or an ancestor, capped at the repo root)
+ *      whose trimmed first line IS the slug — explicit, portable across hosts.
+ *   2. a project card's own recorded `- path:` (written by hub_sync) equal to
+ *      or an ancestor of the resolved root — a real prior sync, not a guess.
+ *   3. the root folder's name, slugified, IF a card with that exact slug
+ *      already exists — flagged guessed:true so a same-name coincidence is
+ *      never silently trusted as fact.
+ * Never searches for a marker above the nearest .git root — a marker belongs
+ * to the repo it names, not to some ancestor directory shared by unrelated
+ * checkouts (the same false-positive hazard resolveQueueRootInfo guards
+ * against in lib/queue.mjs).
+ */
+const CONTEXT_WALK_MAX = 8;   // same depth cap as resolveQueueRootInfo (lib/queue.mjs)
+
+function findGitRoot(startDir) {
+  let d = startDir;
+  for (let i = 0; i < CONTEXT_WALK_MAX; i++) {
+    if (fs.existsSync(path.join(d, '.git'))) return d;
+    const parent = path.dirname(d);
+    if (parent === d) return null;
+    d = parent;
+  }
+  return null;
+}
+
+function findHubdMarker(startDir) {
+  let d = startDir;
+  for (let i = 0; i < CONTEXT_WALK_MAX; i++) {
+    const marker = path.join(d, '.hubd');
+    try {
+      if (fs.statSync(marker).isFile()) {
+        const slug = fs.readFileSync(marker, 'utf8').split('\n')[0].trim();
+        if (slug) return { slug: slugify(slug), root: d };
+      }
+    } catch {}
+    if (fs.existsSync(path.join(d, '.git'))) break;   // never search above the repo root
+    const parent = path.dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return null;
+}
+
+// Cards written by hub_sync carry `- path: <dir>` (see runSync below); harvested /
+// hub_card_set cards do not, so this only ever matches a real prior sync, never a guess.
+function findProjectByPath(root) {
+  let files;
+  try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch { return null; }
+  for (const f of files) {
+    let text; try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
+    const m = text.match(/^- path: (.+)$/m);
+    if (!m) continue;
+    const p = m[1].trim();
+    if (p === root || root.startsWith(p + path.sep)) return f.replace(/\.md$/, '');
+  }
+  return null;
+}
+
+export function resolveContext(cwd) {
+  const start = path.resolve(String(cwd || ''));
+  const root = findGitRoot(start) || start;
+
+  const marker = findHubdMarker(start);
+  if (marker) return { project: marker.slug, via: 'marker', root: marker.root, guessed: false };
+
+  const byPath = findProjectByPath(root);
+  if (byPath) return { project: byPath, via: 'path', root, guessed: false };
+
+  const guess = slugify(path.basename(root));
+  if (fs.existsSync(cardPath(guess))) return { project: guess, via: 'guess', root, guessed: true };
+
+  return { project: null, via: 'none', root, guessed: false,
+    hint: `no project card matches "${guess}" — pass project explicitly, run hub_sync here, or create ${path.join(root, '.hubd')} containing the right slug` };
+}
+
+// Tool-facing wrapper: resolve + the digest/open-tasks/active-claims an agent
+// actually wants, in one call. cwd is required and never defaulted to the
+// hubd process's own process.cwd() — the server may be a long-lived daemon
+// serving many agents in many directories, so only the CALLER can say where
+// it is; defaulting here would silently answer for the wrong directory.
+export function runContext(a) {
+  const cwd = a && a.cwd;
+  if (!cwd) throw new Error("cwd required — pass the CALLING agent's own absolute working directory (the hubd process's cwd is not reliable)");
+  const ctx = resolveContext(cwd);
+  if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [] };
+  const card = readCard(ctx.project);
+  const digest = card ? (card.split('## Digest')[1] || '').split('## Facts')[0].trim().slice(0, 300) : null;
+  const claimsDb = loadClaims();
+  return {
+    ...ctx,
+    digest,
+    openTasks: runTaskList({ project: ctx.project, status: 'open' }).tasks,
+    activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
+  };
+}
+
 // Canonical task category vocabulary: technical | communicative | decision | chore.
 // `cat` is the single field for this; `kind` is a legacy alias — don't add new fields
 // or invent new category values, keep the set small.
@@ -789,7 +920,12 @@ export function runTaskUpdate(a) {
     if (Array.isArray(a.depends_on)) patch.depends_on = a.depends_on;
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
     if (a.status === 'done') patch.done = now();
-    fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: JOURNAL_NODE, ev: 'set', id: t.id, patch }) + '\n');
+    // Key the set to the task's ORIGIN (node,id) — NOT this writer's node + finalId — so the
+    // unchanged reducer resolves it to the canonical task even when THIS node historically
+    // collided on the finalId (else `set` mis-hits the writer's own remapped task). _origin
+    // is supplied by the fold; fall back to writer/finalId for pre-migration caches.
+    const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
+    fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
     rebuildTaskCache();
     journalAppend({ ts: now(), project: t.project, agent: a.by || 'unknown', kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
     return { ok: true, task: { ...t, ...patch } };
@@ -943,6 +1079,59 @@ export function runRelease(a) {
     atomicWrite(CLAIMS, db);
     return { ok: true, removed: before - db.claims.length };
   });
+}
+
+/* ── Presence (task #191) ──
+ * The orchestrator only ever SEES screen-scraped agents (watch.py tails ssh
+ * hardcopy); an MCP/headless agent like this one is invisible until it tells
+ * someone. hub_heartbeat/hub_presence are a fleet registry built the same way
+ * claims are: one small JSON record per identity, freshness computed at READ
+ * time from a stored ttlMin (see activeClaims above), not a push/pull daemon.
+ * One file per AGENT (not per node) — presence/<agent>.json, last write wins;
+ * a given agent identity has one live writer in practice (itself), same
+ * assumption cardPath/resourcePath already make for their own atomicWrite.
+ * Gitignored (ensureProtocol) and never mesh-synced: liveness is meaningful
+ * for minutes, not the durable append-only history journal/tasks are — and
+ * mesh-sync.sh's plain `git add -A` would otherwise turn every heartbeat
+ * across the whole mesh into churned, pushed git history.
+ */
+export function presencePath(agent) { return path.join(PRESENCE, slugify(agent) + '.json'); }
+export function readPresenceRecord(agent) {
+  try { return JSON.parse(fs.readFileSync(presencePath(agent), 'utf8')); } catch { return null; }
+}
+export function loadPresence() {
+  let files;
+  try { files = fs.readdirSync(PRESENCE).filter(f => f.endsWith('.json')); } catch { return []; }
+  const out = [];
+  for (const f of files) { try { out.push(JSON.parse(fs.readFileSync(path.join(PRESENCE, f), 'utf8'))); } catch {} }
+  return out;
+}
+function presenceAlive(rec, nowMs) {
+  const ttl = rec.ttlMin ?? 15;
+  if (ttl === 0) return false;
+  return nowMs < parseTs(rec.last_seen).getTime() + ttl * 60000;
+}
+
+export function runHeartbeat(a) {
+  const agent = a && a.agent;
+  if (!agent) throw new Error('agent required');
+  const rec = {
+    agent, role: a.role || null, status: a.status || null,
+    task_id: (a.task_id ?? null), cwd: a.cwd || null,
+    node: JOURNAL_NODE, last_seen: now(), ttlMin: a.ttlMin ?? 15,
+  };
+  fs.mkdirSync(PRESENCE, { recursive: true });
+  atomicWrite(presencePath(agent), rec);
+  return { ok: true, agent, presence: presencePath(agent) };
+}
+
+export function runPresence(a = {}) {
+  const nowMs = Date.now();
+  let list = loadPresence().map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs) }));
+  if (a.role) list = list.filter(r => r.role === a.role);
+  if (a.aliveOnly) list = list.filter(r => r.alive);
+  list.sort((x, y) => (x.last_seen < y.last_seen ? 1 : -1));   // freshest first
+  return { agents: list, generated: now() };
 }
 
 export function runKanban({ doneWindowHours = 24 } = {}) {

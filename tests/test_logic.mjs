@@ -258,5 +258,208 @@ ok(/"prompts"\s*:\s*\{/.test(mcpOut), 'MCP: initialize advertises the prompts ca
 ok(/"name"\s*:\s*"harvest"/.test(mcpOut), 'MCP: prompts/list advertises harvest');
 ok(/Harvest this dialog/.test(mcpOut), 'MCP: prompts/get returns the harvest prompt text');
 
+// ── resolveContext/runContext: cwd → project bootstrap (memory series #164) ──
+// marker file wins; then a card's recorded sync path; then a folder-name guess
+// ONLY if that exact card already exists; else null with a hint. Never crosses
+// above the nearest .git root while looking for a marker.
+const ctxRoot1 = mktmp();
+core.setHubBase(ctxRoot1);
+const ctxOuterDir = path.join(ctxRoot1, 'outer');
+const ctxRepoDir = path.join(ctxOuterDir, 'repo');
+const ctxNestedDir = path.join(ctxRepoDir, 'src', 'deep');
+fs.mkdirSync(ctxNestedDir, { recursive: true });
+fs.mkdirSync(path.join(ctxRepoDir, '.git'));
+fs.writeFileSync(path.join(ctxOuterDir, '.hubd'), 'wrong-project\n');   // above the .git root — must be ignored
+fs.writeFileSync(path.join(ctxRepoDir, '.hubd'), 'Right Project\n');    // at the repo root — must win
+const ctxA = core.resolveContext(ctxNestedDir);
+ok(ctxA.project === 'right-project', `context marker: slugified, found by walking up from a nested dir (got ${ctxA.project})`);
+ok(ctxA.via === 'marker' && ctxA.guessed === false && ctxA.root === ctxRepoDir, 'context marker: via=marker, root=repo, not guessed');
+fs.rmSync(ctxRoot1, { recursive: true, force: true });
+
+const ctxRoot1b = mktmp();
+core.setHubBase(ctxRoot1b);
+const ctxOuterDir2 = path.join(ctxRoot1b, 'outer2');
+const ctxRepoDirB = path.join(ctxOuterDir2, 'repoB');
+fs.mkdirSync(ctxRepoDirB, { recursive: true });
+fs.mkdirSync(path.join(ctxRepoDirB, '.git'));
+fs.writeFileSync(path.join(ctxOuterDir2, '.hubd'), 'should-not-be-used\n');   // above the repo root
+const ctxB = core.resolveContext(ctxRepoDirB);
+ok(ctxB.project === null && ctxB.via === 'none', `context marker: never searches above the .git root (got project=${ctxB.project}, via=${ctxB.via})`);
+fs.rmSync(ctxRoot1b, { recursive: true, force: true });
+
+const ctxRoot2 = mktmp();
+core.setHubBase(ctxRoot2);
+const ctxSyncedDir = path.join(ctxRoot2, 'somefolder');
+fs.mkdirSync(ctxSyncedDir, { recursive: true });
+core.runSync({ path: ctxSyncedDir, name: 'Custom Name', digest: 'd1', agent: 'test' });   // slug custom-name != folder name
+const ctxC = core.resolveContext(ctxSyncedDir);
+ok(ctxC.project === 'custom-name', `context path-match: resolves via the card's recorded sync path (got ${ctxC.project})`);
+ok(ctxC.via === 'path' && ctxC.guessed === false, 'context path-match: via=path, not guessed');
+const ctxSyncedSub = path.join(ctxSyncedDir, 'sub');
+fs.mkdirSync(ctxSyncedSub, { recursive: true });
+const ctxD = core.resolveContext(ctxSyncedSub);
+ok(ctxD.project === 'custom-name', `context path-match: also resolves from a subdirectory of the synced path (got ${JSON.stringify(ctxD)})`);
+fs.rmSync(ctxRoot2, { recursive: true, force: true });
+
+const ctxRoot3 = mktmp();
+core.setHubBase(ctxRoot3);
+core.runCardSet({ project: 'myapp', digest: 'kickoff', by: 'test' });   // harvested card, no recorded path
+const ctxGuessDir = path.join(ctxRoot3, 'work', 'myapp');
+fs.mkdirSync(ctxGuessDir, { recursive: true });
+const ctxE = core.resolveContext(ctxGuessDir);
+ok(ctxE.project === 'myapp' && ctxE.via === 'guess' && ctxE.guessed === true, `context basename-guess: matches an existing card by folder name, flagged guessed (got ${JSON.stringify(ctxE)})`);
+fs.rmSync(ctxRoot3, { recursive: true, force: true });
+
+const ctxRoot4 = mktmp();
+core.setHubBase(ctxRoot4);
+const ctxUnknownDir = path.join(ctxRoot4, 'totally-unknown-folder-xyz');
+fs.mkdirSync(ctxUnknownDir, { recursive: true });
+const ctxF = core.resolveContext(ctxUnknownDir);
+ok(ctxF.project === null && ctxF.via === 'none', `context no-match: project null, via=none (got ${JSON.stringify(ctxF)})`);
+ok(typeof ctxF.hint === 'string' && ctxF.hint.length > 0, 'context no-match: hint present to guide the caller');
+fs.rmSync(ctxRoot4, { recursive: true, force: true });
+
+const ctxRoot5 = mktmp();
+core.setHubBase(ctxRoot5);
+const ctxFullDir = path.join(ctxRoot5, 'proj5');
+fs.mkdirSync(ctxFullDir, { recursive: true });
+fs.writeFileSync(path.join(ctxFullDir, '.hubd'), 'proj5\n');
+core.runCardSet({ project: 'proj5', digest: 'the digest text', by: 'test' });
+core.runTaskAdd({ project: 'proj5', text: 'do the thing', by: 'test' });
+core.runClaim({ project: 'proj5', area: 'app', agent: 'tester' });
+const ctxFull = core.runContext({ cwd: ctxFullDir });
+ok(ctxFull.project === 'proj5' && ctxFull.via === 'marker', 'runContext: resolves project via marker');
+ok(/the digest text/.test(ctxFull.digest || ''), `runContext: digest extracted from the card (got ${ctxFull.digest})`);
+ok(Array.isArray(ctxFull.openTasks) && ctxFull.openTasks.some(t => /do the thing/.test(t.text)), 'runContext: openTasks includes the seeded task');
+ok(Array.isArray(ctxFull.activeClaims) && ctxFull.activeClaims.some(c => c.area === 'app'), 'runContext: activeClaims includes the seeded claim');
+let ctxThrew = false;
+try { core.runContext({}); } catch { ctxThrew = true; }
+ok(ctxThrew, "runContext: throws without cwd (never silently falls back to the server's own cwd)");
+fs.rmSync(ctxRoot5, { recursive: true, force: true });
+
+// ── presence: hub_heartbeat/hub_presence — TTL freshness like activeClaims (task #191) ──
+const queueLib = await import(path.join(REPO, 'hub/lib/queue.mjs'));
+
+const presRoot1 = mktmp();
+core.setHubBase(presRoot1);
+const hb1 = core.runHeartbeat({ agent: 'agent-a', role: 'hubd', status: 'working', task_id: 42, cwd: '/tmp/x' });
+ok(hb1.ok === true && hb1.agent === 'agent-a', 'heartbeat: writes a presence record');
+ok(fs.existsSync(core.presencePath('agent-a')), 'heartbeat: presence/<agent>.json exists');
+const rec1 = core.readPresenceRecord('agent-a');
+ok(rec1.role === 'hubd' && rec1.status === 'working' && rec1.task_id === 42 && rec1.cwd === '/tmp/x', `heartbeat: fields stored (got ${JSON.stringify(rec1)})`);
+ok(typeof rec1.last_seen === 'string' && rec1.ttlMin === 15, 'heartbeat: last_seen stamped, default ttlMin=15');
+
+core.runHeartbeat({ agent: 'agent-a', role: 'hubd', status: 'idle' });   // overwrite, not append
+ok(core.loadPresence().filter(r => r.agent === 'agent-a').length === 1, 'heartbeat: second call overwrites, does not duplicate');
+ok(core.readPresenceRecord('agent-a').status === 'idle', 'heartbeat: overwrite reflects the latest status');
+
+fs.writeFileSync(core.presencePath('agent-stale'), JSON.stringify({ agent: 'agent-stale', role: 'hubd', last_seen: '2020-01-01 00:00', ttlMin: 15 }));
+const presAll = core.runPresence({});
+const fresh = presAll.agents.find(a => a.agent === 'agent-a');
+const stale = presAll.agents.find(a => a.agent === 'agent-stale');
+ok(fresh && fresh.alive === true, 'presence: recent heartbeat is alive');
+ok(stale && stale.alive === false, 'presence: a 2020 last_seen with ttlMin=15 is stale');
+ok(core.runPresence({ aliveOnly: true }).agents.every(a => a.alive), 'presence: aliveOnly drops stale records');
+ok(core.runPresence({ role: 'hubd' }).agents.length === 2 && core.runPresence({ role: 'nope' }).agents.length === 0, 'presence: role filter');
+let hbThrew = false;
+try { core.runHeartbeat({}); } catch { hbThrew = true; }
+ok(hbThrew, 'heartbeat: throws without agent');
+fs.rmSync(presRoot1, { recursive: true, force: true });
+
+// ensureProtocol: presence/ gitignored EVEN when HUBD.md is already current (not just on write)
+const presRoot2 = mktmp();
+core.setHubBase(presRoot2);
+core.ensureProtocol();
+ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: presence/ gitignored on first run');
+fs.writeFileSync(path.join(presRoot2, '.gitignore'), '');   // simulate an older .gitignore missing the entry
+const eAgain = core.ensureProtocol();                       // same version -> would NOT rewrite HUBD.md
+ok(eAgain.wrote === false, 'ensureProtocol: still idempotent on HUBD.md (no unnecessary rewrite)');
+ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: re-adds presence/ to .gitignore even when HUBD.md was already current — mesh-sync\'s git-add-A would otherwise churn on every heartbeat');
+fs.rmSync(presRoot2, { recursive: true, force: true });
+
+// ── queue-depth peek: non-consuming, mesh-safe (task #191) ──
+const qRoot1 = mktmp();
+const qdir1 = path.join(qRoot1, 'queues'), stateDir1 = path.join(qRoot1, '.qstate');
+fs.mkdirSync(qdir1, { recursive: true }); fs.mkdirSync(stateDir1, { recursive: true });
+const qfile1 = path.join(qdir1, 'hubd.testnode.queue.md');
+const msg1 = '\n## 2026-01-01 10:00 · from orchestrator\nfirst message\n';
+fs.writeFileSync(qfile1, msg1);
+fs.writeFileSync(path.join(stateDir1, 'hubd.testnode.queue.md.offset'), String(Buffer.byteLength(msg1)));   // first message already consumed
+const msg2 = '\n## 2026-01-01 11:00 · from orchestrator\nsecond message\n';
+fs.appendFileSync(qfile1, msg2);
+const depth1 = queueLib.peekQueueDepth('hubd', { root: qRoot1 });
+ok(depth1.pending === 1, `peekQueueDepth: counts only the unread message (got ${depth1.pending})`);
+ok(depth1.oldestWaiting === '2026-01-01 11:00', `peekQueueDepth: oldestWaiting is the unread one's timestamp (got ${depth1.oldestWaiting})`);
+const offsetBefore = fs.readFileSync(path.join(stateDir1, 'hubd.testnode.queue.md.offset'), 'utf8');
+queueLib.peekQueueDepth('hubd', { root: qRoot1 });   // call again
+ok(fs.readFileSync(path.join(stateDir1, 'hubd.testnode.queue.md.offset'), 'utf8') === offsetBefore, 'peekQueueDepth: never advances the offset (non-consuming, does not steal from the real consumer)');
+fs.rmSync(qRoot1, { recursive: true, force: true });
+
+// ── queueSummaryForBrief: cross-references presence, drops idle/unknown roles ──
+const qRoot2 = mktmp();
+core.setHubBase(qRoot2);
+fs.mkdirSync(path.join(qRoot2, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(qRoot2, 'queues', 'busyrole.node1.queue.md'), '\n## 2026-02-02 09:00 · from orchestrator\nsomething\n');
+fs.writeFileSync(path.join(qRoot2, 'queues', 'idlerole.node1.queue.md'), '');   // exists, nothing pending, no presence -> dropped
+core.runHeartbeat({ agent: 'agent-busy', role: 'busyrole' });
+const summary = queueLib.queueSummaryForBrief({ root: qRoot2 });
+ok(summary.length === 1 && summary[0].role === 'busyrole', `queueSummaryForBrief: only the role with pending or presence shows up (got ${JSON.stringify(summary)})`);
+ok(summary[0].pending === 1 && summary[0].lastSeen === core.readPresenceRecord('agent-busy').last_seen, 'queueSummaryForBrief: pending count + presence last-seen cross-referenced by role');
+fs.rmSync(qRoot2, { recursive: true, force: true });
+
+// ── buttons: owner-roles.json + queue-depth isButton/ageDays + buttonsSummary (task #159) ──
+const btnRoot1 = mktmp();
+core.setHubBase(btnRoot1);
+ok(core.ownerRoles().length === 0, 'ownerRoles: empty by default (no owner-roles.json)');
+fs.writeFileSync(path.join(btnRoot1, 'owner-roles.json'), JSON.stringify(['alice', 42, '', 'boss']));
+ok(JSON.stringify(core.ownerRoles()) === JSON.stringify(['alice', 'boss']), `ownerRoles: reads the file, drops non-string/empty entries (got ${JSON.stringify(core.ownerRoles())})`);
+
+fs.mkdirSync(path.join(btnRoot1, 'queues'), { recursive: true });
+const oldTs = '2020-01-01 00:00';
+fs.writeFileSync(path.join(btnRoot1, 'queues', 'alice.node1.queue.md'), `\n## ${oldTs} · from agent\nsign this contract\n`);
+fs.writeFileSync(path.join(btnRoot1, 'queues', 'dev.node1.queue.md'), '\n## 2026-01-01 00:00 · from orchestrator\nfix the bug\n');
+const rows1 = queueLib.queueSummaryForBrief({ root: btnRoot1 });
+const aliceRow = rows1.find(r => r.role === 'alice');
+const devRow = rows1.find(r => r.role === 'dev');
+ok(aliceRow && aliceRow.isButton === true, 'queueSummaryForBrief: owner role flagged isButton');
+ok(devRow && devRow.isButton === false, 'queueSummaryForBrief: non-owner role is not a button');
+ok(aliceRow.ageDays >= 2000, `queueSummaryForBrief: ageDays computed from a 2020 timestamp (got ${aliceRow.ageDays})`);
+
+const btnSum1 = queueLib.buttonsSummary(rows1);
+ok(btnSum1.count === 1 && btnSum1.items.length === 1 && btnSum1.items[0].role === 'alice', `buttonsSummary: counts only button rows with pending>0 (got ${JSON.stringify(btnSum1)})`);
+ok(btnSum1.oldestDays === aliceRow.ageDays, 'buttonsSummary: oldestDays matches the button row age');
+
+// a button role with nothing pending contributes nothing
+fs.writeFileSync(path.join(btnRoot1, 'queues', 'boss.node1.queue.md'), '');
+const rows2 = queueLib.queueSummaryForBrief({ root: btnRoot1 });
+const btnSum2 = queueLib.buttonsSummary(rows2);
+ok(btnSum2.count === 1, `buttonsSummary: an empty owner queue does not inflate the count (got ${btnSum2.count})`);
+fs.rmSync(btnRoot1, { recursive: true, force: true });
+
+// ── regression: cross-node task-id collision must not mis-close the wrong task ──
+// Bug: `hub task done N` keyed its `set` event on (writing-node, N) — if the WRITING
+// node had itself once collided on local id N (remapped to a different fid), that old
+// remap hijacked the lookup and closed the writer's own unrelated task instead of the
+// canonical #N. Fix keys `set` on the task's own _origin (node,id it was ADDED under),
+// stamped by foldTasks on every fold — so any node closing #N resolves to the same
+// canonical task regardless of its own numbering history. HUBD_NODE is fixed to
+// 'cowork' for this whole file (set before core.mjs was imported, top of file).
+const originRoot = mktmp();
+core.setHubBase(originRoot);
+const originTs1 = '2026-01-01 10:00', originTs2 = '2026-01-01 10:01';
+fs.writeFileSync(path.join(originRoot, 'tasks.peer.events.jsonl'),
+  JSON.stringify({ ts: originTs1, node: 'peer', ev: 'add', id: 7, t: { id: 7, project: 'x', text: 'peer task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(originRoot, 'tasks.cowork.events.jsonl'),
+  JSON.stringify({ ts: originTs2, node: 'cowork', ev: 'add', id: 7, t: { id: 7, project: 'x', text: 'cowork task', status: 'open' } }) + '\n');
+const foldedOrigin = core.foldTasks();
+ok(foldedOrigin.tasks.find(t => t.id === 7 && t.text === 'peer task'), 'origin fix: peer keeps canonical id 7 (added first)');
+ok(foldedOrigin.tasks.find(t => t.id === 8 && t.text === 'cowork task'), 'origin fix: cowork remapped to 8 on collision (got ' + JSON.stringify(foldedOrigin.tasks.map(t => t.id)) + ')');
+core.rebuildTaskCache();   // runTaskUpdate reads via loadTasks() -> must see the fresh fold, not a stale cache
+core.runTaskUpdate({ id: 7, status: 'done', by: 'test' });   // "cowork" node closing canonical #7 (peer's task)
+const afterOrigin = core.runTaskList({ status: 'all' }).tasks;
+ok(afterOrigin.find(t => t.id === 7).status === 'done', 'origin fix: closing #7 marks the CANONICAL (peer) task done');
+ok(afterOrigin.find(t => t.id === 8).status === 'open', 'origin fix: cowork\'s own remapped task #8 is untouched — the historical mis-close this fix prevents');
+fs.rmSync(originRoot, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

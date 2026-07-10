@@ -21,6 +21,9 @@ REQS=$(cat <<EOF
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_brief","arguments":{}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"hub_card_set","arguments":{"project":"smoke","digest":"smoke digest line"}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"hub_kanban","arguments":{}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"hub_context","arguments":{"cwd":"$HUBD_DIR"}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"hub_heartbeat","arguments":{"agent":"smoke-agent","role":"smoke"}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"hub_presence","arguments":{}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}
 {"jsonrpc":"2.0","id":7,"method":"ping"}
 EOF
@@ -45,15 +48,21 @@ ok(byId[2] && Array.isArray(byId[2].result.tools), "tools/list returns an array"
 {
   const names = new Set((byId[2] && byId[2].result.tools || []).map(t => t.name));
   const required = ["hub_status","hub_report","hub_task_add","hub_task_list","hub_brief",
-                    "hub_queue_send","hub_queue_wait","hub_onboarding","hub_whatsnew"];
+                    "hub_queue_send","hub_queue_wait","hub_onboarding","hub_whatsnew","hub_context",
+                    "hub_heartbeat","hub_presence"];
   const missing = required.filter(n => !names.has(n));
   ok(missing.length === 0, "tools/list has required tools (" + names.size + " total, missing: " + (missing.join(",") || "none") + ")");
 }
 ok(byId[3] && byId[3].result && byId[3].result.isError === false, "hub_status ok");
 ok(byId[4] && byId[4].result && byId[4].result.isError === false, "hub_task_add with >64KB payload ok");
 ok(byId[5] && byId[5].result && byId[5].result.isError === false, "hub_brief ok");
+ok(byId[5] && byId[5].result.content[0].text.includes("\"buttons\""), "hub_brief includes a buttons rollup");
 ok(byId[8] && byId[8].result && byId[8].result.isError === false, "hub_card_set ok");
 ok(byId[9] && byId[9].result && byId[9].result.isError === false, "hub_kanban ok");
+ok(byId[10] && byId[10].result && byId[10].result.isError === false, "hub_context ok");
+ok(byId[11] && byId[11].result && byId[11].result.isError === false, "hub_heartbeat ok");
+ok(byId[12] && byId[12].result && byId[12].result.isError === false, "hub_presence ok");
+ok(byId[12] && /smoke-agent/.test(JSON.stringify(byId[12].result)), "hub_presence sees the heartbeat just sent");
 ok(byId[6] && byId[6].result && byId[6].result.isError === true, "unknown tool -> isError true (not a crash)");
 ok(byId[7] && byId[7].result && Object.keys(byId[7].result).length === 0, "ping -> {}");
 
