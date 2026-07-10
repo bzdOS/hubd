@@ -100,6 +100,15 @@ task_id, cwd, freshness from `ttlMin`, default 15min). `hub_presence` reads the 
 roster back; `hub_brief`'s QUEUES line pairs "N queued for role X" with that role's
 last-seen agent, so a human can tell "is anyone even listening" without screen-peeking.
 
+**Duration, not just one task (task #196):** confirmed over one real session — dozens of
+`hub_queue_wait` polls held over an hour, five substantial tasks handled back to back with
+no manual nudge between them. The gotcha isn't the server (`lib/queue.mjs`'s poll loop is a
+real long-poll up to `timeout`, unaffected) — it's the CLIENT: at least one MCP client hangs
+up a call around ~60s with "Request timed out" (JSON-RPC -32001), while timeouts up to ~45s
+came back reliably every time. If your client errors on a long wait, don't fight it — poll
+with a shorter timeout (~30-45s) in a tighter loop instead of leaning on `hub_queue_wait`'s
+own 170s default / 540s max; the loop still never stops for input, it just takes smaller bites.
+
 ## Session ritual
 
 1. Read `AGENTS.md` (team constitution) + this `HUBD.md` (mechanics) + the top of `INBOX.md`.
