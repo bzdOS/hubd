@@ -1072,6 +1072,61 @@ export function runInbox(a = {}) {
   return { counts, empty: Object.values(counts).every(n => n === 0), blocked, overdue, unassigned, staleClaims, windowHours: hours, generated: now() };
 }
 
+// Deterministic dependency-graph planner over tasks' depends_on — the "probable
+// trajectory" as a critical PATH, not an ML forecast. Kahn topo-layers (what's
+// doable now vs unlocked-later), longest dependency chain (the critical path that
+// bounds ordering), and cycle detection (auto-populated deps can loop). Weight is
+// task-count for now; honest per-task durations (→ weighted critical path) come
+// once logd records them (#193). ids may be bare numbers or node-scoped ("planck-3").
+export function runTrajectory(a = {}) {
+  const proj = a.project ? slugify(a.project) : null;
+  const all = loadTasks().tasks;
+  const byId = new Map(all.map(t => [String(t.id), t]));
+  const open = all.filter(t => t.status === 'open' && (!proj || t.project === proj));
+  const openIds = new Set(open.map(t => String(t.id)));
+  const short = (t) => ({ id: t.id, project: t.project, importance: t.importance, text: (t.text || '').slice(0, 80) });
+  // deps that are THEMSELVES still open (i.e. actually blocking); a done/absent dep is satisfied.
+  const openDeps = (t) => (Array.isArray(t.depends_on) ? t.depends_on.map(String) : []).filter(d => openIds.has(d));
+
+  const ready = open.filter(t => openDeps(t).length === 0);
+  const blocked = open.filter(t => openDeps(t).length > 0)
+    .map(t => ({ ...short(t), waitingOn: openDeps(t) }));
+
+  // Kahn layers: layer 0 = ready now; layer k unlocks once all lower layers done.
+  const layers = []; const placed = new Set();
+  let frontier = ready.map(t => String(t.id));
+  while (frontier.length) {
+    layers.push(frontier); frontier.forEach(id => placed.add(id));
+    frontier = open.filter(t => !placed.has(String(t.id)) && openDeps(t).every(d => placed.has(d)))
+      .map(t => String(t.id));
+  }
+  const cyclic = open.filter(t => !placed.has(String(t.id))).map(t => String(t.id)); // unplaceable = in/behind a cycle
+
+  // Longest dependency chain (critical path) over the acyclic part — DP in layer order, no recursion.
+  const depth = new Map(), parent = new Map();
+  for (const layer of layers) for (const id of layer) {
+    let best = 0, bp = null;
+    for (const d of openDeps(byId.get(id))) if ((depth.get(d) || 0) >= best) { best = depth.get(d) || 0; bp = d; }
+    depth.set(id, best + 1); parent.set(id, bp);
+  }
+  let end = null, max = 0;
+  for (const [id, d] of depth) if (d > max) { max = d; end = id; }
+  const criticalPath = [];
+  for (let x = end; x != null; x = parent.get(x)) criticalPath.unshift(x);
+
+  return {
+    project: proj,
+    counts: { open: open.length, ready: ready.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length },
+    ready: ready.map(short),
+    blocked,
+    layers,
+    criticalPath,
+    cycles: cyclic,
+    weighting: 'task-count (unweighted; weighted critical path pending honest durations from logd #193)',
+    generated: now(),
+  };
+}
+
 export function runClaim(a) {
   if (!a.project || !a.area || !a.agent) throw new Error('project, area, agent required');
   return withLock(CLAIMS, () => {

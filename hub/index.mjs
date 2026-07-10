@@ -13,7 +13,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence,
+  runHeartbeat, runPresence, runTrajectory,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 
@@ -176,6 +176,12 @@ const TOOLS = [
       hours: { type: 'integer', description: 'window for blocked-report scan, default 72' },
     } } },
 
+  { name: 'hub_trajectory',
+    description: 'Deterministic dependency-graph plan over tasks\' depends_on — the probable trajectory as a critical PATH, not an ML forecast. Returns: ready (doable now, no open deps), blocked (with waitingOn ids), layers (Kahn topo-order — what unlocks when), criticalPath (longest dependency chain = ordering bound), cycles (dependency loops to fix). Use to see "given deps, what is the actual order / what is the critical path to a milestone". Weight is task-count now; weighted by real durations once logd records them.',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string', description: 'optional: restrict the graph to one project' },
+    } } },
+
   { name: 'hub_queue_send',
     description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
     inputSchema: { type: 'object', properties: {
@@ -212,7 +218,7 @@ const DISPATCH = {
   hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
-  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew, hub_inbox: runInbox,
+  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew, hub_inbox: runInbox, hub_trajectory: runTrajectory,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
