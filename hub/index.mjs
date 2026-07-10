@@ -67,7 +67,7 @@ const TOOLS = [
       cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'], description: 'task category, optional' },
       assignee: { type: 'string', description: 'agent name or owner, optional' },
       by: { type: 'string', description: 'who adds' },
-      depends_on: { type: 'array', items: { type: 'integer' }, description: 'task ids this task waits on' },
+      depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on (bare number or a node-scoped id like "planck-3")' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches (host/vm/service/...) — a structured link task → resource, not prose' },
     }, required: ['project', 'text'] } },
 
@@ -80,10 +80,10 @@ const TOOLS = [
   { name: 'hub_task_update',
     description: 'Update a task: close it (status=done), reassign, edit text/deadline/cat.',
     inputSchema: { type: 'object', properties: {
-      id: { type: 'integer' }, status: { type: 'string', enum: ['open', 'done'] },
+      id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "planck-3"' }, status: { type: 'string', enum: ['open', 'done'] },
       text: { type: 'string' }, deadline: { type: 'string' }, cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'] },
       assignee: { type: 'string' }, by: { type: 'string' },
-      depends_on: { type: 'array', items: { type: 'integer' }, description: 'task ids this task waits on' },
+      depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
     }, required: ['id'] } },
 

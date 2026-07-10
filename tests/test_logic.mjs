@@ -461,5 +461,40 @@ ok(afterOrigin.find(t => t.id === 7).status === 'done', 'origin fix: closing #7 
 ok(afterOrigin.find(t => t.id === 8).status === 'open', 'origin fix: cowork\'s own remapped task #8 is untouched — the historical mis-close this fix prevents');
 fs.rmSync(originRoot, { recursive: true, force: true });
 
+// ── task #194: node-scoped ids eliminate cross-node collision AT MINT TIME ──
+// (root-cause fix; #191's origin-keying stays as a symptom-patch for legacy
+// bare-numeric ids, which are left completely alone here.)
+const idRoot1 = mktmp();
+core.setHubBase(idRoot1);
+fs.writeFileSync(path.join(idRoot1, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-01-01 09:00', node: 'planck', ev: 'add', id: 'planck-1', t: { id: 'planck-1', project: 'x', text: 'planck task A', status: 'open' } }) + '\n' +
+  JSON.stringify({ ts: '2026-01-01 09:01', node: 'planck', ev: 'add', id: 'planck-2', t: { id: 'planck-2', project: 'x', text: 'planck task B', status: 'open' } }) + '\n');
+const addA = core.runTaskAdd({ project: 'x', text: 'cowork task A', by: 'test' });
+const addB = core.runTaskAdd({ project: 'x', text: 'cowork task B', by: 'test' });
+ok(addA.task.id === 'cowork-1', `id-fix: first local add is node-scoped cowork-1 (got ${addA.task.id})`);
+ok(addB.task.id === 'cowork-2', `id-fix: second local add increments to cowork-2 (got ${addB.task.id})`);
+const foldedIds = core.foldTasks().tasks.map(t => t.id);
+ok(new Set(foldedIds).size === foldedIds.length, `id-fix: no collisions even though both nodes started counting from 1 independently (ids: ${JSON.stringify(foldedIds)})`);
+ok(foldedIds.includes('planck-1') && foldedIds.includes('planck-2'), 'id-fix: the offline peer\'s tasks are untouched, no remap needed');
+
+const repDone = core.runReport({ project: 'x', by: 'test', text: `DONE: ${addA.task.id}` });
+ok(repDone.done.includes(addA.task.id), `id-fix: report DONE: accepts a node-scoped id, not just parseInt-able numbers (got ${JSON.stringify(repDone.done)})`);
+ok(core.runTaskList({ project: 'x', status: 'all' }).tasks.find(t => t.id === addA.task.id).status === 'done', 'id-fix: the node-scoped task is actually closed');
+
+fs.writeFileSync(path.join(idRoot1, 'tasks.legacy.events.jsonl'),
+  JSON.stringify({ ts: '2020-01-01 00:00', node: 'legacy', ev: 'add', id: 500, t: { id: 500, project: 'x', text: 'old numeric task', status: 'open' } }) + '\n');
+core.runTaskUpdate({ id: 500, status: 'done', by: 'test' });
+ok(core.runTaskList({ project: 'x', status: 'all' }).tasks.find(t => t.id === 500).status === 'done', 'id-fix: legacy bare-numeric ids still resolve end-to-end (backward compatible)');
+
+const dependent = core.runTaskAdd({ project: 'x', text: 'blocked on cowork-2', by: 'test', depends_on: [addB.task.id] });
+const kanban1 = core.runKanban();
+const depRow1 = [...kanban1.queued, ...kanban1.inProgress].find(t => t.id === dependent.task.id);
+ok(depRow1 && depRow1.blocked === true, `id-fix: depends_on a node-scoped id correctly flags blocked (got ${JSON.stringify(depRow1)})`);
+core.runTaskUpdate({ id: addB.task.id, status: 'done', by: 'test' });
+const kanban2 = core.runKanban();
+const depRow2 = [...kanban2.queued, ...kanban2.inProgress].find(t => t.id === dependent.task.id);
+ok(depRow2 && depRow2.blocked === false, 'id-fix: unblocks once the node-scoped dependency closes');
+fs.rmSync(idRoot1, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

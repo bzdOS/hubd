@@ -720,7 +720,7 @@ export function runReport(a) {
     atomicWrite(cardPath(project), text);
   }
   for (const list of b.done) for (const part of list.split(',')) {
-    const id = parseInt(part.trim(), 10);
+    const id = part.trim();   // id may be a bare number OR a node-scoped string (task #194) — pass through as-is
     if (id) { try { runTaskUpdate({ id, status: 'done', by }); summary.done.push(id); } catch {} }
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
@@ -879,13 +879,39 @@ export function runContext(a) {
   };
 }
 
+// Task #194 root-cause fix: bare sequential ids were minted from `db.seq` — THIS
+// node's local view of the global counter — so two nodes adding while offline from
+// each other routinely computed the same next id (foldTasks's remap-on-collision
+// patched the SYMPTOM after the fact, at fold time). New ids are node-scoped
+// (`${node}-${n}`) instead, derived ONLY from this node's own append-only event
+// file — no cross-node knowledge needed, so two offline adds can never collide by
+// construction. Existing bare-numeric ids are left exactly as they are (still
+// protected by the origin-keying fix); nothing here rewrites history.
+function nextLocalSeq() {
+  const esc = JOURNAL_NODE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^' + esc + '-(\\d+)$');
+  let maxN = 0;
+  try {
+    for (const l of fs.readFileSync(TASK_EVENTS, 'utf8').split('\n')) {
+      if (!l.trim()) continue;
+      try {
+        const e = JSON.parse(l);
+        if (e.ev === 'add' && typeof e.id === 'string') {
+          const m = re.exec(e.id);
+          if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+        }
+      } catch {}
+    }
+  } catch {}
+  return maxN + 1;
+}
+
 // Canonical task category vocabulary: technical | communicative | decision | chore.
 // `cat` is the single field for this; `kind` is a legacy alias — don't add new fields
 // or invent new category values, keep the set small.
 export function runTaskAdd(a) {
   return withLock(TASK_EVENTS, () => {
-    const db = loadTasks();
-    const id = (db.seq || 0) + 1;
+    const id = `${JOURNAL_NODE}-${nextLocalSeq()}`;
     const t = {
       id, project: slugify(a.project), text: a.text,
       importance: a.importance || 'normal', deadline: a.deadline || null,

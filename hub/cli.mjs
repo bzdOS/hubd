@@ -571,15 +571,19 @@ if (cmd === 'task') {
     const imp = getFlag('-i');
     const dl = getFlag('-d');
     const needsRaw = getFlag('--needs');
-    const depends_on = needsRaw ? String(needsRaw).split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+    // a dep may be a bare number (legacy id) or a node-scoped string like "planck-3"
+    // (task #194) — normalize pure-numeric strings to numbers (matches historical
+    // depends_on shape) and pass anything else through unchanged, instead of
+    // dropping it.
+    const depends_on = needsRaw ? String(needsRaw).split(',').map(s => s.trim()).filter(Boolean).map(s => { const n = parseInt(s, 10); return String(n) === s ? n : s; }) : [];
     const resources = getFlags('--resource');   // structured link task → resource(s)
     const cat = getFlag('--cat');
     const assignee = getFlag('--assignee');
     const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, assignee: assignee || null, by: 'cli', depends_on, resources });
     console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : ''));
   } else if (sub === 'done') {
-    const id = parseInt(args[2]);
-    if (!id) die('Id required: hub task done <id>');
+    const id = args[2];   // bare number or node-scoped string (task #194) — runTaskUpdate compares by String()
+    if (!id || id.startsWith('-')) die('Id required: hub task done <id>');
     runTaskUpdate({ id, status: 'done', by: 'cli' });
     console.log(`Task #${id} closed`);
   } else if (sub === 'list') {
