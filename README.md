@@ -159,7 +159,13 @@ a typed **relationship graph** (`[[wikilink]]` edges across projects and resourc
 `hub graph`); **resources** as first-class cards (hosts / services / endpoints);
 **structured reports** that fan into card sections; one-file section **i18n**
 (`sections.json`); a per-node **`HUBD.md`** protocol that regenerates to match the
-installed version; and **harvest** as an MCP prompt.
+installed version; **harvest** as an MCP prompt; cwd → project auto-bootstrap
+(`hub_context`: marker file / recorded sync path / folder-name guess, no manual
+`hub_get` needed); a **presence registry** (`hub_heartbeat`/`hub_presence`,
+TTL freshness like claims) so MCP/headless agents show up next to screen-scraped
+ones, with queue depth surfaced in `hub_brief`; and **buttons** — owner-decision
+queue items rolled up in `hub_brief` as "N buttons waiting (oldest X days)"
+(`HUB/owner-roles.json` names the human roles).
 
 Next: task kinds with their own lifecycles (a *communicative* task knows it's
 waiting on a reply); an end-to-end remote mode (the server never reads your
