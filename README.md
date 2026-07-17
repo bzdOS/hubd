@@ -30,7 +30,9 @@ Like `sshd` and `ssh`. The daemon serves agents; the CLI serves you.
 **Option A — start a company (GitHub template).** Use the **"Use this template"**
 button on the [`hubd-company/`](hubd-company/) directory — or clone and copy
 that folder into an existing private repo. You get a ready org structure:
-constitution (AGENTS.md), role onboardings, project cards, queues, recipes.
+constitution (AGENTS.md), role onboardings, project cards, an operator card,
+queues, recipes, and a weekly agent-written `chronicle/`
+([the narrative layer](docs/narrative-layer.md)).
 Hiring an agent = a fresh session reads a role file. This template is NOT
 included in the npm package; it comes from the repo.
 
@@ -169,8 +171,11 @@ queue items rolled up in `hub_brief` as "N buttons waiting (oldest X days)"
 
 Next: task kinds with their own lifecycles (a *communicative* task knows it's
 waiting on a reply); an end-to-end remote mode (the server never reads your
-work); and a gateway that proxies your personal MCP servers. The file format is
-the stable contract; everything else is negotiable.
+work); a gateway that proxies your personal MCP servers; and the
+**narrative layer** promoted into the server — `hub_chronicle` / `hub_probe`
+plus mood/check-in journal kinds, once the file-first version proves itself
+([design](docs/narrative-layer.md), templates in `hubd-company/`). The file
+format is the stable contract; everything else is negotiable.
 
 ## License
 
