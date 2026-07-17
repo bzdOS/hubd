@@ -13,6 +13,8 @@ That's not a metaphor — it's how this template's authors hired their own CTO.
 AGENTS.md        the constitution: roles, delivery chain, rituals, rules
 INBOX.md         append-only team journal (newest entries on top)
 projects/        one card per project — the unit everything hangs off
+owner/           operator card: the human's rhythm, interface, boundaries
+chronicle/       the team's memoir — one agent-written chapter per week
 roles/           onboarding docs — paste one into a fresh session to hire
   _vacancy.md      how to write a new role
   product.md       owns WHAT and WHY
@@ -24,7 +26,8 @@ roles/           onboarding docs — paste one into a fresh session to hire
   sre.md           build, deploy, run, fix broken builds
   runner.md        cheap, fast, rote work by instruction
 queues/          per-role task queues (agents block on them, then work)
-recipes/         procedures any agent can run: triage, categorize, inventory
+recipes/         procedures any agent can run: triage, inventory, chronicle, probe
+scripts/         behavior_metrics.mjs — numbers from the journal, no input needed
 prompts/         wire-up blocks for every surface (MCP and no-MCP alike)
 HARVEST.md       extract projects/tasks/decisions from any dialog, two words
 examples/        what a real working day looks like in the journal
@@ -72,6 +75,17 @@ Three ways content enters the company without anyone typing cards by hand:
   server; get host → service cards with risks as tasks. Re-run = drift report.
 - **Triage a pile** (`recipes/triage.md`) — meeting notes, brain dumps,
   email threads → deduplicated tasks with owners.
+
+## The narrative layer (optional)
+
+The same files that coordinate the team also *narrate* it. Fill the operator
+card (`owner/_template.md` — rhythm, interface, boundaries the agents may read
+but never edit), and once a week an agent writes a chapter into `chronicle/`
+(`recipes/chronicle.md`): what moved, the numbers (`scripts/behavior_metrics.mjs`),
+past decisions judging the present, and ≤3 good questions for the owner
+(`recipes/probe.md`). Design and privacy model — three braids, the life braid
+never leaves the machine — in
+[docs/narrative-layer.md](https://github.com/bzdOS/hubd/blob/main/docs/narrative-layer.md).
 
 ## Privacy
 

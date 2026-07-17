@@ -1,2 +1,5 @@
 .qstate/
 *.local.md
+
+# narrative layer: the life braid never leaves the machine (docs/narrative-layer.md)
+journal.life.jsonl
