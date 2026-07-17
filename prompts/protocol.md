@@ -38,6 +38,12 @@ decisions/facts = many lines (one per line):
 - Lines with no prefix become a NOTE. A report that is ONLY a NOTE is usually
   coordination — use `hub claim` instead.
 - Shortcuts: `hub decide "<what>" --why "<why>" -p <proj>`, `hub next "<...>" -p <proj>`.
+- **DONE: closes tasks by id, no per-task confirmation** — check EACH id in the
+  list is actually finished before writing the line, not just the ones you're
+  most confident about. `DONE: 12, 13, 14` closes all three the instant the
+  report lands; one line of habit (copying a batch of ids across from a
+  similar report) can close something that isn't done yet. Verify, don't
+  trust your own claim any more than you'd trust another agent's.
 
 ## Cards & sections
 
