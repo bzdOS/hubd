@@ -413,13 +413,19 @@ export function foldTasks() {
       seen.add(fid);
       remap.set(key, fid);
       maxNum = Math.max(maxNum, numeric(fid));
-    } else if (e.ev === 'set') {
-      const fid = remap.get(key) ?? e.id;
-      const t = tasks.get(fid);
-      if (t) Object.assign(t, e.patch || {});
-    } else if (e.ev === 'del') {
-      const fid = remap.get(key) ?? e.id;
-      tasks.delete(fid);
+    } else if (e.ev === 'set' || e.ev === 'del') {
+      // `set`/`del` carry a FINAL id: runTaskUpdate looks the task up in the folded
+      // view and writes `id: t.id`. So when that id names a live task, THAT is the
+      // target — consulting this node's remap first would silently redirect the write.
+      // (Real case: macbook-pro's add of 168 remapped to 171, and planck's own add of
+      // 171 remapped to 172; every later planck update addressed to the visible #171
+      // then landed on #172, and #171 could not be updated from planck at all.)
+      // The remap fallback stays for ids that name nothing live — a node's own
+      // since-remapped or since-deleted add — otherwise a `set` after a `del` would
+      // land on whatever task reused that id.
+      const fid = tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id);
+      if (e.ev === 'set') { const t = tasks.get(fid); if (t) Object.assign(t, e.patch || {}); }
+      else tasks.delete(fid);
     }
   }
   return { seq: maxNum, tasks: [...tasks.values()] };
