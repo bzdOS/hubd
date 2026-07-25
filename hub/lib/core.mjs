@@ -137,6 +137,113 @@ export function gitFacts(dir) {
   };
 }
 
+// gitDiffSummary: compute what changed since the last sync, from git.
+// Returns null if git is unavailable.
+// Uses the card's stored lastCommitAt (the commit timestamp from the previous
+// sync) to find the divergence point. `sinceLastSync` tells the caller which
+// question was answered: true → the counts really are "since the last sync"
+// (newCommits may legitimately be 0); false → no usable baseline, so commitLog
+// is just the last 10 commits as context and the counts mean nothing.
+export function gitDiffSummary(dir, prevLastCommitAt) {
+  if (!fs.existsSync(path.join(dir, '.git'))) return null;
+  // Resolve the baseline: the last commit the previous sync saw. --before is
+  // inclusive, so at the stored timestamp this returns that very commit.
+  // Only trust a git-shaped timestamp ("%ci" → 2026-07-09 21:57:11 +0100) —
+  // the card is user-editable, and this value is interpolated into a shell command.
+  let hashAt = '';
+  if (prevLastCommitAt && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/.test(prevLastCommitAt.trim())) {
+    hashAt = sh(`git log -1 --before="${prevLastCommitAt.trim()}" --format=%H`, dir);
+  }
+  if (!hashAt) {
+    // No prior sync (or the baseline commit is gone): show last 10 as context,
+    // and flag that these are NOT new commits.
+    const recent = sh('git log --oneline -10', dir).split('\n').filter(Boolean);
+    return {
+      sinceLastSync: false,
+      newCommits: 0,
+      insertions: null, deletions: null, filesChanged: null,
+      commitLog: recent,
+    };
+  }
+  const commitsNew = sh(`git log --oneline ${hashAt}..HEAD`, dir).split('\n').filter(Boolean);
+  const statSummary = commitsNew.length ? sh(`git diff --shortstat ${hashAt}..HEAD`, dir) : '';
+  // Parse --shortstat output like " 5 files changed, 120 insertions(+), 30 deletions(-)".
+  // git omits a clause entirely when its count is zero, so once we have a stat line
+  // a missing clause means 0 — null is reserved for "no diff was measured at all".
+  const num = (re) => { const m = statSummary.match(re); return m ? parseInt(m[1], 10) : (statSummary ? 0 : null); };
+  return {
+    sinceLastSync: true,
+    newCommits: commitsNew.length,
+    insertions: num(/(\d+) insertion/),
+    deletions: num(/(\d+) deletion/),
+    filesChanged: num(/(\d+) file/),
+    commitLog: commitsNew.slice(0, 10),  // cap at 10 for the card
+  };
+}
+
+// projectMetrics: auto-detect common project health metrics from files.
+// Scans for package.json, pyproject.toml, VERSION, Makefile, etc. and
+// extracts version, test count where discoverable. Returns {} if nothing found.
+export function projectMetrics(dir) {
+  const m = {};
+  // Version detection
+  try {
+    const pj = path.join(dir, 'package.json');
+    if (fs.existsSync(pj)) {
+      const o = JSON.parse(fs.readFileSync(pj, 'utf8'));
+      if (o.version) m.version = o.version;
+      if (o.name) m.packageName = o.name;
+    }
+  } catch {}
+  try {
+    const pp = path.join(dir, 'pyproject.toml');
+    if (fs.existsSync(pp)) {
+      const text = fs.readFileSync(pp, 'utf8');
+      const vm = text.match(/^version\s*=\s*["']([^"']+)["']/m);
+      if (vm) m.version = vm[1];
+    }
+  } catch {}
+  try {
+    const vf = path.join(dir, 'VERSION');
+    if (fs.existsSync(vf) && !m.version) m.version = fs.readFileSync(vf, 'utf8').trim();
+  } catch {}
+  // Test count: scan for pytest-style test files or count tests in common patterns.
+  // Best-effort, never blocks — wrong/missing is fine.
+  try {
+    let testCount = 0;
+    // Python: count "def test_" in test files
+    for (const d of ['tests', 'test', '.']) {
+      const td = path.join(dir, d);
+      if (!fs.existsSync(td)) continue;
+      for (const f of fs.readdirSync(td).slice(0, 500)) {
+        if (!f.endsWith('.py') || !f.startsWith('test_')) continue;
+        try {
+          const text = fs.readFileSync(path.join(td, f), 'utf8');
+          testCount += (text.match(/^def test_/gm) || []).length;
+        } catch {}
+      }
+      if (testCount > 0) break;
+    }
+    // JS/TS: count "test(" or "it(" in test files
+    if (testCount === 0) {
+      for (const d of ['tests', 'test', '__tests__']) {
+        const td = path.join(dir, d);
+        if (!fs.existsSync(td)) continue;
+        for (const f of fs.readdirSync(td).slice(0, 500)) {
+          if (!/\.(test|spec)\.(js|mjs|cjs|ts|tsx)$/.test(f)) continue;
+          try {
+            const text = fs.readFileSync(path.join(td, f), 'utf8');
+            testCount += (text.match(/\b(?:it|test)\s*\(/g) || []).length;
+          } catch {}
+        }
+        if (testCount > 0) break;
+      }
+    }
+    if (testCount > 0) m.tests = testCount;
+  } catch {}
+  return Object.keys(m).length ? m : null;
+}
+
 export function markerFiles(dir) {
   const candidates = ['README.md', 'tasks.md', 'TODO.md', 'PLAN.md'];
   try {
@@ -478,6 +585,17 @@ export function runSync(a) {
   const oldDigest = prev ? (prev.split('## Digest')[1] || '').split('## Facts')[0].trim() : null;
   const digest = a.digest || oldDigest || '_no digest yet — pass one on the next sync_';
 
+  // Auto-detect project metrics (version, test count) and git diff since last sync.
+  // The baseline is the lastCommitAt this function wrote into "## Facts (auto)" last
+  // time — read it back from that section only, so a hand-written line elsewhere in
+  // the card can't be mistaken for it.
+  const prevFacts = prev ? (prev.split('## Facts (auto)')[1] || '') : '';
+  const prevLastCommitAt = (prevFacts.match(/last commit: ([^\n]+)/) || [])[1] || null;
+  const diff = git ? gitDiffSummary(dir, prevLastCommitAt) : null;
+  // Only report movement when we had a real baseline to compare against.
+  const hasNew = !!(diff && diff.sinceLastSync && diff.newCommits > 0);
+  const metrics = projectMetrics(dir);
+
   if (a.digest && oldDigest && a.digest.trim() !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (sync by ${a.agent || 'unknown'})\n${oldDigest}\n`);
@@ -493,11 +611,14 @@ export function runSync(a) {
     (ownerBody ? ownerBody + '\n' : '') +
     `## Facts (auto)\n\n` +
     `- open tasks: ${openTaskCount(slug)}\n` +
+    (metrics ? Object.entries(metrics).map(([k, v]) => `- ${k}: ${v}`).join('\n') + '\n' : '') +
+    (hasNew ? `- since last sync: ${diff.newCommits} commit(s)${diff.filesChanged ? ', ' + diff.filesChanged + ' file(s)' : ''}${diff.insertions !== null ? ', +' + diff.insertions : ''}${diff.deletions !== null ? '/-' + diff.deletions + ' lines' : ''}\n` : '') +
     (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : '- no git\n') +
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
   atomicWrite(cardPath(pname), card);
-  journalAppend({ ts: now(), project: slug, agent: a.agent || 'unknown', kind: 'sync', text: 'synced' + (a.digest ? ' with digest' : '') });
-  return { ok: true, project: slug, card: cardPath(pname), gitSeen: !!git, hint: a.digest ? undefined : 'Card kept old/empty digest — pass digest="..." to write your summary.' };
+  const diffText = hasNew ? ` (${diff.newCommits} new commits, +${diff.insertions || 0}/-${diff.deletions || 0})` : '';
+  journalAppend({ ts: now(), project: slug, agent: a.agent || 'unknown', kind: 'sync', text: 'synced' + (a.digest ? ' with digest' : '') + diffText });
+  return { ok: true, project: slug, card: cardPath(pname), gitSeen: !!git, newCommits: hasNew ? diff.newCommits : 0, metrics, hint: a.digest ? undefined : 'Card kept old/empty digest — pass digest="..." to write your summary.' };
 }
 
 // Create or update a project card from just (project, digest) — no folder needed.
@@ -743,7 +864,15 @@ export function runStatus() {
     const synced = (c.match(/- synced: ([^\n]+)/) || [])[1] || '?';
     const slug = f.replace('.md', '');
     const openTasks = db.tasks.filter(t => t.project === slug && t.status === 'open').length;
-    return { project: slug, synced, digest, openTasks };
+    // Extract auto-detected metrics from Facts (auto) section
+    const version = (c.match(/- version: ([^\n]+)/) || [])[1] || null;
+    const tests = (c.match(/- tests: ([^\n]+)/) || [])[1] || null;
+    const sinceSync = (c.match(/- since last sync: ([^\n]+)/) || [])[1] || null;
+    const p = { project: slug, synced, digest, openTasks };
+    if (version) p.version = version;
+    if (tests) p.tests = tests;
+    if (sinceSync) p.sinceSync = sinceSync;
+    return p;
   });
   return { projects, recentJournal: journalTail(null, 10) };
 }
