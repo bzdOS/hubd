@@ -135,10 +135,15 @@ export function queueSend(role, text, { from = 'unknown', root, node } = {}) {
  * @param {{ timeout?: number, root?: string }} options
  * @returns {Promise<{ changed: true, text: string } | { changed: false }>}
  */
-export async function queueWait(role, { timeout = 540, root } = {}) {
+export async function queueWait(role, { timeout = 540, root, subscriber } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
-  const stateDir = path.join(r, '.qstate');
+  // A subscriber gets its OWN cursor namespace, the same trick queueWaitAll already
+  // uses for __watchall__: several sessions can then subscribe to one role without
+  // consuming each other's messages. Without a subscriber the cursor stays where it
+  // has always been — shared per node — which is what competing workers and the CLI
+  // want, and keeps existing offsets valid.
+  const stateDir = subscriber ? path.join(r, '.qstate', subscriber) : path.join(r, '.qstate');
 
   fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
@@ -173,7 +178,9 @@ export async function queueWait(role, { timeout = 540, root } = {}) {
   try {
     const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
     if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
-      process.stderr.write(`warning: another waiter (pid ${w.pid}) is active — one live consumer per role\n`);
+      // Sharing a cursor is the conflict, not sharing a role: distinct subscribers
+      // have their own cursor namespace and never reach this warning.
+      process.stderr.write(`warning: another waiter (pid ${w.pid}) shares this cursor — one live consumer per cursor\n`);
     }
   } catch { /* no marker or unreadable — fine */ }
 
@@ -224,10 +231,14 @@ export async function queueWait(role, { timeout = 540, root } = {}) {
  * @param {{ timeout?: number, root?: string }} options
  * @returns {Promise<{ changed: true, events: Array<{ role: string, node: string|null, text: string }> } | { changed: false }>}
  */
-export async function queueWaitAll({ timeout = 540, root } = {}) {
+export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
-  const stateDir = path.join(r, '.qstate', '__watchall__');
+  // Same reasoning as queueWait: __watchall__ already keeps taps off a role's own
+  // consumer, but two orchestrators tapping at once still shared one cursor.
+  const stateDir = subscriber
+    ? path.join(r, '.qstate', '__watchall__', subscriber)
+    : path.join(r, '.qstate', '__watchall__');
 
   fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });

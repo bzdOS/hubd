@@ -605,5 +605,65 @@ ok(pm && pm.version === '9.9.9', `projectMetrics: version from package.json (got
 ok(core.projectMetrics(mktmp()) === null, 'projectMetrics: nothing detectable → null');
 fs.rmSync(GD, { recursive: true, force: true });
 
+// ── a cursor belongs to a subscriber, not to the node ─────────────────────────
+// Bug: the offset lived at .qstate/<file>.offset, one per queue file shared by the
+// whole node. Several sessions subscribing to one role therefore consumed from one
+// cursor — whoever polled first took the message and the rest never saw it. That is
+// right for competing workers and wrong for subscribers.
+const { queueSend: qSend, queueWait: qWait } = await import(path.join(REPO, 'hub/lib/queue.mjs'));
+const { sessionId, resetSessionId } = await import(path.join(REPO, 'hub/lib/session.mjs'));
+const QR = mktmp();
+fs.mkdirSync(path.join(QR, 'queues'), { recursive: true });
+qSend('fanout', 'one message for everybody', { from: 'test', root: QR });
+
+const subA = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-a' });
+const subB = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-b' });
+ok(subA.changed && /one message for everybody/.test(subA.text), 'cursor: first subscriber receives the message');
+ok(subB.changed && /one message for everybody/.test(subB.text),
+  `cursor: SECOND subscriber receives the same message (fan-out, got changed=${subB.changed})`);
+const subAagain = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-a' });
+ok(!subAagain.changed, 'cursor: a subscriber does not re-read what it already consumed');
+ok(fs.existsSync(path.join(QR, '.qstate', 'sess-a')) && fs.existsSync(path.join(QR, '.qstate', 'sess-b')),
+  'cursor: each subscriber gets its own .qstate namespace');
+
+// No subscriber → the shared per-node cursor, i.e. today's behaviour untouched.
+qSend('shared', 'for whoever gets there first', { from: 'test', root: QR });
+const sh1 = await qWait('shared', { timeout: 1, root: QR });
+const sh2 = await qWait('shared', { timeout: 1, root: QR });
+ok(sh1.changed && !sh2.changed, `cursor: without a subscriber the node cursor is still shared (${sh1.changed}/${sh2.changed})`);
+const sharedOffsets = fs.readdirSync(path.join(QR, '.qstate')).filter(f => f.startsWith('shared.') && f.endsWith('.offset'));
+ok(sharedOffsets.length === 1,
+  `cursor: shared offset stays a plain file in .qstate, so existing offsets keep working (found ${sharedOffsets.join(',') || 'none'})`);
+fs.rmSync(QR, { recursive: true, force: true });
+
+// sessionId must never depend on the model: explicit env wins, else the parent process
+// (stable across a server respawn), else null so the caller keeps the node cursor.
+const prevSess = process.env.HUBD_SESSION;
+process.env.HUBD_SESSION = 'My Session/42';
+resetSessionId();
+ok(sessionId() === 's-my-session-42', `sessionId: HUBD_SESSION wins and is slugified (got ${sessionId()})`);
+delete process.env.HUBD_SESSION;
+resetSessionId();
+ok(sessionId() === 'p-' + process.ppid, `sessionId: falls back to the parent process (got ${sessionId()})`);
+if (prevSess === undefined) delete process.env.HUBD_SESSION; else process.env.HUBD_SESSION = prevSess;
+resetSessionId();
+
+// whatsnew's checkpoint must key on the session, not on the agent label: the label
+// names the function being performed and several functions share one trajectory, so
+// keying on it made a relabelled caller lose its checkpoint and re-read everything.
+const WN = mktmp();
+core.setHubBase(WN);
+core.journalAppend({ ts: core.now(), project: 'p', agent: 'dev', kind: 'note', text: 'first entry' });
+const wn1 = core.runWhatsNew({ agent: 'dev', session: 'sess-x' });
+ok(wn1.firstCheckin === true, 'whatsnew: first call for a session has no checkpoint');
+const wn2 = core.runWhatsNew({ agent: 'reviewer', session: 'sess-x' });
+ok(wn2.firstCheckin === false,
+  `whatsnew: the SAME session under a new agent label keeps its checkpoint (got firstCheckin=${wn2.firstCheckin})`);
+const wn3 = core.runWhatsNew({ agent: 'dev', session: 'sess-y' });
+ok(wn3.firstCheckin === true, 'whatsnew: a different session gets its own checkpoint');
+const wn4 = core.runWhatsNew({ agent: 'solo' });
+ok(wn4.firstCheckin === true, 'whatsnew: with no session the agent label is still the key (CLI path unchanged)');
+fs.rmSync(WN, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
