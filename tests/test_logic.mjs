@@ -36,6 +36,27 @@ ok(db.tasks.length === 1, `fold/reuse: exactly one task survives (got ${db.tasks
 ok(db.tasks[0] && db.tasks[0].text === 'B-task', `fold/reuse: B's task intact, not corrupted by A's set (text=${db.tasks[0] && db.tasks[0].text})`);
 fs.rmSync(path.join(T0, 'tasks.aaa.events.jsonl')); fs.rmSync(path.join(T0, 'tasks.bbb.events.jsonl'));
 
+// Bug: a node that once created a colliding id could no longer address the task that
+// id now names. Cascade: fir adds 168; maple's own 168 collides → remapped to 169;
+// pine's own 169 collides → remapped to 170. pine then updates the VISIBLE #169
+// (maple's task, the id hub_task_list reports) — and its own remap silently sent the
+// write to #170 instead. Real incident: ids 168 → 171 → 172 in the shared hub.
+fs.writeFileSync(path.join(T0, 'tasks.fir.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:00', node: 'fir', ev: 'add', id: 168, t: { id: 168, text: 'fir-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(T0, 'tasks.maple.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:01', node: 'maple', ev: 'add', id: 168, t: { id: 168, text: 'maple-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(T0, 'tasks.pine.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:02', node: 'pine', ev: 'add', id: 169, t: { id: 169, text: 'pine-task', status: 'open' } }) + '\n' +
+  JSON.stringify({ ts: '2026-02-01 10:03', node: 'pine', ev: 'set', id: 169, patch: { text: 'TRIAGE' } }) + '\n');
+const cas = core.foldTasks();
+const byId = (id) => cas.tasks.find(t => t.id === id);
+ok(cas.tasks.length === 3, `fold/cascade: three tasks after two collisions (got ${cas.tasks.length})`);
+ok(byId(169) && byId(169).text === 'TRIAGE',
+  `fold/cascade: pine's update lands on the visible #169 it addressed (text=${byId(169) && byId(169).text})`);
+ok(byId(170) && byId(170).text === 'pine-task',
+  `fold/cascade: pine's own remapped #170 is NOT the one written to (text=${byId(170) && byId(170).text})`);
+for (const f of ['tasks.fir.events.jsonl', 'tasks.maple.events.jsonl', 'tasks.pine.events.jsonl']) fs.rmSync(path.join(T0, f));
+
 // Bug: journal rotation must not overwrite an existing same-month archive (data loss).
 const big = 'x'.repeat(2 * 1024 * 1024 + 16) + '\n';
 fs.writeFileSync(core.JOURNAL, '{"m":"first"}\n' + big);
