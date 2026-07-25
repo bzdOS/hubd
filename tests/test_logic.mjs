@@ -710,6 +710,40 @@ ok(!fs.existsSync(path.join(GC, '.qstate', '__watchall__', 'tap-sub')),
 ok(fs.existsSync(path.join(GC, '.qstate', 'fresh-sub')), 'gc: leaves a recently-used cursor alone');
 ok(fs.existsSync(path.join(GC, '.qstate', 'shared.queue.md.offset')), 'gc: never touches a shared cursor file');
 fs.rmSync(GC, { recursive: true, force: true });
+// ── a write must say who did it ────────────────────────────────────────────────
+// The journal is append-only, so an unattributed write stays unattributable. The
+// field was optional on exactly the tools that produced 173 'unknown' entries out of
+// 1193, while the tools that already require it have 6 clean names out of 6.
+const AU = mktmp();
+core.setHubBase(AU);
+const throwsA = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+
+const noAuthor = throwsA(() => core.runTaskAdd({ project: 'p', text: 'x' }));
+ok(/by required/.test(noAuthor || ''), `author: an omitted author is refused, not defaulted (got ${noAuthor})`);
+ok(!/unknown/.test(noAuthor || ''), 'author: the error does not offer "unknown" as a way out');
+
+// A bare model or client family says nothing about WHO acted — many sessions share it.
+for (const bad of ['claude', 'Claude', 'opencode', 'gpt', 'cursor', 'unknown', 'cli', 'root']) {
+  const m = throwsA(() => core.runTaskAdd({ project: 'p', text: 'x', by: bad }));
+  ok(/names a model, a client or a placeholder/.test(m || ''), `author: "${bad}" is refused`);
+}
+// A function name is fine — one session is behind it.
+for (const good of ['claude-hubd', 'orchestrator', 'dev-bsdos', 'sonnet-sec']) {
+  const t = core.runTaskAdd({ project: 'p', text: 'x', by: good });
+  ok(t.ok && t.task.by === good, `author: "${good}" is accepted`);
+}
+// Every write path, not just task add.
+ok(/agent required/.test(throwsA(() => core.runSync({ path: AU })) || ''), 'author: sync requires it');
+ok(/by required/.test(throwsA(() => core.runCardSet({ project: 'p', digest: 'd' })) || ''), 'author: card-set requires it');
+ok(/by required/.test(throwsA(() => core.runReport({ project: 'p', text: 'note x' })) || ''), 'author: report requires it');
+ok(/agent required/.test(throwsA(() => core.runWhatsNew({})) || ''), 'author: whatsnew requires it');
+
+// Releasing a lock is selected BY agent, not attributed to one — it must stay optional
+// or the "release by id" form becomes uncallable.
+core.runClaim({ project: 'p', area: 'a', agent: 'dev-hubd' });
+ok(core.runRelease({ project: 'p', area: 'a', agent: 'dev-hubd' }).removed === 1,
+  'author: release is unaffected — its agent is a selector, not an author');
+fs.rmSync(AU, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

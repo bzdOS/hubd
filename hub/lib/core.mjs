@@ -73,6 +73,41 @@ export const parseTs = (s) => {
 // Unicode-aware: keeps letters/numbers of any script (no literal non-ASCII in source).
 export const slugify = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
 
+/* ── Who did this ──
+ * The journal is append-only, so a write with no author is unattributable forever.
+ * The field used to default to 'unknown' on exactly the tools where it was optional
+ * (sync, card-set, resource-set, task add/update) — and those produced 173 'unknown'
+ * entries out of 1193 in this hub. The tools that already REQUIRE it (report, claim,
+ * heartbeat) have clean names, all 6 of them. Discipline follows the requirement, so
+ * the fallbacks are gone and the field is required.
+ *
+ * What the field names is the session or function doing the work — NOT which model is
+ * running. Which model it is is a fact recorded in the client's own transcript and
+ * picked up from there; repeating it here says nothing about WHO acted, because many
+ * sessions share one model. Hence a bare model or client family name is refused the
+ * same way a placeholder is: 'claude' alone accounted for 167 of those 1193 entries.
+ * Names that denote a function ('orchestrator', 'devops') are fine — one session is
+ * behind them. */
+const AUTHOR_REFUSED = new Set([
+  'unknown', 'none', 'null', 'nil', 'n/a', 'na', 'agent', 'assistant', 'bot', 'model',
+  'user', 'root', 'cli', 'me', 'you', 'someone', 'anon', 'anonymous',
+  'claude', 'sonnet', 'opus', 'haiku', 'gpt', 'chatgpt', 'codex', 'gemini', 'glm',
+  'llama', 'mistral', 'qwen', 'deepseek', 'grok',
+  'opencode', 'cursor', 'copilot', 'windsurf', 'antigravity', 'aider',
+]);
+
+export function requireAuthor(value, field = 'agent') {
+  const v = String(value ?? '').trim();
+  if (!v) throw new Error(
+    `${field} required: the function you are performing, e.g. "dev-hubd" or "reviewer-bsdos". ` +
+    `Set HUBD_AGENT to give every call a default.`);
+  if (AUTHOR_REFUSED.has(v.toLowerCase())) throw new Error(
+    `${field} "${v}" names a model, a client or a placeholder, not a session — many sessions ` +
+    `share it, so nothing can tell them apart later. Say what you are working on: "${v.toLowerCase()}-<project>". ` +
+    `Which model you are is read from the transcript, not from here.`);
+  return v;
+}
+
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -572,6 +607,7 @@ function openTaskCount(slug) {
 }
 
 export function runSync(a) {
+  const author = requireAuthor(a.agent, 'agent');
   const dir = a.path;
   // Two different mistakes, two different messages — "path does not exist: undefined"
   // told a caller who forgot the argument nothing about what to fix.
@@ -598,7 +634,7 @@ export function runSync(a) {
 
   if (a.digest && oldDigest && a.digest.trim() !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
-    fs.appendFileSync(histFile, `\n---\n### until ${now()} (sync by ${a.agent || 'unknown'})\n${oldDigest}\n`);
+    fs.appendFileSync(histFile, `\n---\n### until ${now()} (sync by ${author})\n${oldDigest}\n`);
   }
 
   const frontmatter = cardFrontmatter(prev);
@@ -606,7 +642,7 @@ export function runSync(a) {
   const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
   const card = frontmatter +
     `# ${pname}\n\n` +
-    `- slug: ${slug}\n- path: ${dir}\n- synced: ${now()} by ${a.agent || 'unknown'}\n\n` +
+    `- slug: ${slug}\n- path: ${dir}\n- synced: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (ownerBody ? ownerBody + '\n' : '') +
     `## Facts (auto)\n\n` +
@@ -617,7 +653,7 @@ export function runSync(a) {
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
   atomicWrite(cardPath(pname), card);
   const diffText = hasNew ? ` (${diff.newCommits} new commits, +${diff.insertions || 0}/-${diff.deletions || 0})` : '';
-  journalAppend({ ts: now(), project: slug, agent: a.agent || 'unknown', kind: 'sync', text: 'synced' + (a.digest ? ' with digest' : '') + diffText });
+  journalAppend({ ts: now(), project: slug, agent: author, kind: 'sync', text: 'synced' + (a.digest ? ' with digest' : '') + diffText });
   return { ok: true, project: slug, card: cardPath(pname), gitSeen: !!git, newCommits: hasNew ? diff.newCommits : 0, metrics, hint: a.digest ? undefined : 'Card kept old/empty digest — pass digest="..." to write your summary.' };
 }
 
@@ -626,6 +662,7 @@ export function runSync(a) {
 // projects that are not a local checkout. Preserves hand-written frontmatter and a
 // "## Facts" section; archives a changed digest to history.
 export function runCardSet(a) {
+  const author = requireAuthor(a.by, 'by');
   const pname = a.project || a.name;
   if (!pname) throw new Error('project required');
   if (!a.digest || !String(a.digest).trim()) throw new Error('digest required');
@@ -635,17 +672,17 @@ export function runCardSet(a) {
   const oldDigest = prev ? (prev.split('## Digest')[1] || '').split('## Facts')[0].trim() : null;
   if (oldDigest && digest !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
-    fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${a.by || 'unknown'})\n${oldDigest}\n`);
+    fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
   const card = cardFrontmatter(prev) +
     `# ${pname}\n\n` +
-    `- slug: ${slug}\n- set: ${now()} by ${a.by || 'unknown'}\n\n` +
+    `- slug: ${slug}\n- set: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (ownerBody ? ownerBody + '\n' : '');
   atomicWrite(cardPath(pname), card);
-  journalAppend({ ts: now(), project: slug, agent: a.by || 'unknown', kind: 'note', text: 'card set: ' + digest.split('\n')[0].slice(0, 80) });
+  journalAppend({ ts: now(), project: slug, agent: author, kind: 'note', text: 'card set: ' + digest.split('\n')[0].slice(0, 80) });
   return { ok: true, project: slug, card: cardPath(pname) };
 }
 
@@ -685,6 +722,7 @@ function frontToText(pairs) {
 // typed edges (a.edges = {rel:[slug,...]}) land in frontmatter; edges UNION with existing
 // targets (append-friendly). Body = one-line ## Digest + any hand sections, preserved.
 export function runResourceSet(a) {
+  const author = requireAuthor(a.by, 'by');
   const name = a.slug || a.name || a.resource;
   if (!name) throw new Error('resource slug required');
   const slug = slugify(name);
@@ -702,17 +740,17 @@ export function runResourceSet(a) {
   const oldDigest = prev ? (prev.split('## Digest')[1] || '').split(/\n## /)[0].trim() : null;
   const digest = (a.digest != null && String(a.digest).trim()) || oldDigest || '<what this is, in one line>';
   if (prev && oldDigest && a.digest != null && String(a.digest).trim() && String(a.digest).trim() !== oldDigest) {
-    fs.appendFileSync(path.join(HISTORY, 'resource-' + slug + '.md'), `\n---\n### until ${now()} (resource set by ${a.by || 'unknown'})\n${oldDigest}\n`);
+    fs.appendFileSync(path.join(HISTORY, 'resource-' + slug + '.md'), `\n---\n### until ${now()} (resource set by ${author})\n${oldDigest}\n`);
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const card = frontToText(pairs) +
     `# ${name}\n\n` +
-    `- slug: ${slug}\n- set: ${now()} by ${a.by || 'unknown'}\n\n` +
+    `- slug: ${slug}\n- set: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (preserved ? preserved + '\n' : '');
   fs.mkdirSync(RESOURCES, { recursive: true });
   atomicWrite(resourcePath(name), card);
-  journalAppend({ ts: now(), project: slug, agent: a.by || 'unknown', kind: 'resource', text: 'resource set: ' + slug });
+  journalAppend({ ts: now(), project: slug, agent: author, kind: 'resource', text: 'resource set: ' + slug });
   return { ok: true, resource: slug, card: resourcePath(name) };
 }
 
@@ -817,7 +855,7 @@ function editSection(text, heading, payload, mode) {
 export function runReport(a) {
   const project = a.project || 'general';
   const slug = slugify(project);
-  const by = a.by || a.agent || 'unknown';
+  const by = requireAuthor(a.by ?? a.agent, 'by');
   const SEC = reportSections();
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [] };
   for (const raw of String(a.text || '').split('\n')) {
@@ -1042,13 +1080,14 @@ function nextLocalSeq() {
 // `cat` is the single field for this; `kind` is a legacy alias — don't add new fields
 // or invent new category values, keep the set small.
 export function runTaskAdd(a) {
+  const author = requireAuthor(a.by, 'by');
   return withLock(TASK_EVENTS, () => {
     const id = `${JOURNAL_NODE}-${nextLocalSeq()}`;
     const t = {
       id, project: slugify(a.project), text: a.text,
       importance: a.importance || 'normal', deadline: a.deadline || null,
       cat: a.cat || null, assignee: a.assignee || null, status: 'open',
-      created: now(), by: a.by || 'unknown',
+      created: now(), by: author,
       depends_on: Array.isArray(a.depends_on) ? a.depends_on : [],
       resources: Array.isArray(a.resources) ? a.resources.map(slugify) : [],
     };
@@ -1069,9 +1108,13 @@ export function runTaskList(a) {
 }
 
 export function runTaskUpdate(a) {
+  // `id` first: which task is the primary argument, and reporting the author as the
+  // problem when the caller has not even said what to update sends it looking in the
+  // wrong place.
+  if (a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
+  const author = requireAuthor(a.by, 'by');
   return withLock(TASK_EVENTS, () => {
     const db = loadTasks();
-    if (a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
     const t = db.tasks.find(x => String(x.id) === String(a.id));
     if (!t) throw new Error('no task #' + a.id);
     const patch = {};
@@ -1089,7 +1132,7 @@ export function runTaskUpdate(a) {
     const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
     rebuildTaskCache();
-    journalAppend({ ts: now(), project: t.project, agent: a.by || 'unknown', kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
+    journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
     return { ok: true, task: { ...t, ...patch } };
   });
 }
@@ -1159,16 +1202,16 @@ function writeCheckins(obj) { try { atomicWrite(checkinsFile(), JSON.stringify(o
 // minute would otherwise both floor to the same instant and re-deliver the
 // same entry, since journal timestamps are minute-granular too.
 export function runWhatsNew(a = {}) {
-  const agent = a.agent || 'unknown';
+  const author = requireAuthor(a.agent, 'agent');
   const fallbackHours = a.hours || 24;
   const checkins = readCheckins();
-  // Key the checkpoint on the SESSION, not on the agent label. The label names the
+  // Key the checkpoint on the SESSION, not on the author label. The label names the
   // function being performed ("dev", then "reviewer"), and several functions travel
   // one trajectory — so keying on it means that reporting under a new label loses the
   // checkpoint, falls back to the 24h window and re-delivers everything already seen.
   // The session id is supplied by the transport, which knows its own process; when it
-  // is absent (CLI, unknown client) the old agent key is used and nothing changes.
-  const key = a.session || agent;
+  // is absent (CLI, unknown client) the author is the key and nothing changes.
+  const key = a.session || author;
   const lastSeen = checkins[key] || null;
   // No artificial minimum window: two calls seconds apart should see near-zero
   // new entries, not get padded back out to a 36s+ floor that re-delivers what
@@ -1179,7 +1222,7 @@ export function runWhatsNew(a = {}) {
   checkins[key] = new Date().toISOString();
   writeCheckins(checkins);
   return {
-    agent, since: lastSeen, firstCheckin: !lastSeen,
+    agent: author, since: lastSeen, firstCheckin: !lastSeen,
     windowHours: Math.round(hours * 10) / 10,
     newEntries: entries.length,
     entries: entries.slice(0, 50),

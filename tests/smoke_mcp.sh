@@ -17,9 +17,9 @@ REQS=$(cat <<EOF
 {"jsonrpc":"2.0","method":"notifications/somethingUnknown"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_task_add","arguments":{"project":"smoke","text":"$BIG"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_task_add","arguments":{"project":"smoke","text":"$BIG","by":"smoke-suite"}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_brief","arguments":{}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"hub_card_set","arguments":{"project":"smoke","digest":"smoke digest line"}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"hub_card_set","arguments":{"project":"smoke","digest":"smoke digest line","by":"smoke-suite"}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"hub_kanban","arguments":{}}}
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"hub_context","arguments":{"cwd":"$HUBD_DIR"}}}
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"hub_heartbeat","arguments":{"agent":"smoke-agent","role":"smoke"}}}

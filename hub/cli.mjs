@@ -531,7 +531,7 @@ if (cmd === 'report') {
   const pf = getFlag('-p');
   const proj = (typeof pf === 'string') ? pf : 'general';
   const kind = getFlag('-k') || 'note';
-  const agent = getFlag('--agent') || process.env.USER || 'cli';
+  const agent = authorOrDie('--agent');
   let text = (args[1] && !args[1].startsWith('-')) ? args[1] : getFlag('-m');
   if ((!text || text === true) && !process.stdin.isTTY) {           // batch piped via stdin (heredoc)
     try { text = fs.readFileSync(0, 'utf8'); } catch {}
@@ -561,7 +561,7 @@ if (cmd === 'decide') {
   if (!what) die('Usage: hub decide "<decision>" --why "<why>" -p <proj>');
   const why = getFlag('--why');
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
-  const r = runReport({ project: proj, by: getFlag('--by') || process.env.USER || 'cli', text: `DECIDE: ${what}${typeof why === 'string' ? ' | ' + why : ''}` });
+  const r = runReport({ project: proj, by: authorOrDie('--by'), text: `DECIDE: ${what}${typeof why === 'string' ? ' | ' + why : ''}` });
   console.log(`Decided on ${r.project}: +${r.decisions} → ## Decisions`);
   process.exit(0);
 }
@@ -570,7 +570,7 @@ if (cmd === 'next') {
   const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!what) die('Usage: hub next "<the one next action>" -p <proj>');
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
-  const r = runReport({ project: proj, by: getFlag('--by') || process.env.USER || 'cli', text: `NEXT: ${what}` });
+  const r = runReport({ project: proj, by: authorOrDie('--by'), text: `NEXT: ${what}` });
   console.log(`Next step set on ${r.project}`);
   process.exit(0);
 }
@@ -593,12 +593,12 @@ if (cmd === 'task') {
     const resources = getFlags('--resource');   // structured link task → resource(s)
     const cat = getFlag('--cat');
     const assignee = getFlag('--assignee');
-    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, assignee: assignee || null, by: 'cli', depends_on, resources });
+    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, assignee: assignee || null, by: authorOrDie('--by'), depends_on, resources });
     console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : ''));
   } else if (sub === 'done') {
     const id = args[2];   // bare number or node-scoped string (task #194) — runTaskUpdate compares by String()
     if (!id || id.startsWith('-')) die('Id required: hub task done <id>');
-    runTaskUpdate({ id, status: 'done', by: 'cli' });
+    runTaskUpdate({ id, status: 'done', by: authorOrDie('--by') });
     console.log(`Task #${id} closed`);
   } else if (sub === 'list') {
     const proj = getFlag('-p');
@@ -623,7 +623,7 @@ if (cmd === 'claim') {
   const proj = args[1], area = args[2];
   if (!proj || !area) die('Usage: hub claim <proj> <area> [-t min]');
   const ttl = parseInt(getFlag('-t') || '240');
-  const agent = getFlag('--agent') || process.env.USER || 'cli';
+  const agent = authorOrDie('--agent');
   const res = runClaim({ project: proj, area, agent, ttlMin: ttl });
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Lock: ${res.claim.id}`);
@@ -671,7 +671,7 @@ if (cmd === 'card') {
   if (!slug) die('Usage: hub card <slug> -m "<digest>"');
   const digest = getFlag('-m') || getFlag('--digest');
   if (!digest || typeof digest !== 'string') die('Digest required: hub card <slug> -m "<digest>"');
-  const by = getFlag('--by') || process.env.USER || 'cli';
+  const by = authorOrDie('--by');
   const res = runCardSet({ project: slug, digest, by });
   console.log(`Card set: ${res.project} → ${res.card}`);
   process.exit(0);
@@ -692,7 +692,7 @@ if (cmd === 'resource' || cmd === 'res') {
       slug, type: getFlag('--type'), address: getFlag('--addr') || getFlag('--address'),
       os: getFlag('--os'), provider: getFlag('--provider'), status: getFlag('--status'),
       digest: (typeof (getFlag('-m') || getFlag('--digest')) === 'string') ? (getFlag('-m') || getFlag('--digest')) : null,
-      edges, by: getFlag('--by') || process.env.USER || 'cli',
+      edges, by: authorOrDie('--by'),
     });
     console.log(`Resource set: ${res.resource} → ${res.card}`);
   } else if (sub === 'list') {
@@ -754,6 +754,16 @@ if (cmd === 'harvest') {
   process.exit(0);
 }
 
+// Who is running this command. Was `--agent || $USER || 'cli'`, which recorded 41
+// 'cli' and 19 'root' entries — the shell user, not the function doing the work, and
+// agents shell out to this CLI too, so "it came from a terminal" never meant "a human
+// did it". Now the caller says so explicitly, or HUBD_AGENT does it for them.
+function authorOrDie(flag) {
+  const v = (getFlag(flag) || process.env.HUBD_AGENT || '').trim();
+  if (!v) die(`${flag} required (or set HUBD_AGENT): the function doing this, e.g. "dev-hubd"`);
+  return v;
+}
+
 if (cmd === 'gc') {
   let removed = 0;
   const nowMs = Date.now();
@@ -809,7 +819,7 @@ if (cmd === 'sync') {
   }
   const flagDigest = getFlag('-m') || getFlag('--digest');
   if (flagDigest && typeof flagDigest === 'string') {   // non-interactive (scriptable) sync
-    const res = runSync({ path: dir, digest: flagDigest, agent: 'cli' });
+    const res = runSync({ path: dir, digest: flagDigest, agent: authorOrDie('--agent') });
     console.log(`Synced: ${res.project} → ${res.card}`);
     process.exit(0);
   }
@@ -818,7 +828,7 @@ if (cmd === 'sync') {
   rl.question(`Digest ${hint}: `, (answer) => {
     rl.close();
     const digest = answer.trim() || oldDigest || undefined;
-    const res = runSync({ path: dir, digest, agent: 'cli' });
+    const res = runSync({ path: dir, digest, agent: authorOrDie('--agent') });
     console.log(`Synced: ${res.project} → ${res.card}`);
     process.exit(0);
   });
