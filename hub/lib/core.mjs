@@ -265,7 +265,10 @@ export function readCard(name) {
  * journal): each machine appends only to its own file, so several machines
  * syncing one hub never collide on tasks. tasks.json is a GENERATED CACHE,
  * rebuilt by folding all event files; it is gitignored (runtime, never synced).
- * Events: {ts,node,ev:'add',id,t} · {ts,node,ev:'set',id,patch} · {ts,node,ev:'del',id}.
+ * Events: {ts,node,ev:'add',id,t} · {ts,node,ev:'set',id,patch[,k:'origin']} · {ts,node,ev:'del',id}.
+ * `k:'origin'` on a set means (node,id) is the task's ORIGIN — where it was ADDED — so the
+ * fold resolves it via the remap. Without it (legacy, pre-0.4.8) id is the FINAL id as folded
+ * at write time under the WRITER's node, and a live task with that id wins instead.
  * The fold is a deterministic reducer (order by ts,node,line) and resolves the
  * one residual hazard — two offline machines minting the same numeric id — by
  * keeping the first and remapping the later add to a fresh id.
@@ -290,7 +293,11 @@ function readTaskEvents() {
     try {
       for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
         if (!l.trim()) continue;
-        try { const e = JSON.parse(l); e._node = e.node || node; e._idx = idx++; evs.push(e); } catch {}
+        // _file = the node whose log this line lives in. A legacy writer always wrote its
+        // OWN node into its OWN file, so _node !== _file can only mean the id is keyed to
+        // another node — i.e. origin-keyed. That covers events written after 0.4.8 but
+        // before the k:'origin' marker existed, without rewriting history.
+        try { const e = JSON.parse(l); e._node = e.node || node; e._file = node; e._idx = idx++; evs.push(e); } catch {}
       }
     } catch {}
   }
@@ -326,16 +333,31 @@ export function foldTasks() {
       remap.set(key, fid);
       maxNum = Math.max(maxNum, numeric(fid));
     } else if (e.ev === 'set' || e.ev === 'del') {
-      // `set`/`del` carry a FINAL id: runTaskUpdate looks the task up in the folded
-      // view and writes `id: t.id`. So when that id names a live task, THAT is the
-      // target — consulting this node's remap first would silently redirect the write.
-      // (Real case: macbook-pro's add of 168 remapped to 171, and planck's own add of
-      // 171 remapped to 172; every later planck update addressed to the visible #171
-      // then landed on #172, and #171 could not be updated from planck at all.)
-      // The remap fallback stays for ids that name nothing live — a node's own
-      // since-remapped or since-deleted add — otherwise a `set` after a `del` would
-      // land on whatever task reused that id.
-      const fid = tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id);
+      // One log, two eras of id semantics — resolve each by what it actually carries:
+      //
+      // k:'origin' (0.4.8+) — id is the task's ORIGIN (node,id). That number routinely
+      //   names a DIFFERENT live task, so it must be resolved through the remap; that is
+      //   exactly how an update from a node that once collided still reaches the canonical
+      //   task. Preferring a live id here would send the write to the collision partner.
+      //
+      // unmarked (legacy)  — id is the FINAL id as folded when the event was written, under
+      //   the writer's own node. Here the remap SHADOWS that number for any node that once
+      //   minted a colliding id, silently redirecting every update it addressed to the
+      //   visible task. (Real case: macbook-pro's add of 168 remapped to 171, planck's own
+      //   add of 171 to 172; later planck updates aimed at the visible #171 landed on #172,
+      //   and #171 could not be updated from planck at all.) So a live task with that id
+      //   wins, and the remap is consulted only for ids naming nothing live — a node's own
+      //   since-remapped or since-deleted add — otherwise a `set` after a `del` would land
+      //   on whatever task reused the id.
+      // _node !== _file identifies the same intent without a marker: only an origin-keyed
+      // write ever names a node other than the log's own. That reads the ~dozen events
+      // written after 0.4.8 but before the marker existed. Residual, and unfixable without
+      // rewriting an append-only log: an unmarked origin-keyed set whose origin happens to
+      // be the writer's own node is indistinguishable from a legacy one.
+      const originKeyed = e.k === 'origin' || e._node !== e._file;
+      const fid = originKeyed
+        ? (remap.get(key) ?? e.id)
+        : (tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id));
       if (e.ev === 'set') { const t = tasks.get(fid); if (t) Object.assign(t, e.patch || {}); }
       else tasks.delete(fid);
     }
@@ -1089,11 +1111,17 @@ export function runTaskUpdate(a) {
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
     if (a.status === 'done') patch.done = now();
     // Key the set to the task's ORIGIN (node,id) — NOT this writer's node + finalId — so the
-    // unchanged reducer resolves it to the canonical task even when THIS node historically
-    // collided on the finalId (else `set` mis-hits the writer's own remapped task). _origin
-    // is supplied by the fold; fall back to writer/finalId for pre-migration caches.
-    const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
-    fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
+    // reducer resolves it to the canonical task even when THIS node historically collided on
+    // the finalId (else `set` mis-hits the writer's own remapped task).
+    // `k:'origin'` tells the reducer WHICH id semantics this event carries: an origin id
+    // routinely names a different live task, so it MUST go through the remap, while a legacy
+    // event carries a finalId and must NOT. Only stamp it when _origin is genuinely present —
+    // the fallback writes writer/finalId, which IS legacy semantics, so it stays unmarked.
+    const origin = t._origin || null;
+    const evt = origin
+      ? { ts: now(), node: origin.node, ev: 'set', id: origin.id, k: 'origin', patch }
+      : { ts: now(), node: JOURNAL_NODE, ev: 'set', id: t.id, patch };
+    fs.appendFileSync(TASK_EVENTS, JSON.stringify(evt) + '\n');
     rebuildTaskCache();
     journalAppend({ ts: now(), project: t.project, agent: a.by || 'unknown', kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
     return { ok: true, task: { ...t, ...patch } };

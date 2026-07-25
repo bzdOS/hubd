@@ -57,6 +57,52 @@ ok(byId(170) && byId(170).text === 'planck-task',
   `fold/cascade: planck's own remapped #170 is NOT the one written to (text=${byId(170) && byId(170).text})`);
 for (const f of ['tasks.fedora.events.jsonl', 'tasks.macbook.events.jsonl', 'tasks.planck.events.jsonl']) fs.rmSync(path.join(T0, f));
 
+// The mirror hazard of the same collision, and why the fold cannot treat every set alike:
+// a set written by 0.4.8+ carries the task's ORIGIN (node,id), NOT its finalId — and that
+// origin number routinely names a DIFFERENT live task. Resolving it the legacy way (live id
+// wins) would send the write to the collision partner: here fedora's #168, in another
+// project, while the task the caller actually addressed stays untouched. So the write path
+// marks such events k:'origin' and the fold routes only those through the remap.
+const OB = mktmp();
+core.setHubBase(OB);
+fs.writeFileSync(path.join(OB, 'tasks.fedora.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:00', node: 'fedora', ev: 'add', id: 168, t: { id: 168, project: 'alpha', text: 'fedora-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(OB, 'tasks.macbook.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:01', node: 'macbook', ev: 'add', id: 168, t: { id: 168, project: 'beta', text: 'macbook-task', status: 'open' } }) + '\n');
+const pre169 = core.foldTasks().tasks.find(t => t.id === 169);
+ok(pre169 && pre169._origin.node === 'macbook' && pre169._origin.id === 168,
+  'fold/origin: the remapped task carries the (node,id) it was added under');
+// Close the VISIBLE #169 from a third node, which minted neither id.
+core.runTaskUpdate({ id: 169, status: 'done', by: 't' });
+const wrote = JSON.parse(fs.readFileSync(core.TASK_EVENTS, 'utf8').trim().split('\n').pop());
+ok(wrote.k === 'origin' && wrote.node === 'macbook' && wrote.id === 168,
+  `fold/origin: the set is keyed to the origin and marked as such (got ${JSON.stringify({ node: wrote.node, id: wrote.id, k: wrote.k })})`);
+const obById = (id) => core.foldTasks().tasks.find(t => t.id === id);
+ok(obById(169) && obById(169).status === 'done',
+  `fold/origin: the close lands on the #169 the caller addressed (status=${obById(169) && obById(169).status})`);
+ok(obById(168) && obById(168).status === 'open',
+  `fold/origin: fedora's #168 — same number, another project — is untouched (status=${obById(168) && obById(168).status})`);
+fs.rmSync(OB, { recursive: true, force: true });
+
+// Transitional window: 0.4.8 already wrote origin-keyed sets, before the marker existed.
+// Those are still readable — a log only ever contains its own node's writes, so naming
+// another node is itself the signal. Same fixture, marker stripped.
+const OU = mktmp();
+core.setHubBase(OU);
+fs.writeFileSync(path.join(OU, 'tasks.fedora.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:00', node: 'fedora', ev: 'add', id: 168, t: { id: 168, project: 'alpha', text: 'fedora-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(OU, 'tasks.macbook.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:01', node: 'macbook', ev: 'add', id: 168, t: { id: 168, project: 'beta', text: 'macbook-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(OU, 'tasks.cowork.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:02', node: 'macbook', ev: 'set', id: 168, patch: { status: 'done' } }) + '\n');
+const ouById = (id) => core.foldTasks().tasks.find(t => t.id === id);
+ok(ouById(169) && ouById(169).status === 'done',
+  `fold/origin: an unmarked origin-keyed set is still routed by origin (status=${ouById(169) && ouById(169).status})`);
+ok(ouById(168) && ouById(168).status === 'open',
+  `fold/origin: and does not touch the collision partner (status=${ouById(168) && ouById(168).status})`);
+fs.rmSync(OU, { recursive: true, force: true });
+core.setHubBase(T0);
+
 // Bug: journal rotation must not overwrite an existing same-month archive (data loss).
 const big = 'x'.repeat(2 * 1024 * 1024 + 16) + '\n';
 fs.writeFileSync(core.JOURNAL, '{"m":"first"}\n' + big);
