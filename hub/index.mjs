@@ -25,16 +25,16 @@ const TOOLS = [
       path: { type: 'string', description: 'Absolute path to the project folder' },
       name: { type: 'string', description: 'Project name (default: folder name)' },
       digest: { type: 'string', description: 'Agent-written summary: status, recent work, next steps, blockers' },
-      agent: { type: 'string', description: 'Who is syncing (e.g. claude-cowork, cursor, executor)' },
-    }, required: ['path'] } },
+      agent: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
+    }, required: ['path', 'agent'] } },
 
   { name: 'hub_card_set',
     description: 'Create or update a project card from just a name and a digest — no folder needed (unlike hub_sync). Use it to capture a project that is not a local git checkout, e.g. when harvesting a dialog. Preserves any hand-written frontmatter and Facts.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'project name or slug' },
       digest: { type: 'string', description: 'the card digest: 3-6 lines of current state' },
-      by: { type: 'string', description: 'who is writing' },
-    }, required: ['project', 'digest'] } },
+      by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
+    }, required: ['project', 'digest', 'by'] } },
 
   { name: 'hub_report',
     description: 'Append a session report to the shared journal: what was done / broken / blocked.',
@@ -67,10 +67,10 @@ const TOOLS = [
       deadline: { type: 'string', description: 'YYYY-MM-DD, optional' },
       cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'], description: 'task category, optional' },
       assignee: { type: 'string', description: 'agent name or owner, optional' },
-      by: { type: 'string', description: 'who adds' },
+      by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on (bare number or a node-scoped id like "planck-3")' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches (host/vm/service/...) — a structured link task → resource, not prose' },
-    }, required: ['project', 'text'] } },
+    }, required: ['project', 'text', 'by'] } },
 
   { name: 'hub_task_list',
     description: 'List backlog tasks. Filter by project and/or status.',
@@ -87,7 +87,7 @@ const TOOLS = [
       assignee: { type: 'string' }, by: { type: 'string' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
-    }, required: ['id'] } },
+    }, required: ['id', 'by'] } },
 
   { name: 'hub_brief',
     description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims, per-role queue depth with last-seen agent, and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
@@ -144,7 +144,7 @@ const TOOLS = [
       digest: { type: 'string', description: 'one-line description (keep prose minimal)' },
       edges: { type: 'object', description: 'typed relationships, merged with existing: {"runs_on":["hubd"],"depends_on":["postgres"]}. Values are target slugs.', additionalProperties: { type: 'array', items: { type: 'string' } } },
       by: { type: 'string', description: 'who is writing' },
-    }, required: ['slug'] } },
+    }, required: ['slug', 'by'] } },
 
   { name: 'hub_resource_list',
     description: 'List resource cards (hosts, vms, services, endpoints, providers). Optionally filter by type.',
@@ -252,6 +252,16 @@ function toolsFor(mode) {
 // state is file-backed per agent name), only the auto-nudge is skipped there.
 let onboarded = false, whatsnewChecked = false;
 
+// Fill agent/by from HUBD_AGENT when the caller left them out. Both keys are filled
+// because tools disagree on which one they read, and an unread extra key is ignored.
+function withAuthorFloor(args) {
+  const floor = (process.env.HUBD_AGENT || '').trim();
+  if (!floor) return args;
+  const out = { ...args };
+  for (const k of ['agent', 'by']) if (out[k] == null || String(out[k]).trim() === '') out[k] = floor;
+  return out;
+}
+
 function nudges(name) {
   if (name === 'hub_onboarding' || name === 'hub_whatsnew') return [];
   const n = [];
@@ -291,7 +301,11 @@ async function handleMessage(msg, mode = 'stdio') {
     const fn = DISPATCH[name];
     if (!fn) return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: unknown tool: ' + name }], isError: true } };
     try {
-      const r = await fn(params?.arguments || {});
+      // HUBD_AGENT is the floor for attribution: it is set by whoever configured this
+      // server, so "the caller forgot to say who it is" degrades to a real name from
+      // the config instead of to a placeholder. An explicit argument always wins, so a
+      // session that knows its own function can still be more specific than the floor.
+      const r = await fn(withAuthorFloor(params?.arguments || {}));
       if (name === 'hub_onboarding') onboarded = true;
       if (name === 'hub_whatsnew') whatsnewChecked = true;
       const extra = mode === 'stdio' ? nudges(name) : [];
