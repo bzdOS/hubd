@@ -78,9 +78,10 @@ const TOOLS = [
     } } },
 
   { name: 'hub_task_update',
-    description: 'Update a task: close it (status=done), reassign, edit text/deadline/cat.',
+    description: 'Update a task: close it (status=done), reassign, reprioritise, edit text/deadline/cat.',
     inputSchema: { type: 'object', properties: {
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "planck-3"' }, status: { type: 'string', enum: ['open', 'done'] },
+      importance: { type: 'string', enum: ['high', 'med', 'normal'] },
       text: { type: 'string' }, deadline: { type: 'string' }, cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'] },
       assignee: { type: 'string' }, by: { type: 'string' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
@@ -194,13 +195,13 @@ const TOOLS = [
     description: 'Block until new content lands in <role>\'s queue (this node\'s file plus any mesh-synced peer files for that role), then return it — a real long-poll, not a snapshot you have to re-poll. Returns {changed:false} if nothing arrives within timeout. Local/stdio only (not available on the shared HTTP server). Use this instead of a sleep-and-recheck loop when waiting on an agent to report back via hub_queue_send.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string' },
-      timeout: { type: 'integer', description: 'seconds to block, default 170, max 540 — pick something under your own client\'s tool-call timeout' },
+      timeout: { type: 'integer', description: 'seconds to block, default 45, max 540. The default is deliberately short: MCP clients abort a tool call on their own timeout (commonly ~60s) and hubd cannot see that limit. Raise it only if you know your client tolerates a longer call.' },
     }, required: ['role'] } },
 
   { name: 'hub_queue_wait_all',
     description: 'Subscribe to EVERY role\'s queue at once and block until new content lands in ANY of them — for an orchestrator reacting to whichever agent reports first, instead of calling hub_queue_wait per role or ssh-ing into each host to poll. Returns {changed:true, events:[{role,node,text}, ...]} tagging which role/node each event came from, or {changed:false} on timeout. Uses its own offset bookkeeping — does NOT consume/steal messages from a role\'s own hub_queue_wait consumer, it only taps. Local/stdio only.',
     inputSchema: { type: 'object', properties: {
-      timeout: { type: 'integer', description: 'seconds to block, default 170, max 540 — pick something under your own client\'s tool-call timeout' },
+      timeout: { type: 'integer', description: 'seconds to block, default 45, max 540. The default is deliberately short: MCP clients abort a tool call on their own timeout (commonly ~60s) and hubd cannot see that limit. Raise it only if you know your client tolerates a longer call.' },
     } } },
 ];
 
@@ -223,8 +224,8 @@ const DISPATCH = {
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from || 'mcp', root: HUB }) }),
-  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 170, 540), root: HUB }),
-  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 170, 540), root: HUB }),
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: HUB }),
+  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: HUB }),
 };
 
 // Tools that touch the server's own filesystem / run subprocesses, or block for a
