@@ -69,8 +69,12 @@ with structured frontmatter (type/address/os/status) and typed `[[wikilink]]` ed
 
 `hub queue send <role> "<text>" --from <you>` delivers work to a role; `hub queue wait
 <role>` blocks until something arrives (exit 0 with the lines, or exit 2 on timeout).
-One live waiter per role at a time. `hub queue wait '*'` taps EVERY role at once (own
-offset — does not consume any role's messages), for a supervisor watching the fleet.
+One live waiter per role at a time: a message goes to exactly one of them, so two
+sessions waiting on one role split the work rather than both doing it. A role named in
+`<team>/subscriber-roles.json` is the other kind — a broadcast, where every waiting
+session has its own cursor and sees every message. `hub queue wait '*'` taps EVERY role
+at once (own offset — does not consume any role's messages), for a supervisor watching
+the fleet; several supervisors may tap at the same time without competing.
 
 ### Buttons — an owner-decision queue is not an agent queue
 A task that needs OWNER to act outward (send, post, pay, call) splits in two: prep (an

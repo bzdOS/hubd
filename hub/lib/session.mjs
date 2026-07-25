@@ -23,9 +23,15 @@
  *   1. HUBD_SESSION — explicit, for any client or wrapper that knows better than we
  *      can guess. Also the escape hatch for a client that wants its own id (a
  *      transcript id, say) so an eval satellite can join on it later.
- *   2. the parent process id — for a stdio MCP server the parent IS the client
- *      process, so this is stable for as long as that client lives and survives the
- *      server being respawned under it.
+ *   2. the parent process id, PLUS that parent's start time — for a stdio MCP server
+ *      the parent IS the client process, so this is stable for as long as that client
+ *      lives and survives the server being respawned under it. The start time is what
+ *      makes it safe: pids are recycled, and a new client landing on a dead session's
+ *      pid would otherwise inherit its cursor and silently resume at its offset,
+ *      skipping every message in between — the exact failure this file exists to fix.
+ *      A changed start time means a different process, so it gets a fresh cursor and
+ *      re-reads rather than skips. If the start time cannot be read (unknown platform)
+ *      the bare pid is used, which is no worse than not having this at all.
  *   3. null — no identity. The caller then keeps using the shared per-node cursor,
  *      i.e. exactly today's behaviour. Nothing regresses.
  *
@@ -39,7 +45,29 @@
  * would never advance. cli.mjs therefore passes no subscriber at all.
  */
 
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+
 const clean = (s) => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+
+/**
+ * A token that changes when the process at `pid` is a DIFFERENT process than before,
+ * even if the pid is the same. Linux: field 22 of /proc/<pid>/stat, the start time in
+ * clock ticks (read directly — no subprocess). Elsewhere: `ps -o lstart=`, spawned at
+ * most once per process because sessionId() memoises. Empty string when unavailable.
+ */
+function startToken(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // comm is parenthesised and may itself contain spaces — split after the last ')'.
+    const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return clean(rest[19] || '');            // field 22 overall = index 19 after pid, comm, state
+  } catch { /* not Linux, or no procfs */ }
+  try {
+    return clean(execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim());
+  } catch { return ''; }
+}
 
 let cached;
 
@@ -49,7 +77,9 @@ export function sessionId() {
   const explicit = clean(process.env.HUBD_SESSION || '');
   if (explicit) return (cached = 's-' + explicit);
   const pp = process.ppid;
-  cached = Number.isInteger(pp) && pp > 1 ? 'p-' + pp : null;
+  if (!Number.isInteger(pp) || pp <= 1) return (cached = null);
+  const tok = startToken(pp);
+  cached = tok ? `p-${pp}-${tok}` : `p-${pp}`;
   return cached;
 }
 

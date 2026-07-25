@@ -92,7 +92,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   scaffold and the report router — so they never drift.
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
-  prodding them. A queue has one live consumer — run a single waiting session per role.
+  prodding them. A queue has one live consumer by default — run a single waiting
+  session per role. Roles listed in `<team>/subscriber-roles.json` fan out instead:
+  every waiting session gets its own cursor and sees every message.
 - **Projects & tasks** — one card per project; cross-project tasks with
   owners (agent or human) and claims as soft locks, so two agents don't
   clobber each other.

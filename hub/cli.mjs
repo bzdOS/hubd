@@ -767,25 +767,31 @@ if (cmd === 'gc') {
       }
     }
   } catch (e) { die('cannot read hub dir: ' + e.message); }
-  // Per-subscriber cursor dirs (.qstate/<subscriber>/) accumulate one per session and
-  // nothing else ever removes them. Only sweep dirs untouched for a week: an idle but
-  // live session must keep its cursor, or it silently resumes at the tail and skips
-  // whatever arrived meanwhile. Shared cursors sit as plain files in .qstate and are
-  // never touched here.
-  try {
-    const qstate = path.join(resolveQueueRoot(), '.qstate');
-    for (const d of fs.readdirSync(qstate, { withFileTypes: true })) {
-      if (!d.isDirectory() || d.name === '__watchall__') continue;
-      const full = path.join(qstate, d.name);
+  // Per-subscriber cursor dirs accumulate one per session and nothing else ever removes
+  // them. Only sweep dirs untouched for a week: an idle but live session must keep its
+  // cursor, or it silently resumes at the tail and skips whatever arrived meanwhile.
+  // Shared cursors sit as plain files in .qstate and are never touched here.
+  // Two levels, because subscribers live in two places: .qstate/<subscriber>/ for a
+  // role's own readers, and .qstate/__watchall__/<subscriber>/ for fleet taps — the
+  // latter is where an orchestrator's cursor goes, so skipping __watchall__ outright
+  // would exempt the busiest kind from the sweep entirely.
+  const sweepCursors = (dir, label) => {
+    let n = 0;
+    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const full = path.join(dir, d.name);
+      if (d.name === '__watchall__' && label === '') { n += sweepCursors(full, '__watchall__/'); continue; }
       let newest = 0;
       for (const f of fs.readdirSync(full)) {
         try { newest = Math.max(newest, fs.statSync(path.join(full, f)).mtimeMs); } catch {}
       }
       if (newest && nowMs - newest > 7 * 86400000) {
-        try { fs.rmSync(full, { recursive: true, force: true }); console.log('  removed stale cursor ' + d.name); removed++; } catch {}
+        try { fs.rmSync(full, { recursive: true, force: true }); console.log('  removed stale cursor ' + label + d.name); n++; } catch {}
       }
     }
-  } catch {}
+    return n;
+  };
+  try { removed += sweepCursors(path.join(resolveQueueRoot(), '.qstate'), ''); } catch {}
   console.log(removed ? `gc: removed ${removed} item(s)` : 'gc: nothing to clean');
   process.exit(0);
 }
