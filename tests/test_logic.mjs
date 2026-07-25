@@ -614,6 +614,10 @@ const { queueSend: qSend, queueWait: qWait } = await import(path.join(REPO, 'hub
 const { sessionId, resetSessionId } = await import(path.join(REPO, 'hub/lib/session.mjs'));
 const QR = mktmp();
 fs.mkdirSync(path.join(QR, 'queues'), { recursive: true });
+// Fan-out is a property of the ROLE, declared once — not something the transport turns
+// on because the caller happens to be a long-lived server. Undeclared roles stay
+// competing-worker queues, which is what task dispatch relies on.
+fs.writeFileSync(path.join(QR, 'subscriber-roles.json'), JSON.stringify(['fanout']));
 qSend('fanout', 'one message for everybody', { from: 'test', root: QR });
 
 const subA = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-a' });
@@ -625,6 +629,18 @@ const subAagain = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'ses
 ok(!subAagain.changed, 'cursor: a subscriber does not re-read what it already consumed');
 ok(fs.existsSync(path.join(QR, '.qstate', 'sess-a')) && fs.existsSync(path.join(QR, '.qstate', 'sess-b')),
   'cursor: each subscriber gets its own .qstate namespace');
+
+// An UNDECLARED role keeps at-most-once delivery even for two identified subscribers:
+// otherwise every work queue silently became a broadcast the moment the caller was a
+// long-lived MCP server, and two sessions would both do the task and both claim it.
+qSend('worker', 'exactly one of you takes this', { from: 'test', root: QR });
+const wk1 = await qWait('worker', { timeout: 1, root: QR, subscriber: 'sess-a' });
+const wk2 = await qWait('worker', { timeout: 1, root: QR, subscriber: 'sess-b' });
+ok(wk1.changed && !wk2.changed,
+  `cursor: an undeclared role stays competing-worker even with subscribers (${wk1.changed}/${wk2.changed})`);
+const strayWorker = fs.readdirSync(path.join(QR, '.qstate', 'sess-a')).filter(f => f.startsWith('worker.'));
+ok(strayWorker.length === 0,
+  `cursor: an undeclared role writes no per-subscriber offset (found ${strayWorker.join(',') || 'none'})`);
 
 // No subscriber → the shared per-node cursor, i.e. today's behaviour untouched.
 qSend('shared', 'for whoever gets there first', { from: 'test', root: QR });
@@ -644,7 +660,15 @@ resetSessionId();
 ok(sessionId() === 's-my-session-42', `sessionId: HUBD_SESSION wins and is slugified (got ${sessionId()})`);
 delete process.env.HUBD_SESSION;
 resetSessionId();
-ok(sessionId() === 'p-' + process.ppid, `sessionId: falls back to the parent process (got ${sessionId()})`);
+const derived = sessionId();
+ok(new RegExp(`^p-${process.ppid}(-.+)?$`).test(derived),
+  `sessionId: falls back to the parent process (got ${derived})`);
+// pids are recycled, so the pid alone is not an identity: a new client landing on a
+// dead session's pid would inherit its cursor and resume at its offset, skipping every
+// message in between. The parent's start time distinguishes them. Absent on a platform
+// that exposes neither procfs nor ps — then the bare pid is the documented fallback.
+ok(derived !== 'p-' + process.ppid,
+  `sessionId: the parent's start time is part of the id, so a recycled pid gets a fresh cursor (got ${derived})`);
 if (prevSess === undefined) delete process.env.HUBD_SESSION; else process.env.HUBD_SESSION = prevSess;
 resetSessionId();
 
@@ -664,6 +688,28 @@ ok(wn3.firstCheckin === true, 'whatsnew: a different session gets its own checkp
 const wn4 = core.runWhatsNew({ agent: 'solo' });
 ok(wn4.firstCheckin === true, 'whatsnew: with no session the agent label is still the key (CLI path unchanged)');
 fs.rmSync(WN, { recursive: true, force: true });
+
+// gc must reach BOTH places a subscriber cursor lives. A fleet tap's cursor sits under
+// .qstate/__watchall__/<subscriber>/, so skipping that dir exempted the busiest kind
+// from the sweep entirely — while a live-but-idle cursor must survive, or the session
+// silently resumes at the tail.
+const GC = mktmp();
+const monthOld = new Date(Date.now() - 30 * 86400000);
+for (const p of [['role-sub'], ['__watchall__', 'tap-sub'], ['fresh-sub']]) {
+  const d = path.join(GC, '.qstate', ...p);
+  fs.mkdirSync(d, { recursive: true });
+  const f = path.join(d, 'x.queue.md.offset');
+  fs.writeFileSync(f, '0');
+  if (p[p.length - 1] !== 'fresh-sub') fs.utimesSync(f, monthOld, monthOld);
+}
+fs.writeFileSync(path.join(GC, '.qstate', 'shared.queue.md.offset'), '0');   // a shared cursor, must survive
+const gcOut = run('gc', { HUBD_DIR: GC, HUBD_TEAM_DIR: GC });
+ok(!fs.existsSync(path.join(GC, '.qstate', 'role-sub')), 'gc: sweeps a stale role-subscriber cursor');
+ok(!fs.existsSync(path.join(GC, '.qstate', '__watchall__', 'tap-sub')),
+  `gc: sweeps a stale fleet-tap cursor under __watchall__ too (out=${gcOut.out.trim().split('\n').pop()})`);
+ok(fs.existsSync(path.join(GC, '.qstate', 'fresh-sub')), 'gc: leaves a recently-used cursor alone');
+ok(fs.existsSync(path.join(GC, '.qstate', 'shared.queue.md.offset')), 'gc: never touches a shared cursor file');
+fs.rmSync(GC, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

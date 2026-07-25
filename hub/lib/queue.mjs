@@ -88,6 +88,26 @@ export function resolveQueueRoot() {
 }
 
 /** This node's short name (first hostname component), matching mesh-sync's NODE. */
+/**
+ * Roles whose queue fans out: every subscriber sees every message.
+ *
+ * The default stays a COMPETING-WORKER queue — one message to exactly one reader —
+ * because that is what the queue has always been and what task dispatch relies on.
+ * Fan-out cannot be inferred from the transport: giving each session its own cursor
+ * whenever the caller happens to be a long-lived server would silently turn every
+ * work queue into a broadcast, and two sessions would both do the same task and both
+ * claim it. Which of the two a role is, is a property of the ROLE, declared once —
+ * same shape and spirit as HUB/owner-roles.json.
+ *
+ * <queue-root>/subscriber-roles.json: ["architect", "cto"]
+ */
+export function subscriberRoles(root) {
+  try {
+    const arr = JSON.parse(fs.readFileSync(path.join(root, 'subscriber-roles.json'), 'utf8'));
+    return Array.isArray(arr) ? arr.filter(r => typeof r === 'string' && r) : [];
+  } catch { return []; }
+}
+
 function nodeName() {
   try { return (os.hostname() || 'node').split('.')[0] || 'node'; }
   catch { return 'node'; }
@@ -140,10 +160,12 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
   const qdir = path.join(r, 'queues');
   // A subscriber gets its OWN cursor namespace, the same trick queueWaitAll already
   // uses for __watchall__: several sessions can then subscribe to one role without
-  // consuming each other's messages. Without a subscriber the cursor stays where it
-  // has always been — shared per node — which is what competing workers and the CLI
-  // want, and keeps existing offsets valid.
-  const stateDir = subscriber ? path.join(r, '.qstate', subscriber) : path.join(r, '.qstate');
+  // consuming each other's messages. Two conditions, both required: the caller has an
+  // identity to be a subscriber WITH, and the role is declared a fan-out role. Absent
+  // either, the cursor stays where it has always been — shared per node — so competing
+  // workers keep at-most-once delivery and existing offsets keep working.
+  const fanout = !!subscriber && subscriberRoles(r).includes(role);
+  const stateDir = fanout ? path.join(r, '.qstate', subscriber) : path.join(r, '.qstate');
 
   fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
@@ -224,9 +246,12 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
  *
  * NOT the same consumer as a role's own `queueWait(role)` — this uses a
  * SEPARATE offset namespace (.qstate/__watchall__/<file>.offset), so watching
- * everything never steals a message from the one live consumer a role's queue
- * is meant to have (the single-consumer contract queueWait enforces per role
- * stays intact; this is a tap, not a competing reader).
+ * everything never steals a message from a role's own consumer (a competing-worker
+ * role keeps its at-most-once delivery; this is a tap, not a competing reader).
+ *
+ * A tap is a subscriber by definition, so a `subscriber` here always gets its own
+ * cursor and needs no role declaration: several orchestrators may watch the fleet at
+ * once, and none of them consumes from anyone.
  *
  * @param {{ timeout?: number, root?: string }} options
  * @returns {Promise<{ changed: true, events: Array<{ role: string, node: string|null, text: string }> } | { changed: false }>}
