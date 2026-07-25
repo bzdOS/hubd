@@ -1162,14 +1162,21 @@ export function runWhatsNew(a = {}) {
   const agent = a.agent || 'unknown';
   const fallbackHours = a.hours || 24;
   const checkins = readCheckins();
-  const lastSeen = checkins[agent] || null;
+  // Key the checkpoint on the SESSION, not on the agent label. The label names the
+  // function being performed ("dev", then "reviewer"), and several functions travel
+  // one trajectory — so keying on it means that reporting under a new label loses the
+  // checkpoint, falls back to the 24h window and re-delivers everything already seen.
+  // The session id is supplied by the transport, which knows its own process; when it
+  // is absent (CLI, unknown client) the old agent key is used and nothing changes.
+  const key = a.session || agent;
+  const lastSeen = checkins[key] || null;
   // No artificial minimum window: two calls seconds apart should see near-zero
   // new entries, not get padded back out to a 36s+ floor that re-delivers what
   // the previous call already returned. Only guard against negative (clock
   // skew) making the cutoff run ahead of now.
   const hours = lastSeen ? Math.max((Date.now() - parseTs(lastSeen).getTime()) / 3600000, 0) : fallbackHours;
   const entries = journalSince(hours);
-  checkins[agent] = new Date().toISOString();
+  checkins[key] = new Date().toISOString();
   writeCheckins(checkins);
   return {
     agent, since: lastSeen, firstCheckin: !lastSeen,
