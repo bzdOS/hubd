@@ -495,6 +495,46 @@ const kanban2 = core.runKanban();
 const depRow2 = [...kanban2.queued, ...kanban2.inProgress].find(t => t.id === dependent.task.id);
 ok(depRow2 && depRow2.blocked === false, 'id-fix: unblocks once the node-scoped dependency closes');
 fs.rmSync(idRoot1, { recursive: true, force: true });
+// ── errors must name what the caller got wrong ────────────────────────────────
+// Each of these fired against the real hub and told the caller nothing actionable.
+const TE = mktmp();
+core.setHubBase(TE);
+const threw = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+
+const mSyncNone = threw(() => core.runSync({ agent: 't' }));
+ok(/path required/.test(mSyncNone || ''), `sync: omitted path says so, not "does not exist: undefined" (got ${mSyncNone})`);
+const mSyncBad = threw(() => core.runSync({ path: path.join(TE, 'nope'), agent: 't' }));
+ok(/does not exist/.test(mSyncBad || ''), `sync: a real-but-absent path still reports non-existence (got ${mSyncBad})`);
+
+const mClaim = threw(() => core.runClaim({ project: 'p', agent: 'a' }));
+ok(/area/.test(mClaim || '') && !/project/.test((mClaim || '').split('(')[0]),
+  `claim: names only the missing field (got ${mClaim})`);
+
+const mUpd = threw(() => core.runTaskUpdate({ status: 'done' }));
+ok(/id required/.test(mUpd || ''), `task update: omitted id says so, not "no task #undefined" (got ${mUpd})`);
+fs.rmSync(TE, { recursive: true, force: true });
+
+// The queue long-poll default must stay under a typical MCP client's own tool-call
+// timeout: every recorded call above ~60s was aborted by the client, and the old
+// default of 170 was never usable. Guard the schema and the implementation together
+// so the advertised number and the applied number cannot drift apart.
+const idxSrc = fs.readFileSync(path.join(REPO, 'hub/index.mjs'), 'utf8');
+ok(!/a\.timeout \|\| 170/.test(idxSrc), 'queue wait: implementation no longer defaults to the unusable 170s');
+ok((idxSrc.match(/a\.timeout \|\| 45/g) || []).length === 2, 'queue wait: both wait tools default to 45s');
+ok(!/default 170/.test(idxSrc), 'queue wait: schema no longer advertises 170s');
+
+// importance was settable at add and then frozen: hub_task_update declared no such
+// property and runTaskUpdate applied only status/text/deadline/cat/assignee, so the
+// call returned ok and changed nothing.
+const TI = mktmp();
+core.setHubBase(TI);
+const tImp = core.runTaskAdd({ project: 'p', text: 'reprioritise me', importance: 'normal', by: 't' });
+ok(tImp.task.importance === 'normal', 'task add: importance recorded');
+const upImp = core.runTaskUpdate({ id: tImp.task.id, importance: 'high', by: 't' });
+ok(upImp.task.importance === 'high', `task update: importance is editable (got ${upImp.task.importance})`);
+ok(core.runTaskList({ project: 'p', status: 'all' }).tasks[0].importance === 'high',
+  'task update: the new importance survives the fold, not just the return value');
+fs.rmSync(TI, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
