@@ -34,6 +34,12 @@ check() {
 
 TMP=$(mktemp -d)
 export HUBD_DIR="$TMP/hub"
+# Pin the team root with HUBD_TEAM_DIR, not the legacy HUBD_QUEUE_DIR: resolution is
+# `HUBD_TEAM_DIR || HUBD_QUEUE_DIR`, so a developer who has HUBD_TEAM_DIR exported for
+# their own hub used to win over this. The suite then ran doctor and the queue cases
+# against that real team root — writing test messages into live queues, while the
+# offset/waiter cases silently asserted nothing.
+export HUBD_TEAM_DIR="$TMP/team"
 export HUBD_QUEUE_DIR="$TMP/team"
 mkdir -p "$TMP/team"
 
@@ -131,7 +137,9 @@ OUT6=$(cd "$TMP/team" && $CLI doctor 2>&1)
 RC6=$?
 [ "$RC6" -ne 0 ]
 check "doctor offset-beyond-size: non-zero exit" $?
-echo "$OUT6" | grep -qi "truncat\|offset\|beyond\|warning"
+# Match the warning itself, not the word "offset" — every queue line prints an offset,
+# so the loose pattern passed even when the warning never fired.
+echo "$OUT6" | grep -qi "offset beyond file size"
 check "doctor offset-beyond-size: output mentions offset warning" $?
 
 rm -f "$TMP/team/.qstate/smoketest.offset" "$TMP/team/queues/smoketest.queue.md"
