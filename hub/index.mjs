@@ -16,6 +16,7 @@ import {
   runHeartbeat, runPresence, runTrajectory,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
+import { sessionId } from './lib/session.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -219,13 +220,16 @@ const DISPATCH = {
   hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
-  hub_onboarding: () => runOnboarding(), hub_whatsnew: runWhatsNew, hub_inbox: runInbox, hub_trajectory: runTrajectory,
+  hub_onboarding: () => runOnboarding(), hub_whatsnew: (a) => runWhatsNew({ ...a, session: sessionId() }), hub_inbox: runInbox, hub_trajectory: runTrajectory,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from || 'mcp', root: HUB }) }),
-  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: HUB }),
-  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: HUB }),
+  // subscriber: resolved from THIS process, never from the caller's arguments — the
+  // model cannot forget it or invent a different one mid-loop. Null on an unknown
+  // client, and then the cursor stays shared per node exactly as before.
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: HUB, subscriber: sessionId() }),
+  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: HUB, subscriber: sessionId() }),
 };
 
 // Tools that touch the server's own filesystem / run subprocesses, or block for a
