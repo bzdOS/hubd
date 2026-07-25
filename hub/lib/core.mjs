@@ -466,7 +466,10 @@ function openTaskCount(slug) {
 
 export function runSync(a) {
   const dir = a.path;
-  if (!dir || !fs.existsSync(dir)) throw new Error('path does not exist: ' + dir);
+  // Two different mistakes, two different messages — "path does not exist: undefined"
+  // told a caller who forgot the argument nothing about what to fix.
+  if (!dir) throw new Error('path required: absolute path to the project folder');
+  if (!fs.existsSync(dir)) throw new Error('path does not exist: ' + dir);
   const pname = a.name || path.basename(dir);
   const slug = slugify(pname);
   const git = gitFacts(dir);
@@ -939,10 +942,14 @@ export function runTaskList(a) {
 export function runTaskUpdate(a) {
   return withLock(TASK_EVENTS, () => {
     const db = loadTasks();
+    if (a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
     const t = db.tasks.find(x => String(x.id) === String(a.id));
     if (!t) throw new Error('no task #' + a.id);
     const patch = {};
-    for (const k of ['status', 'text', 'deadline', 'cat', 'assignee']) if (a[k] != null) patch[k] = a[k];
+    // `importance` belongs here too: hub_task_add accepts it, so a task could be
+    // given a priority at creation and never change it again, while `deadline` right
+    // next to it was editable. Passing it to update returned ok and silently did nothing.
+    for (const k of ['status', 'importance', 'text', 'deadline', 'cat', 'assignee']) if (a[k] != null) patch[k] = a[k];
     if (Array.isArray(a.depends_on)) patch.depends_on = a.depends_on;
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
     if (a.status === 'done') patch.done = now();
@@ -1128,7 +1135,11 @@ export function runTrajectory(a = {}) {
 }
 
 export function runClaim(a) {
-  if (!a.project || !a.area || !a.agent) throw new Error('project, area, agent required');
+  // Name the fields actually missing: this error fired on 4 of 33 real hub_claim
+  // calls, the worst rate of any tool, and listing all three told the caller
+  // nothing about which one it had left out.
+  const missing = ['project', 'area', 'agent'].filter(k => !a[k]);
+  if (missing.length) throw new Error('missing required: ' + missing.join(', ') + ' (claim needs project, area, agent)');
   return withLock(CLAIMS, () => {
     const db = loadClaims();
     db.claims = activeClaims(db.claims);
