@@ -535,6 +535,75 @@ ok(upImp.task.importance === 'high', `task update: importance is editable (got $
 ok(core.runTaskList({ project: 'p', status: 'all' }).tasks[0].importance === 'high',
   'task update: the new importance survives the fold, not just the return value');
 fs.rmSync(TI, { recursive: true, force: true });
+// ── git diff metrics: "nothing new" must not be reported as movement ──────────
+// Bug: an empty `hashAt..HEAD` range fell into the same fallback as "no prior
+// sync", which substituted the last 10 commits — so a sync with zero new commits
+// reported "since last sync: 10 commit(s)". sinceLastSync now separates
+// "answered, and the answer is 0" from "no baseline to answer against".
+const GD = mktmp();
+core.setHubBase(mktmp());   // runSync below writes a card; give it a live hub base
+// Commit dates are pinned and a minute apart: the baseline is a 1-second-resolution
+// timestamp, so same-second commits would be indistinguishable from the baseline.
+const gitc = (args, date) => execSync(`git -c user.email=t@t -c user.name=t -c commit.gpgsign=false ${args}`,
+  { cwd: GD, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
+gitc('init -q');
+fs.writeFileSync(path.join(GD, 'a.txt'), 'one\n');
+gitc('add -A'); gitc('commit -qm first', '2026-01-01T10:00:00+0000');
+const firstTs = gitc('log -1 --format=%ci').trim();
+fs.writeFileSync(path.join(GD, 'a.txt'), 'one\ntwo\nthree\n');
+fs.writeFileSync(path.join(GD, 'b.txt'), 'new file\n');
+gitc('add -A'); gitc('commit -qm second', '2026-01-01T10:01:00+0000');
+const headTs = gitc('log -1 --format=%ci').trim();
+
+const dNone = core.gitDiffSummary(GD, headTs);
+ok(dNone.sinceLastSync === true, 'gitDiffSummary: HEAD as baseline is a real baseline');
+ok(dNone.newCommits === 0, `gitDiffSummary: nothing new → 0 commits, not the last-10 fallback (got ${dNone.newCommits})`);
+ok(dNone.commitLog.length === 0, `gitDiffSummary: nothing new → empty commitLog (got ${dNone.commitLog.length})`);
+
+const dSome = core.gitDiffSummary(GD, firstTs);
+ok(dSome.sinceLastSync === true && dSome.newCommits === 1, `gitDiffSummary: one commit since baseline (got ${dSome.newCommits})`);
+ok(dSome.insertions === 3 && dSome.deletions === 0 && dSome.filesChanged === 2,
+  `gitDiffSummary: shortstat parsed (+${dSome.insertions}/-${dSome.deletions}, ${dSome.filesChanged} files)`);
+
+const dNoBase = core.gitDiffSummary(GD, null);
+ok(dNoBase.sinceLastSync === false && dNoBase.newCommits === 0,
+  'gitDiffSummary: no baseline → sinceLastSync false and 0 new commits');
+ok(dNoBase.commitLog.length === 2, `gitDiffSummary: no baseline → recent commits as context (got ${dNoBase.commitLog.length})`);
+
+// The baseline comes out of a user-editable card and is interpolated into a
+// shell command: anything not shaped like git's %ci is refused, not run.
+const pwned = path.join(GD, 'PWNED');
+const dEvil = core.gitDiffSummary(GD, `x"; touch ${pwned}; #`);
+ok(dEvil.sinceLastSync === false, 'gitDiffSummary: malformed baseline is refused, not trusted');
+ok(!fs.existsSync(pwned), 'gitDiffSummary: malformed baseline does not reach the shell');
+ok(core.gitDiffSummary(mktmp(), null) === null, 'gitDiffSummary: non-git dir → null');
+
+// runSync must not claim movement on a re-sync with no new commits.
+const syncCard = core.runSync({ path: GD, name: 'difftest', agent: 't', digest: 'first pass' });
+ok(syncCard.newCommits === 0, 'runSync: first sync of an unseen project claims no new commits');
+const resync = core.runSync({ path: GD, name: 'difftest', agent: 't', digest: 'second pass' });
+ok(resync.newCommits === 0, `runSync: re-sync with no new commits reports 0 (got ${resync.newCommits})`);
+ok(!/- since last sync:/.test(fs.readFileSync(syncCard.card, 'utf8')),
+  'runSync: card omits the "since last sync" line when nothing moved');
+
+// Bug: runSync read the baseline back with /- last commit: /, but it writes that
+// value as "· last commit: " on the branch line — so the baseline never parsed and
+// the diff was always the no-baseline fallback. Real movement must be detected.
+fs.writeFileSync(path.join(GD, 'a.txt'), 'one\ntwo\nthree\nfour\n');
+gitc('add -A'); gitc('commit -qm third', '2026-01-01T10:05:00+0000');
+const moved = core.runSync({ path: GD, name: 'difftest', agent: 't', digest: 'third pass' });
+ok(moved.newCommits === 1, `runSync: detects the commit made since the previous sync (got ${moved.newCommits})`);
+const movedCard = fs.readFileSync(moved.card, 'utf8');
+ok(/- since last sync: 1 commit\(s\), 1 file\(s\), \+1\/-0 lines/.test(movedCard),
+  'runSync: card reports the real diff since last sync');
+
+// projectMetrics reads the version out of package.json.
+fs.writeFileSync(path.join(GD, 'package.json'), JSON.stringify({ name: 'difftest', version: '9.9.9' }));
+const pm = core.projectMetrics(GD);
+ok(pm && pm.version === '9.9.9', `projectMetrics: version from package.json (got ${pm && pm.version})`);
+ok(core.projectMetrics(mktmp()) === null, 'projectMetrics: nothing detectable → null');
+fs.rmSync(GD, { recursive: true, force: true });
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
