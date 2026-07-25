@@ -36,6 +36,27 @@ ok(db.tasks.length === 1, `fold/reuse: exactly one task survives (got ${db.tasks
 ok(db.tasks[0] && db.tasks[0].text === 'B-task', `fold/reuse: B's task intact, not corrupted by A's set (text=${db.tasks[0] && db.tasks[0].text})`);
 fs.rmSync(path.join(T0, 'tasks.aaa.events.jsonl')); fs.rmSync(path.join(T0, 'tasks.bbb.events.jsonl'));
 
+// Bug: a node that once created a colliding id could no longer address the task that
+// id now names. Cascade: fedora adds 168; macbook's own 168 collides → remapped to 169;
+// planck's own 169 collides → remapped to 170. planck then updates the VISIBLE #169
+// (macbook's task, the id hub_task_list reports) — and its own remap silently sent the
+// write to #170 instead. Real incident: ids 168 → 171 → 172 in the shared hub.
+fs.writeFileSync(path.join(T0, 'tasks.fedora.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:00', node: 'fedora', ev: 'add', id: 168, t: { id: 168, text: 'fedora-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(T0, 'tasks.macbook.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:01', node: 'macbook', ev: 'add', id: 168, t: { id: 168, text: 'macbook-task', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(T0, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-02-01 10:02', node: 'planck', ev: 'add', id: 169, t: { id: 169, text: 'planck-task', status: 'open' } }) + '\n' +
+  JSON.stringify({ ts: '2026-02-01 10:03', node: 'planck', ev: 'set', id: 169, patch: { text: 'TRIAGE' } }) + '\n');
+const cas = core.foldTasks();
+const byId = (id) => cas.tasks.find(t => t.id === id);
+ok(cas.tasks.length === 3, `fold/cascade: three tasks after two collisions (got ${cas.tasks.length})`);
+ok(byId(169) && byId(169).text === 'TRIAGE',
+  `fold/cascade: planck's update lands on the visible #169 it addressed (text=${byId(169) && byId(169).text})`);
+ok(byId(170) && byId(170).text === 'planck-task',
+  `fold/cascade: planck's own remapped #170 is NOT the one written to (text=${byId(170) && byId(170).text})`);
+for (const f of ['tasks.fedora.events.jsonl', 'tasks.macbook.events.jsonl', 'tasks.planck.events.jsonl']) fs.rmSync(path.join(T0, f));
+
 // Bug: journal rotation must not overwrite an existing same-month archive (data loss).
 const big = 'x'.repeat(2 * 1024 * 1024 + 16) + '\n';
 fs.writeFileSync(core.JOURNAL, '{"m":"first"}\n' + big);
