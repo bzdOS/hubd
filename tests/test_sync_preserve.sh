@@ -64,7 +64,7 @@ EOF
 
 # -- Case 1: sync over a harvest card keeps every hand-written part ----------
 
-$CLI sync "$TMP/proj/widget" -m "New digest line." > /dev/null 2>&1
+$CLI sync "$TMP/proj/widget" --agent preserve-suite -m "New digest line." > /dev/null 2>&1
 check "sync harvest card: exit 0" $?
 
 head -1 "$CARD" | grep -qx -- '---'
@@ -94,7 +94,7 @@ check "section order: Digest < Facts < Facts (auto)" $?
 
 # -- Case 2: second sync (keep-digest path) does not duplicate or lose -------
 
-echo "" | $CLI sync "$TMP/proj/widget" > /dev/null 2>&1
+echo "" | $CLI sync "$TMP/proj/widget" --agent preserve-suite > /dev/null 2>&1
 check "second sync: exit 0" $?
 
 [ "$(grep -cF -- 'status: background-slow-burn' "$CARD")" -eq 1 ]
@@ -110,7 +110,7 @@ check "second sync: frontmatter still first" $?
 
 PLAIN="$TMP/hub/projects/plain.md"
 
-$CLI sync "$TMP/proj/plain" -m "Plain digest." > /dev/null 2>&1
+$CLI sync "$TMP/proj/plain" --agent preserve-suite -m "Plain digest." > /dev/null 2>&1
 check "plain sync: exit 0" $?
 
 head -1 "$PLAIN" | grep -q '^# plain'
