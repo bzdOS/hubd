@@ -594,6 +594,7 @@ if (cmd === 'report') {
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
+  if (r.doneMissed && r.doneMissed.length) console.error('  warning: NOT closed (no such task): #' + r.doneMissed.join(' #') + ' — check the id with `hub task list`');
   const onlyNote = r.note && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   process.exit(0);

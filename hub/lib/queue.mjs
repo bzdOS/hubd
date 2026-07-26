@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor } from './core.mjs';
+import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, withLock } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -114,6 +114,37 @@ function nodeName() {
 }
 
 /**
+ * Deliver everything past `f`'s cursor and advance it — atomically w.r.t. other
+ * waiters on the SAME cursor. Without the lock, two competing workers polling one
+ * shared cursor could both see size > offset in the same instant and both deliver
+ * the block: "goes to exactly one of them" held by timing luck, not construction.
+ * The lock scope is one offset file for the few ms of a read; a contended or stale
+ * lock skips this file for THIS poll (the next poll retries) instead of failing the
+ * wait. Subscribers pay the same negligible cost for no benefit (their cursor has no
+ * competitor by construction) — one code path beats two. Returns the new text, or
+ * null when there is nothing new.
+ */
+function drainFile(qdir, stateDir, f) {
+  const offFile = path.join(stateDir, `${f}.offset`);
+  const readOff = () => { try { return parseInt(fs.readFileSync(offFile, 'utf8').trim(), 10) || 0; } catch { return 0; } };
+  const sizeOf = () => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
+  if (sizeOf() === readOff()) return null;            // nothing new — don't even lock
+  try {
+    return withLock(offFile, () => {
+      const off = readOff(), sz = sizeOf();           // re-read under the lock
+      if (sz < off) { fs.writeFileSync(offFile, '0', 'utf8'); return null; }   // truncated/recreated — reset
+      if (sz === off) return null;                    // a competitor drained it first
+      const fd = fs.openSync(path.join(qdir, f), 'r');
+      const buf = Buffer.allocUnsafe(sz - off);
+      fs.readSync(fd, buf, 0, sz - off, off);
+      fs.closeSync(fd);
+      fs.writeFileSync(offFile, String(sz), 'utf8');
+      return buf.toString('utf8').trim() || null;
+    });
+  } catch { return null; }                            // lock busy — skip this poll, retry next
+}
+
+/**
  * Append a message block to <root>/queues/<role>.<node>.queue.md (this node's
  * own file). Creates the queues/ directory if it does not exist.
  * Returns the path to the queue file.
@@ -193,10 +224,6 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
   const sourceFiles = () => {
     try { return fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return []; }
   };
-  const offPath = (f) => path.join(stateDir, `${f}.offset`);
-  const readOff = (f) => { try { return parseInt(fs.readFileSync(offPath(f), 'utf8').trim(), 10) || 0; } catch { return 0; } };
-  const writeOff = (f, n) => fs.writeFileSync(offPath(f), String(n), 'utf8');
-  const sizeOf = (f) => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
 
   function pidAlive(pid) {
     try { process.kill(pid, 0); return true; }
@@ -226,19 +253,8 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
     while (true) {
       const parts = [];
       for (const f of sourceFiles()) {
-        const off = readOff(f);
-        const sz = sizeOf(f);
-        if (sz > off) {
-          const fd = fs.openSync(path.join(qdir, f), 'r');
-          const buf = Buffer.allocUnsafe(sz - off);
-          fs.readSync(fd, buf, 0, sz - off, off);
-          fs.closeSync(fd);
-          writeOff(f, sz);
-          const t = buf.toString('utf8').trim();
-          if (t) parts.push(t);
-        } else if (sz < off) {
-          writeOff(f, 0); // truncated/recreated — reset this file
-        }
+        const t = drainFile(qdir, stateDir, f);
+        if (t) parts.push(t);
       }
       if (parts.length) return { changed: true, text: parts.join('\n').trim() };
       if (Date.now() >= deadline) return { changed: false };
@@ -288,10 +304,6 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
   const sourceFiles = () => {
     try { return fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return []; }
   };
-  const offPath = (f) => path.join(stateDir, `${f}.offset`);
-  const readOff = (f) => { try { return parseInt(fs.readFileSync(offPath(f), 'utf8').trim(), 10) || 0; } catch { return 0; } };
-  const writeOff = (f, n) => fs.writeFileSync(offPath(f), String(n), 'utf8');
-  const sizeOf = (f) => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
 
   function parseFile(f) {
     const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
@@ -320,19 +332,8 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
     while (true) {
       const events = [];
       for (const f of sourceFiles()) {
-        const off = readOff(f);
-        const sz = sizeOf(f);
-        if (sz > off) {
-          const fd = fs.openSync(path.join(qdir, f), 'r');
-          const buf = Buffer.allocUnsafe(sz - off);
-          fs.readSync(fd, buf, 0, sz - off, off);
-          fs.closeSync(fd);
-          writeOff(f, sz);
-          const t = buf.toString('utf8').trim();
-          if (t) { const { role, node } = parseFile(f); events.push({ role, node, text: t }); }
-        } else if (sz < off) {
-          writeOff(f, 0);
-        }
+        const t = drainFile(qdir, stateDir, f);
+        if (t) { const { role, node } = parseFile(f); events.push({ role, node, text: t }); }
       }
       if (events.length) return { changed: true, events };
       if (Date.now() >= deadline) return { changed: false };
@@ -374,10 +375,13 @@ export function peekQueueDepth(role, { root } = {}) {
     const buf = Buffer.allocUnsafe(size - off);
     fs.readSync(fd, buf, 0, size - off, off);
     fs.closeSync(fd);
-    const heads = buf.toString('utf8').match(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/gm) || [];
+    // Match the FULL block header (incl. "· from") that queueSend writes — a bare
+    // timestamp pattern also matched such a line quoted inside a message body and
+    // inflated the count.
+    const heads = buf.toString('utf8').match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || [];
     pending += heads.length;
     for (const h of heads) {
-      const ts = h.slice(3);
+      const ts = h.slice(3, 19);
       if (!oldest || ts < oldest) oldest = ts;
     }
   }

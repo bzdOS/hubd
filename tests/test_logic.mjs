@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -672,6 +672,63 @@ ok(queueLib.buttonsSummary(fbRows).count === 0,
   'brief: a fanout owner role never counts as buttons waiting — that count could never clear');
 fs.rmSync(FB, { recursive: true, force: true });
 
+// Delivery advances the cursor under a lock: two competing waiters seeing the same
+// bytes in one poll window would otherwise both deliver them — "exactly one reader"
+// held by timing luck. A held lock is a skip for this poll, never a failed wait.
+const LK = mktmp();
+fs.mkdirSync(path.join(LK, 'queues'), { recursive: true });
+qSend('locked', 'contended message', { from: 'test', root: LK });
+fs.mkdirSync(path.join(LK, '.qstate'), { recursive: true });
+const lkNode = (os.hostname() || 'node').split('.')[0] || 'node';
+const lkLock = path.join(LK, '.qstate', `locked.${lkNode}.queue.md.offset.lock`);
+fs.writeFileSync(lkLock, '');   // someone else is mid-drain on this cursor
+const lkBlocked = await qWait('locked', { timeout: 1, root: LK });
+ok(lkBlocked.changed === false,
+  `queue: a held cursor lock skips the poll instead of double-delivering or throwing (got ${JSON.stringify(lkBlocked)})`);
+fs.unlinkSync(lkLock);
+const lkAfter = await qWait('locked', { timeout: 3, root: LK });
+ok(lkAfter.changed === true && /contended message/.test(lkAfter.text),
+  'queue: releasing the lock delivers on the next poll — nothing was lost');
+fs.rmSync(LK, { recursive: true, force: true });
+
+// peekQueueDepth must count block HEADERS (the full "## <ts> · from" shape queueSend
+// writes), not any line that starts with a timestamp heading: a message quoting a log
+// line or a dated heading used to inflate the pending count. (A body replicating a
+// FULL header verbatim stays indistinguishable — inherent to the flat format.)
+const PK = mktmp();
+fs.mkdirSync(path.join(PK, 'queues'), { recursive: true });
+qSend('quoted', 'see my note from\n## 2026-01-01 00:00\nthat dated heading above', { from: 'test', root: PK });
+ok(queueLib.peekQueueDepth('quoted', { root: PK }).pending === 1,
+  `peek: a dated heading inside a message body is not a second message (got ${queueLib.peekQueueDepth('quoted', { root: PK }).pending})`);
+fs.rmSync(PK, { recursive: true, force: true });
+
+// DONE with an id that matches nothing used to vanish silently — the task stayed open
+// and nothing said so (the protocol's DONE rule warns exactly about batch-copied ids).
+const DM = mktmp();
+core.setHubBase(DM);
+const dmT = core.runTaskAdd({ project: 'p', text: 'real work', by: 'test' });
+const dmR = core.runReport({ project: 'p', by: 'test', text: `DONE: ${dmT.task.id}, nope-99` });
+ok(dmR.done.length === 1 && String(dmR.done[0]) === String(dmT.task.id),
+  `report: the real id still closes (got ${JSON.stringify(dmR.done)})`);
+ok(JSON.stringify(dmR.doneMissed) === JSON.stringify(['nope-99']),
+  `report: an id that matches no task comes back as doneMissed, not swallowed (got ${JSON.stringify(dmR.doneMissed)})`);
+ok(core.runTaskList({ status: 'all' }).tasks.find(t => t.id === dmT.task.id).status === 'done',
+  'report: the miss does not block the hit');
+fs.rmSync(DM, { recursive: true, force: true });
+
+// A card made by hub_card_set has `- set:`, not `- synced:` — it used to show '?' in
+// status and could never go stale in the brief, however long abandoned.
+const SC = mktmp();
+core.setHubBase(SC);
+core.runCardSet({ project: 'harvested', digest: 'captured from a dialog', by: 'test' });
+const scRow = core.runStatus().projects.find(p => p.project === 'harvested');
+ok(scRow && /^\d{4}-/.test(scRow.synced), `status: a card-set card shows its set time, not '?' (got ${scRow && scRow.synced})`);
+fs.writeFileSync(path.join(SC, 'projects', 'oldset.md'),
+  '# oldset\n\n- slug: oldset\n- set: 2020-01-01 00:00 by test\n\n## Digest\n\nlong abandoned\n');
+ok(core.runBrief({}).staleCards.some(c => c.project === 'oldset'),
+  'brief: a card-set card goes stale by its set time');
+fs.rmSync(SC, { recursive: true, force: true });
+
 // sessionId must never depend on the model: explicit env wins, else the parent process
 // (stable across a server respawn), else null so the caller keeps the node cursor.
 const prevSess = process.env.HUBD_SESSION;
@@ -893,6 +950,11 @@ ok(core.envChecks().items.find(i => i.id === 'author-floor').actor === 'agent+re
   'envChecks: every item says who can fix it');
 ok(core.envChecks().items.every(i => i.what && i.remedy), 'envChecks: every item carries a remedy, not just a complaint');
 ok(core.envChecks().items.length <= 3, 'envChecks: capped — a list nobody finishes is a list nobody reads');
+// Over HTTP the server's env is nobody's environment: one process serves many agents
+// (or tenants), so an unset HUBD_AGENT there is not a finding — and the remedy ("edit
+// the client config") would point at the wrong machine.
+ok(!has(core.envChecks({ transport: 'http' }), 'author-floor'),
+  'envChecks: the floor is not a finding over HTTP — the server env is not the caller\'s');
 
 // The queue conflict: stderr is invisible to an MCP client, so the warning used to be
 // unread. It is recorded, surfaces as a check, and clears itself once the role is
@@ -920,6 +982,40 @@ run('gc', { HUBD_DIR: EV, HUBD_TEAM_DIR: EV });
 const stAfter = JSON.parse(fs.readFileSync(esf, 'utf8'));
 ok(!stAfter.sessions.old && !!stAfter.sessions.fresh,
   `gc: sweeps a stale session record and keeps a fresh one (left ${Object.keys(stAfter.sessions)})`);
+
+// ── over HTTP the floor and the session id describe the SERVER, not the caller ──
+// One process serves many agents (or tenants): HUBD_AGENT is the server owner's env,
+// and the process-derived session id is the server's own — one author and one whatsnew
+// checkpoint for the whole team. Driven over the real HTTP transport.
+const HT = mktmp();
+const httpPort = 18700 + (process.pid % 200);
+const srv = spawn('node', [path.join(REPO, 'hub/index.mjs'), '--http', String(httpPort)], {
+  env: { ...process.env, HUBD_DIR: HT, HUBD_TEAM_DIR: HT, HUBD_TOKEN: 'secret-token-0123456789', HUBD_AGENT: 'dev-hubd' },
+  stdio: ['ignore', 'ignore', 'pipe'],
+});
+await new Promise((resolve, reject) => {
+  const to = setTimeout(() => reject(new Error('http server did not start')), 8000);
+  srv.stderr.on('data', (d) => { if (String(d).includes('serving MCP over HTTP')) { clearTimeout(to); resolve(); } });
+});
+const httpCall = async (name, args) => {
+  const resp = await fetch(`http://127.0.0.1:${httpPort}/`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer secret-token-0123456789' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  return (await resp.json()).result;
+};
+const htAdd = await httpCall('hub_task_add', { project: 'p', text: 'no author given' });
+ok(htAdd.isError === true && /by required/.test(htAdd.content[0].text),
+  `http: no author floor — an omitted author is an error, not the server owner's name (got ${htAdd.content[0].text.slice(0, 60)})`);
+const htNew = await httpCall('hub_whatsnew', { agent: 'remote-dev' });
+ok(htNew.isError === false && !/author-floor/.test(htNew.content[0].text),
+  'http: whatsnew does not report the server\'s own HUBD_AGENT state to a remote caller');
+const htNewB = await httpCall('hub_whatsnew', { agent: 'remote-reviewer' });
+ok(/"firstCheckin": true/.test(htNewB.content[0].text),
+  'http: whatsnew checkpoints are per caller, not one per server process');
+srv.kill();
+fs.rmSync(HT, { recursive: true, force: true });
 
 if (prevFloorEnv === undefined) delete process.env.HUBD_AGENT; else process.env.HUBD_AGENT = prevFloorEnv;
 fs.rmSync(EV, { recursive: true, force: true });

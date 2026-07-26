@@ -70,13 +70,19 @@ const focusShare = FOCUS.length
 const events = files('tasks.', '.events.jsonl').flatMap((f) => lines(join(DIR, f)))
   .filter((e) => e.ts).sort((a, b) => a.ts.localeCompare(b.ts));
 const tasks = new Map();
+// Key by (node, id): legacy bare-numeric ids were minted per node and can collide
+// across nodes — keyed by id alone, two colliding adds merged into one task and a
+// close on either "closed both" in these numbers. Post-0.4.8 set/del events carry the
+// task's ORIGIN coordinates (matching its add), so they resolve here; a legacy set
+// keyed to a remapped id may still miss — metrics-grade, not the engine's fold.
+const evKey = (e) => `${e.node || '?'}::${e.id}`;
 for (const e of events) {
-  if (e.ev === 'add' && e.t) tasks.set(e.id, { ...e.t, _created: e.ts });
-  else if (e.ev === 'set' && tasks.has(e.id)) {
-    const t = tasks.get(e.id);
+  if (e.ev === 'add' && e.t) tasks.set(evKey(e), { ...e.t, _created: e.ts });
+  else if (e.ev === 'set' && tasks.has(evKey(e))) {
+    const t = tasks.get(evKey(e));
     if (e.patch?.status === 'done' && t.status !== 'done') t._done = e.ts;
     Object.assign(t, e.patch);
-  } else if (e.ev === 'del') tasks.delete(e.id);
+  } else if (e.ev === 'del') tasks.delete(evKey(e));
 }
 const all = [...tasks.values()].filter((t) => !since || t._created >= since || (t._done && inRange(t._done)));
 const days = (a, b) => Math.round((new Date(b.replace(' ', 'T')) - new Date(a.replace(' ', 'T'))) / 864e5 * 10) / 10;

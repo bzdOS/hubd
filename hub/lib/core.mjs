@@ -681,26 +681,34 @@ export function clearEnvObservation(kind, value) {
 }
 
 /**
- * What this environment needs, most severe first. Pure read — no side effects, so a
- * caller may run it as often as it likes. Capped, because a list nobody finishes
- * reading is a list nobody reads: three items, and the count tells the rest.
+ * What this environment needs, most severe first. Read-mostly, safe to call as often
+ * as a caller likes: the one write is protocolChanges() persisting a fresh baseline on
+ * the first call after an upgrade — idempotent, every later call is a pure read.
+ * Capped, because a list nobody finishes reading is a list nobody reads: three items,
+ * and the count tells the rest.
  */
-export function envChecks({ session } = {}) {
+export function envChecks({ session, transport } = {}) {
   const out = [];
-  const floor = (process.env.HUBD_AGENT || '').trim();
-  if (!floor) {
-    out.push({
-      id: 'author-floor', severity: 'high', actor: 'agent+restart',
-      what: 'HUBD_AGENT is not set on this server, so any write that omits an author fails instead of falling back to a name.',
-      remedy: 'Add HUBD_AGENT to this hubd server\'s env in the client config (e.g. --env HUBD_AGENT=dev-<project>), naming the function you perform, not the model. Takes effect when the client restarts the server. Until then, pass agent/by explicitly on every write.',
-    });
-  } else {
-    try { requireAuthor(floor, 'HUBD_AGENT'); }
-    catch { out.push({
-      id: 'author-floor-refused', severity: 'high', actor: 'agent+restart',
-      what: `HUBD_AGENT is "${floor}", which names a model, a client or a placeholder, so it is ignored and writes without an author fail.`,
-      remedy: 'Replace it with the function being performed — "dev-hubd", "reviewer-bsdos" — in the client config.',
-    }); }
+  // The floor checks describe THIS process's env — which is the caller's environment
+  // only on a local transport. Over HTTP one server serves many agents (or tenants):
+  // HUBD_AGENT there could not be any caller's identity, so its absence is not a
+  // finding, and the remedy ("edit the client config") points at the wrong machine.
+  if (transport !== 'http') {
+    const floor = (process.env.HUBD_AGENT || '').trim();
+    if (!floor) {
+      out.push({
+        id: 'author-floor', severity: 'high', actor: 'agent+restart',
+        what: 'HUBD_AGENT is not set on this server, so any write that omits an author fails instead of falling back to a name.',
+        remedy: 'Add HUBD_AGENT to this hubd server\'s env in the client config (e.g. --env HUBD_AGENT=dev-<project>), naming the function you perform, not the model. Takes effect when the client restarts the server. Until then, pass agent/by explicitly on every write.',
+      });
+    } else {
+      try { requireAuthor(floor, 'HUBD_AGENT'); }
+      catch { out.push({
+        id: 'author-floor-refused', severity: 'high', actor: 'agent+restart',
+        what: `HUBD_AGENT is "${floor}", which names a model, a client or a placeholder, so it is ignored and writes without an author fail.`,
+        remedy: 'Replace it with the function being performed — "dev-hubd", "reviewer-bsdos" — in the client config.',
+      }); }
+    }
   }
 
   const st = readEnvState();
@@ -1048,7 +1056,7 @@ export function runReport(a) {
     const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
     if (tag) b[tag].push(m[2].trim()); else b.note.push(ln.trim());
   }
-  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], tasks: [], note: false };
+  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneMissed: [], tasks: [], note: false };
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
     let text = readCard(project) || cardBaseFor(project);
     for (const d of b.decide) {
@@ -1066,7 +1074,10 @@ export function runReport(a) {
   }
   for (const list of b.done) for (const part of list.split(',')) {
     const id = part.trim();   // id may be a bare number OR a node-scoped string (task #194) — pass through as-is
-    if (id) { try { runTaskUpdate({ id, status: 'done', by }); summary.done.push(id); } catch {} }
+    // A typo'd id used to vanish silently — the task stayed open and nothing said so.
+    // DONE closes without per-task confirmation, so a miss must be loud: it goes in
+    // the summary (doneMissed) for the caller to see and recheck.
+    if (id) { try { runTaskUpdate({ id, status: 'done', by }); summary.done.push(id); } catch { summary.doneMissed.push(id); } }
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   if (b.note.length) {
@@ -1082,7 +1093,9 @@ export function runStatus() {
   const projects = files.map(f => {
     const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
     const digest = (c.split('## Digest')[1] || '').split('## Facts')[0].trim().slice(0, 300);
-    const synced = (c.match(/- synced: ([^\n]+)/) || [])[1] || '?';
+    // hub_card_set cards write `- set:`, not `- synced:` — they used to show '?' here
+    // (and never count as stale in runBrief). Either timestamp is a last touch.
+    const synced = (c.match(/- (?:synced|set): ([^\n]+)/) || [])[1] || '?';
     const slug = f.replace('.md', '');
     const openTasks = db.tasks.filter(t => t.project === slug && t.status === 'open').length;
     // Extract auto-detected metrics from Facts (auto) section
@@ -1345,7 +1358,7 @@ export function runBrief(a = {}) {
   try {
     for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
       const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
-      const m = c.match(/- synced: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);
+      const m = c.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);   // card-set cards go stale too
       if (m) {
         const daysAgo = Math.floor((nowMs - parseTs(m[1]).getTime()) / 86400000);
         if (daysAgo >= staleDays) staleCards.push({ project: f.replace('.md', ''), synced: m[1], daysAgo });
@@ -1408,7 +1421,7 @@ export function runWhatsNew(a = {}) {
   // it is the tool a returning agent calls, and the protocol tells it to. Acknowledged
   // per session, so a protocol change is announced once and not on every check-in —
   // and the OTHER session on this host still hears it.
-  const env = envChecks({ session: a.session });
+  const env = envChecks({ session: a.session, transport: a.transport });
   ackEnvNotices(a.session);
   return {
     agent: author, since: lastSeen, firstCheckin: !lastSeen,
