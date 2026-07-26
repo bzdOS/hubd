@@ -30,7 +30,7 @@ You do exactly what you're told; you do not invent.
 
 ## Protocol
 
-Work arrives in `queues/runner.queue.md`. Daemon loop: `hub queue wait runner`
+Work arrives in your queue. Daemon loop: `hub queue wait runner`
 → on work: do exactly what's asked, nothing more → report what you did (`hub
 report ... -k done`) → wait again. Three empty timeouts → "sleeping" entry, end
 the session.

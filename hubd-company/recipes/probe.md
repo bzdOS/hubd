@@ -32,5 +32,5 @@ Example:
   `kind=decision` or into the card, close the anomaly.
 - No answer for 2 weeks → the probe is silently withdrawn (never invent
   urgency) and not repeated in the same wording.
-- Delivery: owner queue (`hub_queue_send`) + copy the wording into the
-  chapter's "Questions".
+- Delivery: owner queue (`hub_queue_send`, `from` = who is asking) + copy the
+  wording into the chapter's "Questions".

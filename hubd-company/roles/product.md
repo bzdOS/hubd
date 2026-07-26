@@ -33,7 +33,7 @@ You own WHAT gets built and WHY. You write no code and no specs-for-code.
 
 ## Protocol
 
-Work arrives in `queues/product.queue.md`; you also act proactively — after
+Work arrives in your queue (`hub queue wait product`); you also act proactively — after
 draining the queue, produce your own block: hypotheses, analysis, risks, as
 files (not just replies). Daemon loop and journal format: see AGENTS.md.
 

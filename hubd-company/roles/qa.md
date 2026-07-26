@@ -31,10 +31,12 @@ criteria into executed test-cases with evidence.
 
 ## Protocol
 
-Work arrives in `queues/qa.queue.md`. Daemon loop: `hub queue wait qa` → on
+Work arrives in your queue. Daemon loop: `hub queue wait qa` → on
 work: read the spec in full → author and run the acceptance cases → report
-pass/fail with proof (`hub report ... -k done|broken`) → notify cto and product
-→ wait again. Three empty timeouts in a row → "sleeping" entry, end the session.
+pass/fail with proof (`hub report ... -k done|broken`) → deliver the verdict:
+`hub queue send cto "SPEC_X: N/M pass" --from qa` (and to product, if it
+changes the plan) → wait again. Three empty timeouts in a row → "sleeping"
+entry, end the session.
 Blocking question → journal entry with addressee + STOP.
 
 Start now: run the session start ritual from AGENTS.md, then drain your queue.
