@@ -90,7 +90,7 @@ export const slugify = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu
  * behind them. */
 const AUTHOR_REFUSED = new Set([
   'unknown', 'none', 'null', 'nil', 'n/a', 'na', 'agent', 'assistant', 'bot', 'model',
-  'user', 'root', 'cli', 'me', 'you', 'someone', 'anon', 'anonymous',
+  'user', 'root', 'cli', 'mcp', 'me', 'you', 'someone', 'anon', 'anonymous',
   'claude', 'sonnet', 'opus', 'haiku', 'gpt', 'chatgpt', 'codex', 'gemini', 'glm',
   'llama', 'mistral', 'qwen', 'deepseek', 'grok',
   'opencode', 'cursor', 'copilot', 'windsurf', 'antigravity', 'aider',

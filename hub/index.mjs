@@ -90,7 +90,7 @@ const TOOLS = [
     }, required: ['id', 'by'] } },
 
   { name: 'hub_brief',
-    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims, per-role queue depth with last-seen agent, and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
+    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'journal window, default 48' },
       staleDays: { type: 'integer', description: 'card considered stale after N days, default 7' },
@@ -189,8 +189,8 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'queue/role to deliver to, e.g. "zaika" or "owner"' },
       text: { type: 'string' },
-      from: { type: 'string', description: 'sender id, default "mcp"' },
-    }, required: ['role', 'text'] } },
+      from: { type: 'string', description: 'who is sending — the function you are performing, e.g. "dev-hubd" or "orchestrator". NOT which model you are, and NOT the target role. Required like every other write: the delivered block says "from <sender>" forever.' },
+    }, required: ['role', 'text', 'from'] } },
 
   { name: 'hub_queue_wait',
     description: 'Block until new content lands in <role>\'s queue (this node\'s file plus any mesh-synced peer files for that role), then return it — a real long-poll, not a snapshot you have to re-poll. Returns {changed:false} if nothing arrives within timeout. Local/stdio only (not available on the shared HTTP server). Use this instead of a sleep-and-recheck loop when waiting on an agent to report back via hub_queue_send.',
@@ -224,7 +224,9 @@ const DISPATCH = {
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
-  hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from || 'mcp', root: HUB }) }),
+  // from: required like every other author (was `|| 'mcp'` — a transport name, i.e. a
+  // placeholder); an omitted from is filled by the HUBD_AGENT floor in withAuthorFloor.
+  hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from, root: HUB }) }),
   // subscriber: resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown
   // client, and then the cursor stays shared per node exactly as before.
@@ -252,8 +254,9 @@ function toolsFor(mode) {
 // state is file-backed per agent name), only the auto-nudge is skipped there.
 let onboarded = false, whatsnewChecked = false;
 
-// Fill agent/by from HUBD_AGENT when the caller left them out. Both keys are filled
-// because tools disagree on which one they read, and an unread extra key is ignored.
+// Fill agent/by/from from HUBD_AGENT when the caller left them out. All three are
+// filled because tools disagree on which one they read (queue send reads `from`),
+// and an unread extra key is ignored.
 //
 // The floor carries a per-session suffix, because HUBD_AGENT lives in a server's
 // config — i.e. it is per MACHINE, and every session on that host would otherwise
@@ -291,7 +294,7 @@ function withAuthorFloor(args) {
   const floor = authorFloor();
   if (!floor) return args;
   const out = { ...args };
-  for (const k of ['agent', 'by']) if (out[k] == null || String(out[k]).trim() === '') out[k] = floor;
+  for (const k of ['agent', 'by', 'from']) if (out[k] == null || String(out[k]).trim() === '') out[k] = floor;
   return out;
 }
 

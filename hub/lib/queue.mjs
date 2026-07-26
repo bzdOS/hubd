@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation } from './core.mjs';
+import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -120,10 +120,16 @@ function nodeName() {
  *
  * @param {string} role
  * @param {string} text
- * @param {{ from?: string, root?: string, node?: string }} options
+ * @param {{ from: string, root?: string, node?: string }} options
  * @returns {string} path to the queue file
  */
-export function queueSend(role, text, { from = 'unknown', root, node } = {}) {
+export function queueSend(role, text, { from, root, node } = {}) {
+  // A queue block is a durable, mesh-synced write that says "from <sender>" forever —
+  // so the sender is held to the same rule as every other author. This used to default
+  // to 'unknown' (CLI) / 'mcp' (server): exactly the placeholders requireAuthor refuses
+  // everywhere else, on the one durable channel that skipped the rule. The MCP floor
+  // (HUBD_AGENT) fills an omitted `from` before it reaches here.
+  const sender = requireAuthor(from, 'from');
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   fs.mkdirSync(qdir, { recursive: true });
@@ -131,7 +137,7 @@ export function queueSend(role, text, { from = 'unknown', root, node } = {}) {
   const qfile = path.join(qdir, `${role}.${nd}.queue.md`);
 
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const entry = `\n## ${ts} · from ${from}\n${String(text).trim()}\n`;
+  const entry = `\n## ${ts} · from ${sender}\n${String(text).trim()}\n`;
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
@@ -405,12 +411,18 @@ export function queueSummaryForBrief({ root } = {}) {
   let presence = [];
   try { presence = loadPresence(); } catch {}
   const owners = new Set(ownerRoles());
+  const fanoutRoles = new Set(subscriberRoles(r));
 
   return [...roles].sort().map(role => {
-    const { pending, oldestWaiting } = peekQueueDepth(role, { root: r });
+    // A declared broadcast role is consumed through PER-READER cursors
+    // (.qstate/<subscriber>/) — nothing ever advances the shared cursor peekQueueDepth
+    // reads, so a byte count from it is a phantom backlog that only grows. Per-reader
+    // depth is not one number; report the role as fanout instead of a wrong count.
+    const fanout = fanoutRoles.has(role);
+    const { pending, oldestWaiting } = fanout ? { pending: null, oldestWaiting: null } : peekQueueDepth(role, { root: r });
     const forRole = presence.filter(p => p.role === role).sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
     const ageDays = oldestWaiting ? Math.floor((Date.now() - parseTs(oldestWaiting).getTime()) / 86400000) : null;
-    return { role, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null, isButton: owners.has(role), ageDays };
+    return { role, fanout, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null, isButton: owners.has(role), ageDays };
   }).filter(s => s.pending > 0 || s.lastSeen);
 }
 
@@ -425,6 +437,9 @@ export function queueSummaryForBrief({ root } = {}) {
  * @returns {{ count: number, oldestDays: number|null, items: Array }}
  */
 export function buttonsSummary(rows) {
+  // A fanout role carries pending:null (per-reader cursors, see queueSummaryForBrief),
+  // so `pending > 0` also keeps a broadcast owner role out of the rollup — the count
+  // would otherwise never clear.
   const items = (rows || []).filter(r => r.isButton && r.pending > 0);
   const count = items.reduce((n, r) => n + r.pending, 0);
   const oldestDays = items.length ? Math.max(...items.map(r => r.ageDays ?? 0)) : null;

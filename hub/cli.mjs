@@ -23,7 +23,7 @@ import {
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -132,7 +132,10 @@ function formatBrief(data, hours) {
     for (const q of data.queues) {
       const seen = q.lastSeen ? `agent last-seen ${q.lastSeen}` : 'no agent seen';
       const tag = q.isButton ? ' 🔘' : '';
-      lines.push(`  ${q.pending} queued for ${q.role}${tag}${q.oldestWaiting ? ` (oldest ${q.oldestWaiting})` : ''} — ${seen}`);
+      // A fanout role has no single pending count (per-reader cursors) — say so
+      // instead of printing the shared cursor's phantom backlog.
+      if (q.fanout) lines.push(`  broadcast ${q.role}${tag} (per-reader cursors) — ${seen}`);
+      else lines.push(`  ${q.pending} queued for ${q.role}${tag}${q.oldestWaiting ? ` (oldest ${q.oldestWaiting})` : ''} — ${seen}`);
     }
   }
   if (data.buttons && data.buttons.count > 0) {
@@ -177,7 +180,9 @@ Agents: read this on wake-up, write a handoff entry before stopping.
 
 const QUEUES_README_MD = `# queues/
 
-One file per role: \`<role>.queue.md\` — created on first send.
+One file per role PER HOST: \`<role>.<node>.queue.md\` — created on first send.
+Each machine appends only to its own file, so mesh-synced nodes never conflict.
+(The legacy shared \`<role>.queue.md\` is still read, never written.)
 
 ## Message block format
 
@@ -193,11 +198,18 @@ hub queue send <role> "<text>" --from <your-role>
 hub queue wait <role>
 \`\`\`
 
+## Delivery
+
+A role is a competing-worker queue by default: run ONE live \`hub queue wait\`
+per role — a message goes to exactly one reader. Roles listed in
+\`subscriber-roles.json\` (in the team root, next to this folder) broadcast
+instead: every waiting session keeps its own cursor and sees every message.
+
 ## State
 
-Read offsets live in \`.qstate/\` (one \`<role>.offset\` file per role).
+Read offsets live in \`.qstate/\` — one \`<file>.offset\` per queue file, plus
+per-subscriber cursors under \`.qstate/<subscriber>/\`.
 Do not commit \`.qstate/\` — it is local consumer state.
-Single-consumer contract: only one live "hub queue wait" per role at a time.
 `;
 
 const SPEC_TEMPLATE = `# SPEC_<name> — <one-line goal>
@@ -366,21 +378,28 @@ if (cmd === 'doctor') {
       console.log('');
       console.log('queues:');
       const nowMs = Date.now();
+      const fanoutRoles = new Set(subscriberRoles(teamRoot));
       for (const qf of qfiles) {
-        const role = qf.replace('.queue.md', '');
+        // Files are per-host: <role>.<node>.queue.md (legacy <role>.queue.md still read).
+        // The offset is keyed by the FULL filename (.qstate/<file>.offset — lib/queue.mjs
+        // offPath) and the waiter marker by the bare ROLE. Both used to be derived from
+        // filename-minus-suffix, i.e. read paths that never exist — doctor showed offset 0
+        // and pending = size on a fully-consumed queue, and never saw a live waiter.
+        const role = (qf.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/) || [, qf.replace('.queue.md', '')])[1];
         const qfull = path.join(qdir, qf);
         const sz = (() => { try { return fs.statSync(qfull).size; } catch { return 0; } })();
         const off = (() => {
-          try { return parseInt(fs.readFileSync(path.join(qstateDir, role + '.offset'), 'utf8').trim(), 10) || 0; }
+          try { return parseInt(fs.readFileSync(path.join(qstateDir, qf + '.offset'), 'utf8').trim(), 10) || 0; }
           catch { return 0; }
         })();
         const pending = Math.max(0, sz - off);
         const beyondSize = off > sz;
         if (beyondSize) warnings++;
-        let line = '  ' + role + ':  size ' + sz + 'B, offset ' + off + ', pending ' + pending + 'B';
+        let line = '  ' + qf + ':  size ' + sz + 'B, offset ' + off + ', pending ' + pending + 'B';
+        if (fanoutRoles.has(role)) line += '  (broadcast role — subscribers keep their own cursors under .qstate/<subscriber>/)';
         if (beyondSize) line += '  WARNING offset beyond file size (file truncated or recreated; offset will reset)';
 
-        // live waiter check
+        // live waiter check — the marker is per role, not per file
         const waiterFile = path.join(qstateDir, role + '.waiter');
         try {
           const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
@@ -400,7 +419,10 @@ if (cmd === 'doctor') {
   // roles vs queues coherence (informational): a role with no queue can't be sent work; a queue with no role is orphaned
   const roleNames = (() => { try { return fs.readdirSync(path.join(teamRoot, 'roles')).filter(f => f.endsWith('.md') && !f.startsWith('_')).map(f => f.replace('.md', '')); } catch { return []; } })();
   if (roleNames.length) {
-    const qNames = (() => { try { return fs.readdirSync(path.join(teamRoot, 'queues')).filter(f => f.endsWith('.queue.md')).map(f => f.replace('.queue.md', '')); } catch { return []; } })();
+    // Parse the ROLE out of per-host filenames (<role>.<node>.queue.md) — filename-minus-
+    // suffix would compare "worker.planck" against role files and flag every real queue
+    // as orphaned. Same regex as the queues section above; Set dedupes across nodes.
+    const qNames = (() => { try { return [...new Set(fs.readdirSync(path.join(teamRoot, 'queues')).filter(f => f.endsWith('.queue.md')).map(f => (f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/) || [, f.replace('.queue.md', '')])[1]))]; } catch { return []; } })();
     const rolesNoQueue = roleNames.filter(r => !qNames.includes(r));
     const queuesNoRole = qNames.filter(q => !roleNames.includes(q));
     if (rolesNoQueue.length || queuesNoRole.length) {
@@ -914,10 +936,13 @@ else if (cmd === 'queue') {
   if (sub === 'send') {
     const role = args[2];
     const text = args[3];
-    if (!role || !text) die('Usage: hub queue send <role> "<text>" [--from <who>]');
-    const from = getFlag('--from') || 'unknown';
-    const qfile = queueSend(role, text, { from: typeof from === 'string' ? from : 'unknown' });
-    console.log(`→ ${role}.queue.md delivered`);
+    if (!role || !text) die('Usage: hub queue send <role> "<text>" --from <who>');
+    // The sender is an author like any other write's (was `--from || 'unknown'`, the
+    // one durable channel that skipped the rule) — flag, or the HUBD_AGENT floor.
+    let qfile;
+    try { qfile = queueSend(role, text, { from: authorOrDie('--from') }); }
+    catch (e) { die(e.message); }
+    console.log(`→ ${path.basename(qfile)} delivered`);
     process.exit(0);
   } else if (sub === 'wait') {
     const role = args[2];
@@ -992,7 +1017,7 @@ else if (!cmd) {
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
     '  gc                               remove stale locks and old backups',
     '  install-hook [path]              git post-commit hook',
-    '  queue send <role> "<text>" [--from <who>]',
+    '  queue send <role> "<text>" --from <who>',
     '  queue wait <role> [--timeout <N>]',
     '  serve [-p 7777]                  read-only kanban dashboard',
   ].join('\n'));
