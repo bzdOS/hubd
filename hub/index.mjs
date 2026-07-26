@@ -220,7 +220,12 @@ const DISPATCH = {
   hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
-  hub_onboarding: () => runOnboarding(), hub_whatsnew: (a) => runWhatsNew({ ...a, session: sessionId() }), hub_inbox: runInbox, hub_trajectory: runTrajectory,
+  // session: over HTTP the process-derived session id is the SERVER's own, one value
+  // for every remote caller — keying whatsnew checkpoints on it would make the whole
+  // team share one "what did I miss". Null there; the agent label becomes the key.
+  hub_onboarding: () => runOnboarding(),
+  hub_whatsnew: (a) => runWhatsNew({ ...a, session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE }),
+  hub_inbox: runInbox, hub_trajectory: runTrajectory,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
@@ -275,6 +280,12 @@ let onboarded = false, whatsnewChecked = false;
 let floorCache;
 function authorFloor() {
   if (floorCache !== undefined) return floorCache;
+  // Over HTTP one process serves many agents (or tenants): HUBD_AGENT is the server
+  // owner's env, and the session suffix would derive from the server's own parent —
+  // one name for every caller, exactly the "one label, many sessions" collapse the
+  // floor exists to prevent. No floor there; HTTP callers say who they are
+  // explicitly (the tool schemas require it).
+  if (SERVE_MODE === 'http') return (floorCache = '');
   const base = (process.env.HUBD_AGENT || '').trim();
   if (!base) return (floorCache = '');
   // The floor is held to the same rule as an argument, or it would launder a refused
@@ -298,14 +309,17 @@ function withAuthorFloor(args) {
   return out;
 }
 
-// One line, once per process: the count and where the list is. An upgrade can require
-// something outside the code — a variable in this client's config, a role declared in
-// the hub — and nothing used to say so; the agent found out by having a call rejected,
-// or never. Deliberately not the list itself: a dump on every tool result is noise,
-// and noise is how a notice stops being read.
-let envNudgeLine;
+// One line: the count and where the list is. An upgrade can require something outside
+// the code — a variable in this client's config, a role declared in the hub — and
+// nothing used to say so; the agent found out by having a call rejected, or never.
+// Deliberately not the list itself: a dump on every tool result is noise, and noise is
+// how a notice stops being read. Recomputed at most every 5 minutes (was: once per
+// process) — a long-lived server otherwise kept nagging about a condition fixed an
+// hour ago, and stayed silent about one that appeared after startup, until a restart.
+let envNudgeLine = null, envNudgeAt = 0;
 function envNudge() {
-  if (envNudgeLine !== undefined) return envNudgeLine;
+  if (envNudgeAt && Date.now() - envNudgeAt < 5 * 60000) return envNudgeLine;
+  envNudgeAt = Date.now();
   let n = null;
   try {
     const env = envChecks();
@@ -491,6 +505,11 @@ const httpPortArg = (() => {
   if (process.env.HUBD_HTTP_PORT) return parseInt(process.env.HUBD_HTTP_PORT, 10);
   return null;
 })();
+
+// Which transport this process serves — set once, before any request is handled.
+// The author floor and the environment checks read it: both describe THIS process's
+// env, which is only the caller's environment on a local (stdio) transport.
+const SERVE_MODE = httpPortArg ? 'http' : 'stdio';
 
 try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
 if (httpPortArg) serveHttp(httpPortArg); else serveStdio();

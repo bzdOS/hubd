@@ -82,11 +82,19 @@ intake for agents, over the network.
 
 ## What changes in HTTP mode
 
-- **`hub_sync` is disabled.** It reads an arbitrary filesystem path and runs
-  `git` on the host — safe locally, a hole on a shared server. Every other tool
-  (tasks, journal, status, search, brief, claims, cards, resources, graph) is
-  available.
-- Every other tool behaves exactly as over stdio — the transport is the only
+- **`hub_sync`, `hub_queue_wait` and `hub_queue_wait_all` are disabled.**
+  `hub_sync` reads an arbitrary filesystem path and runs `git` on the host —
+  safe locally, a hole on a shared server. The waits hold a connection open for
+  minutes — a resource-exhaustion vector there. `hub_queue_send` still works
+  (delivery is files); consumers wait on a machine that has the hub locally.
+- **No `HUBD_AGENT` floor.** The floor names whoever configured the server —
+  over HTTP that is the operator, not any of the many callers, so it does not
+  apply: every caller passes `agent` / `by` / `from` explicitly (the tool
+  schemas require them). For the same reason `hub_whatsnew` checkpoints key on
+  the agent name, and the `environment` list never reports the server's own
+  env to a remote caller.
+- Every other tool (tasks, journal, status, search, brief, claims, cards,
+  resources, graph) behaves exactly as over stdio — the transport is the only
   difference.
 
 ## Environment
