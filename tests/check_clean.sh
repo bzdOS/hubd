@@ -11,7 +11,7 @@
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-python3 - <<'PY'
+python3 - <<'PY' || exit 1
 import subprocess, sys, re
 
 # ASCII denylist (case-insensitive). Latin transliterations of private terms.
@@ -52,3 +52,7 @@ if fails:
     sys.exit(1)
 print("check_clean PASS - tracked files and git log are clean.")
 PY
+
+# 3) hubd-company ships snapshots of root prompt files; a stale copy teaches
+#    agents an outdated protocol, which is worse than none.
+node scripts/sync-templates.mjs --check || exit 1

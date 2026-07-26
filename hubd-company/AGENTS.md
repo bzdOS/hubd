@@ -49,6 +49,10 @@ route rote work to runner. Keep just the core chain if you don't need them.
 4. **queues/** — addressed delivery (`queue send`, `queue wait`). A queue carries
    short assignments or links to spec files, not essays.
 
+Every write names its author: journal entries carry the sender, and
+`hub queue send` requires `--from`. A queue role is a mailbox — the author is
+whoever is at it (details and refused placeholder names: HUBD.md).
+
 ## Session start ritual (every agent, in order)
 
 1. Read this file.
@@ -56,6 +60,8 @@ route rote work to runner. Keep just the core chain if you don't need them.
 3. Read the top of `INBOX.md` (last ~5 entries).
 4. Taking a spec? Read the spec file IN FULL, then claim it in the journal:
    `taking SPEC_X · claim: <files I will touch> · until <time>`.
+5. hubd connected? `hub_whatsnew` (MCP) or `hub doctor` — protocol changes and
+   environment items don't show up in the files alone.
 
 ## Session end ritual
 
@@ -87,14 +93,18 @@ Topic: <SPEC_X / question / status>. Status: <taken / done / blocked / question>
 
 ## Daemon mode: queues and patient waiting
 
-Every role has a queue: `queues/<role>.queue.md`.
+Every role has a queue — on disk one file per role PER HOST,
+`queues/<role>.<node>.queue.md`, created on first send (the legacy shared
+`<role>.queue.md` is still read, never written).
 
-- **Send:** `hub queue send dev "Take SPEC_X.md" --from cto`
+- **Send:** `hub queue send dev "Take SPEC_X.md" --from cto` — `--from` is
+  required: a delivered block says "from <sender>" forever.
 - **Wait:** `hub queue wait dev` — blocks until new lines arrive (printed, exit 0)
   or timeout (exit 2). Read position is tracked; nothing is delivered twice.
 
 **The loop:** start ritual → drain your queue → wait → on work: do it → report →
-journal → wait again. After **3 empty timeouts in a row**: journal entry
+journal → `hub heartbeat <you> --role <role>` (so presence shows who is at this
+mailbox) → wait again. After **3 empty timeouts in a row**: journal entry
 "sleeping, wake me with a send" and END the session — don't burn tokens idling.
 
 Routes: OWNER → anyone; product → cto; cto → dev, product; dev → cto.

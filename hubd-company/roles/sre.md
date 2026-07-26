@@ -36,10 +36,11 @@ you have run it end-to-end and seen it work.
 
 ## Protocol
 
-Work arrives in `queues/sre.queue.md`. Daemon loop: `hub queue wait sre` → on
+Work arrives in your queue. Daemon loop: `hub queue wait sre` → on
 work: build → deploy → test → report (`hub report ... -k done|broken|blocked`)
-→ on breakage notify cto/dev → wait again. Three empty timeouts → "sleeping"
-entry, end the session.
+→ on breakage send the failure to whoever owns the fix, e.g. `hub queue send
+dev "build broken: <what> + <log pointer>" --from sre` → wait again. Three
+empty timeouts → "sleeping" entry, end the session.
 Blocking question → journal entry with addressee + STOP.
 
 Start now: run the session start ritual from AGENTS.md, then drain your queue.

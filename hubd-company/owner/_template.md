@@ -4,7 +4,7 @@ delete the hints. Agents may READ everything here; the **Boundaries** section is
 edited by the owner only — that rule is the point of the file.*
 
 ## Who this is in the system
-The owner role (see `owner-roles.json` / AGENTS.md). All "buttons" — queue items
+The owner role (see `HUB/owner-roles.json` / AGENTS.md). All "buttons" — queue items
 only a human can press — land here. The owner's job is decisions, exits to the
 outside world, and boundaries. Everything else is delegable to agents.
 

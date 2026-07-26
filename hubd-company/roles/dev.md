@@ -29,11 +29,12 @@ to make: questions go to the journal, never guesses into code.
 
 ## Protocol
 
-Work arrives in `queues/dev.queue.md`. Daemon loop: `hub queue wait dev` → on
+Work arrives in your queue. Daemon loop: `hub queue wait dev` → on
 work: read the spec in full → claim in the journal → implement → run the
-spec's tests → `## Report` in the spec file → journal entry → notify cto for
-acceptance → `hub queue wait dev` again. Three empty timeouts → "sleeping"
-entry, end session.
+spec's tests → `## Report` in the spec file → journal entry → hand off for
+acceptance: `hub queue send cto "SPEC_X ready for acceptance" --from dev` →
+`hub queue wait dev` again. Three empty timeouts → "sleeping" entry, end
+session.
 Blocked or unclear → journal entry with addressee + STOP on that spec.
 
 Start now: run the session start ritual from AGENTS.md, then drain your queue.

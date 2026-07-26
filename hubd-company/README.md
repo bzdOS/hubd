@@ -28,7 +28,7 @@ roles/           onboarding docs — paste one into a fresh session to hire
 queues/          per-role task queues (agents block on them, then work)
 recipes/         procedures any agent can run: triage, inventory, chronicle, probe
 scripts/         behavior_metrics.mjs — numbers from the journal, no input needed
-prompts/         wire-up blocks for every surface (MCP and no-MCP alike)
+prompts/         wire-up blocks for every agent surface (synced from the hubd repo)
 HARVEST.md       extract projects/tasks/decisions from any dialog, two words
 examples/        what a real working day looks like in the journal
 ```
@@ -72,7 +72,8 @@ Three ways content enters the company without anyone typing cards by hand:
 - **Harvest a dialog** (`HARVEST.md`) — end any working chat with one prompt;
   projects, tasks and decisions land in the base.
 - **Inventory a machine** (`recipes/inventory.md`) — point an agent at a
-  server; get host → service cards with risks as tasks. Re-run = drift report.
+  server; get resource cards (host → services → endpoints) with typed edges
+  and risks as tasks. Re-run = drift report.
 - **Triage a pile** (`recipes/triage.md`) — meeting notes, brain dumps,
   email threads → deduplicated tasks with owners.
 
