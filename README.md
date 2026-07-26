@@ -89,7 +89,7 @@ is a folder you own. They are two separate things — and that is the whole poin
 
 - **Code** — the npm package. Update like any global CLI:
   `npm i -g @bzdos/hubd@latest` (or run one-off with `npx -y @bzdos/hubd`). A new
-  version ships the engine; it never touches your data.
+  version ships the engine ([changelog](CHANGELOG.md)); it never touches your data.
 - **Data** — `HUBD_DIR` (default `~/.hubd`): plain markdown + JSONL, yours to keep.
 - **Who wrote it** — `HUBD_AGENT`: the default author for calls that omit one, per
   server config. Set it in every client and on every host; a required field with no
