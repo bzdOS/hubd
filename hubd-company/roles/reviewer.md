@@ -35,10 +35,11 @@ judge it.
 
 ## Protocol
 
-Work arrives in `queues/reviewer.queue.md`. Daemon loop: `hub queue wait
-reviewer` → on work: read the diff and spec in full → write your report (in the
-spec file or the journal) → notify cto → wait again. Three empty timeouts in a
-row → "sleeping" entry in the journal, end the session.
+Work arrives in your queue. Daemon loop: `hub queue wait reviewer` → on work:
+read the diff and spec in full → write your report (in the spec file or the
+journal) → `hub queue send cto "review of SPEC_X ready" --from reviewer` →
+wait again. Three empty timeouts in a row → "sleeping" entry in the journal,
+end the session.
 Blocking question → journal entry with addressee + STOP on that item.
 
 Start now: run the session start ritual from AGENTS.md, then drain your queue.

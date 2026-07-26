@@ -5,6 +5,10 @@ kanban draws a lane for it, briefs summarize it. One markdown file per project.
 
 ## Card format
 
+The sections are the engine's own scaffold (`hub card` creates the same set;
+headings localise in ONE file, `HUB/sections.json`, which also drives report
+routing — so cards and reports never drift apart):
+
 ```markdown
 ---
 status: active        # active | paused | done
@@ -14,15 +18,44 @@ related: []           # [[links]] to other cards
 ---
 # project-slug
 
-Goal     one sentence: what done looks like and for whom.
-Now      3–6 line digest: current state, what changed last.
-Links    repo, prod URL, key docs.
-Next     the one thing that should happen next.
-Risks    anything alarming, one line each.
+## Digest
+
+3–6 lines: what this is, current state, what changed last.
+
+## Next step
+
+the one next action — who, by when
+
+## Gates
+
+kill / scale criteria — the honest metric to judge by, not vanity
+
+## Metrics
+
+current honest readings
+
+## Market
+
+who it is for; is paying demand proven?
+
+## Facts & hypotheses
+
+what is known (fact) vs what is being tested (hypothesis)
+
+## Decisions
+
+append-only log: decision · why · date
+
+## Communication
+
+what has gone out externally vs what is still queued
 ```
 
-Keep digests short and current — a card that lies is worse than no card.
-Agents update `Now` on handoff (`hub_sync` or by editing the file).
+Keep the digest short and current — a card that lies is worse than no card.
+Agents update it on handoff (`hub card <slug> -m "<digest>"` or by editing the
+file); a structured `hub report` routes its DECIDE:/FACT:/COMM:/NEXT: lines
+into the matching sections, creating a section if the card lacks it. Sections
+you add by hand are preserved verbatim.
 
 ## Where cards come from
 
@@ -30,5 +63,6 @@ Agents update `Now` on handoff (`hub_sync` or by editing the file).
 - **From a dialog:** run `recipes/categorize.md` or the Harvest Protocol
   (`HARVEST.md`) — agents extract projects from conversations.
 - **From a machine:** run `recipes/inventory.md` against a server — it writes
-  host and service cards here with `parent`/`related` links, and risks as tasks.
-  Re-run it monthly; the diff is your drift report.
+  hosts, services and endpoints as resource cards with typed edges (risks land
+  as tasks), and `hub graph` draws the topology. Re-run it monthly; the diff
+  is your drift report.

@@ -29,8 +29,8 @@ You own the funnel and the numbers: metrics, PRDs, copy, distribution cadence.
 
 ## Protocol
 
-Work arrives in `queues/pm.queue.md`. Daemon loop and journal format: see
-AGENTS.md. Blocking question → journal with addressee + STOP.
+Work arrives in your queue (`hub queue wait pm`). Daemon loop and journal
+format: see AGENTS.md. Blocking question → journal with addressee + STOP.
 
 Start now: run the session start ritual from AGENTS.md, then drain your queue.
 
