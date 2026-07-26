@@ -54,8 +54,19 @@ The npm package ships: `hub/` (binaries + lib), `prompts/`, `docs/`, `README.md`
 Connect your agent (any MCP client):
 
 ```bash
-claude mcp add --scope user hubd -- npx -y @bzdos/hubd
+claude mcp add --scope user hubd --env HUBD_AGENT=dev-<yourproject> -- npx -y @bzdos/hubd
 ```
+
+`HUBD_AGENT` is worth setting on day one. Every write to the journal names its
+author, and the field is required — an append-only log with an unattributed write
+in it stays unattributable forever. `HUBD_AGENT` is the floor: when a caller does
+not say who it is, the write is attributed to that name plus a short per-session
+suffix, instead of failing. Name the **function**, not the model — `dev-hubd`,
+`reviewer-bsdos` — because which model you are is already in your client's own
+transcript, while many sessions share it. Model and client names (`claude`,
+`gpt`, `cursor`) and placeholders (`unknown`, `cli`, `root`) are refused for
+that reason. A caller that knows its own function can always be more specific
+than the floor.
 
 No MCP? No problem — every model that can read and write files can join:
 paste the matching block from [`prompts/`](prompts/) (Claude Code, Cursor,
@@ -75,6 +86,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   `npm i -g @bzdos/hubd@latest` (or run one-off with `npx -y @bzdos/hubd`). A new
   version ships the engine; it never touches your data.
 - **Data** — `HUBD_DIR` (default `~/.hubd`): plain markdown + JSONL, yours to keep.
+- **Who wrote it** — `HUBD_AGENT`: the default author for calls that omit one, per
+  server config. Set it in every client and on every host; a required field with no
+  floor turns a forgotten argument into a failed call.
 - **Several machines?** Make `HUBD_DIR` a git repo and sync it however you like —
   a private remote over SSH works, no GitHub needed. Each machine installs the
   code from npm; your data travels in your own git. Two separate tracks: code from

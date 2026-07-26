@@ -745,5 +745,58 @@ ok(core.runRelease({ project: 'p', area: 'a', agent: 'dev-hubd' }).removed === 1
   'author: release is unaffected — its agent is a selector, not an author');
 fs.rmSync(AU, { recursive: true, force: true });
 
+// ── the floor must not make two sessions one author ───────────────────────────
+// HUBD_AGENT lives in a server's config, so it is per MACHINE. Used verbatim it would
+// give every session on a host one name — the same "one label, many sessions" flaw the
+// refusal list exists to prevent, and worse than cosmetic: runClaim reads an equal name
+// as the same holder and reports NO conflict, so the soft lock would stop locking.
+// Driven over the real transport, because the floor only exists there.
+const floorCall = (sess, args, tool = 'hub_task_add') => {
+  const reqs = [
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }),
+    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool, arguments: args } }),
+  ].join('\n') + '\n';
+  const env = { ...process.env, HUBD_DIR: FL, HUBD_TEAM_DIR: FL, HUBD_AGENT: 'dev-hubd', HUBD_SESSION: sess };
+  let out = '';
+  try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env, timeout: 15000 }); }
+  catch (e) { out = (e.stdout || ''); }
+  for (const l of out.split('\n')) {
+    try { const m = JSON.parse(l); if (m.id === 2) return JSON.parse(m.result.content[0].text); } catch {}
+  }
+  return null;
+};
+const FL = mktmp();
+const flA = floorCall('one', { project: 'p', text: 'from session one' });
+const flB = floorCall('two', { project: 'p', text: 'from session two' });
+ok(flA && /^dev-hubd-/.test(flA.task.by), `floor: an omitted author becomes HUBD_AGENT, not an error (got ${flA && flA.task.by})`);
+ok(flA && flB && flA.task.by !== flB.task.by,
+  `floor: two sessions under one HUBD_AGENT are DIFFERENT authors (${flA && flA.task.by} vs ${flB && flB.task.by})`);
+ok(floorCall('one', { project: 'p', text: 'again' }).task.by === flA.task.by,
+  'floor: the same session keeps one author across calls');
+// The consequence that matters: the soft lock still detects a second holder.
+ok(floorCall('one', { project: 'p', area: 'shared' }, 'hub_claim').warning === undefined,
+  'floor: first claim on an area is clean');
+ok(/already claimed by/.test(floorCall('two', { project: 'p', area: 'shared' }, 'hub_claim').warning || ''),
+  'floor: a second session claiming the same area IS warned — the lock still locks');
+// An explicit author is never rewritten by the floor.
+ok(floorCall('one', { project: 'p', text: 'mine', by: 'reviewer-hubd' }).task.by === 'reviewer-hubd',
+  'floor: an explicit author wins over the floor untouched');
+
+// A floor is held to the same rule as an argument: with a per-session suffix appended,
+// HUBD_AGENT=claude would arrive as "claude-<session>" and sail through the check while
+// still naming a model. A misconfigured floor is no floor.
+const badFloor = (() => {
+  const reqs = [
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }),
+    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'hub_task_add', arguments: { project: 'p', text: 'x' } } }),
+  ].join('\n') + '\n';
+  const env = { ...process.env, HUBD_DIR: FL, HUBD_TEAM_DIR: FL, HUBD_AGENT: 'claude', HUBD_SESSION: 'three' };
+  try { return execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env, timeout: 15000 }); }
+  catch (e) { return (e.stdout || ''); }
+})();
+ok(/by required/.test(badFloor),
+  'floor: a refused name as HUBD_AGENT is not laundered by the session suffix');
+fs.rmSync(FL, { recursive: true, force: true });
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

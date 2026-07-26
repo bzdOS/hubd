@@ -18,6 +18,24 @@ Report SUBSTANCE, never play-by-play. "I'm on it / in progress" is a **claim**, 
 report. A trivial step is **nothing**. Spamming the journal with progress is the failure
 mode this table exists to prevent.
 
+### Say who you are — every write needs an author
+
+`agent` / `by` is **required** on everything that writes: report, sync, card set, task
+add, task update, resource set, claim, heartbeat, whatsnew. The journal is append-only,
+so a write that lands unattributed stays unattributable forever.
+
+Name **the function you are performing** — `dev-hubd`, `reviewer-bsdos`,
+`orchestrator`. Not which model you are: that is recorded in your client's own
+transcript, and many sessions share one model, so it identifies nobody. Not a queue
+role either — a role is a mailbox (`hub queue wait`), the author is who is at it. Bare
+model or client names (`claude`, `opus`, `gpt`, `cursor`, `opencode`) and placeholders
+(`unknown`, `cli`, `root`, `agent`) are refused, and the error will say so.
+
+If a call of yours is rejected for this, do not retry with a placeholder — pick the
+name that says what you are doing. Whoever configured your server may have set
+`HUBD_AGENT` as a floor, in which case an omitted author becomes that name plus a
+per-session suffix rather than an error; being explicit still beats the floor.
+
 ## Reporting — structured, at session end
 
 File ONE `hub report` of prefix-tagged lines; each routes into the project card. Many
