@@ -84,7 +84,9 @@ decisions/facts = many lines (one per line):
   most confident about. `DONE: 12, 13, 14` closes all three the instant the
   report lands; one line of habit (copying a batch of ids across from a
   similar report) can close something that isn't done yet. Verify, don't
-  trust your own claim any more than you'd trust another agent's.
+  trust your own claim any more than you'd trust another agent's. An id that
+  matches no task comes back in the summary as `doneMissed` — it closed
+  NOTHING; recheck the id, that task is still open.
 
 ## Cards & sections
 
