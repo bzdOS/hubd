@@ -13,7 +13,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence, runTrajectory,
+  runHeartbeat, runPresence, runTrajectory, requireAuthor,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
@@ -254,8 +254,41 @@ let onboarded = false, whatsnewChecked = false;
 
 // Fill agent/by from HUBD_AGENT when the caller left them out. Both keys are filled
 // because tools disagree on which one they read, and an unread extra key is ignored.
+//
+// The floor carries a per-session suffix, because HUBD_AGENT lives in a server's
+// config — i.e. it is per MACHINE, and every session on that host would otherwise
+// write under one name. That reproduces exactly the flaw requireAuthor refuses in
+// "claude": one label many sessions, nothing to tell them apart afterwards. It also
+// breaks two tools mechanically, because there the author is not a label but an
+// identity key: runClaim treats an equal name as the same holder and reports no
+// conflict, so two sessions would both "hold" one area and the soft lock would stop
+// locking; and presence keeps one file per name, last write wins, so a fleet of
+// sessions would collapse into a single record.
+//
+// The suffix is short and derived from the same process-resolved session id the queue
+// cursors use, so it is stable for a client's whole life and survives a server
+// respawn. An explicit argument is never touched — a caller that names its own
+// function still writes exactly that.
+let floorCache;
+function authorFloor() {
+  if (floorCache !== undefined) return floorCache;
+  const base = (process.env.HUBD_AGENT || '').trim();
+  if (!base) return (floorCache = '');
+  // The floor is held to the same rule as an argument, or it would launder a refused
+  // name into an accepted one: HUBD_AGENT=claude would arrive as "claude-<session>",
+  // which passes the check while still naming a model. A misconfigured floor is no
+  // floor — callers then get the error that explains what to put there.
+  try { requireAuthor(base, 'HUBD_AGENT'); }
+  catch (e) { process.stderr.write('warning: HUBD_AGENT ignored — ' + e.message + '\n'); return (floorCache = ''); }
+  const sess = sessionId();
+  if (!sess) return (floorCache = base);
+  let h = 0;
+  for (const ch of sess) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
+  return (floorCache = `${base}-${h.toString(36).padStart(4, '0').slice(-4)}`);
+}
+
 function withAuthorFloor(args) {
-  const floor = (process.env.HUBD_AGENT || '').trim();
+  const floor = authorFloor();
   if (!floor) return args;
   const out = { ...args };
   for (const k of ['agent', 'by']) if (out[k] == null || String(out[k]).trim() === '') out[k] = floor;
