@@ -558,6 +558,186 @@ export function ownerRoles() {
 // anything writes to them — mesh-sync.sh runs a plain `git add -A`, so an
 // un-ignored runtime file becomes real (and noisy) mesh-synced history the
 // first sync after it appears.
+/* ── Environment checks: how an agent learns its environment needs work ──
+ * An upgrade can require something OUTSIDE the code — a variable in a client's
+ * config, a role declared in the hub, a protocol section worth re-reading. Nothing
+ * told the agent. It found out by having a call rejected, or never.
+ *
+ * Three rules this is built on, each one a lesson from getting it wrong:
+ *
+ * NEVER THROW. A required field with no floor turns a forgotten argument into a
+ * failed call; an environment check that blocks work would do the same at a larger
+ * scale. Checks report, they do not gate.
+ *
+ * SAY WHO CAN FIX IT. `actor` is the axis that keeps this from becoming nagging
+ * about things the agent cannot touch: 'agent' (write a file in the hub — do it),
+ * 'agent+restart' (edit a client config, takes effect on restart), 'owner' (a human
+ * on another host). For 'owner' the remedy SUGGESTS filing a button; this code never
+ * writes to anyone's queue by itself.
+ *
+ * A CONDITION GATES ITSELF. There is deliberately no "acknowledged in version X"
+ * bookkeeping: a check fires while its detector is true and goes quiet when it is
+ * fixed. Version-gating would suppress a live problem because the node had already
+ * seen that version — the state file would end up asserting things about the world
+ * that stopped being true.
+ *
+ * State lives in .env-state.json: node-local, gitignored, NEVER mesh-synced. Three
+ * machines have three different environments, so one shared file would be wrong for
+ * all of them at once. Same class as tasks.json and HUBD.md. */
+const envStateFile = () => path.join(HUB, '.env-state.json');
+function readEnvState() { try { return JSON.parse(fs.readFileSync(envStateFile(), 'utf8')); } catch { return {}; } }
+function writeEnvState(obj) { try { atomicWrite(envStateFile(), JSON.stringify(obj, null, 1)); } catch {} }
+
+/**
+ * Hash the protocol per SECTION, so an upgrade can say what actually moved instead
+ * of "the file changed". Headings (## / ###) delimit; the preamble is excluded
+ * because HUBD.md carries a generated version stamp there and a stamp is not a
+ * change. Bodies are trimmed, so a reflowed blank line is not a change either.
+ */
+export function sectionHashes(text) {
+  const secs = {};
+  let title = null, buf = [];
+  for (const line of String(text || '').split('\n')) {
+    if (/^#{2,3}\s+/.test(line)) {
+      if (title) secs[title] = buf.join('\n').trim();
+      title = line.replace(/^#+\s*/, '').trim(); buf = [];
+    } else buf.push(line);
+  }
+  if (title) secs[title] = buf.join('\n').trim();
+  const out = {};
+  for (const [k, v] of Object.entries(secs)) out[k] = crypto.createHash('sha1').update(v).digest('hex').slice(0, 10);
+  return out;
+}
+
+function shippedProtocol() {
+  try { return fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
+  catch { return null; }
+}
+
+/**
+ * Reconcile the stored protocol baseline with the installed one and return what an
+ * agent should re-read: {from, titles} or null.
+ *
+ * The diff is against the last baseline stored for THIS NODE, not against the file
+ * on disk. ensureProtocol runs on every CLI invocation, so the first `hub` call after
+ * an upgrade already rewrote HUBD.md — a session starting a minute later would see no
+ * difference at all. Storing the baseline also means deleting HUBD.md loses nothing.
+ *
+ * A first-ever run announces nothing: with no baseline there is no change, and
+ * claiming "everything is new" on a fresh hub would be noise.
+ *
+ * If nobody acknowledged the previous announcement, its titles are carried forward
+ * and `from` stays at the older version — so an agent that missed two upgrades hears
+ * about both, not just the last.
+ */
+export function protocolChanges() {
+  const body = shippedProtocol();
+  if (!body) return null;
+  const cur = sectionHashes(body);
+  const st = readEnvState();
+  const p = st.protocol || {};
+  if (p.version === VERSION && p.sections) {
+    return (p.changed && p.changed.length) ? { from: p.changedFrom || null, titles: p.changed } : null;
+  }
+  const titles = [];
+  if (p.sections) {
+    for (const [t, h] of Object.entries(cur)) if (p.sections[t] !== h) titles.push(t);
+    for (const t of Object.keys(p.sections)) if (!(t in cur)) titles.push(t + ' (removed)');
+  }
+  const ackedPrev = Object.values(st.sessions || {}).some(s => s && s.protocolAcked === p.version);
+  const carry = (!ackedPrev && Array.isArray(p.changed)) ? p.changed : [];
+  const merged = [...new Set([...carry, ...titles])];
+  st.protocol = {
+    version: VERSION, sections: cur, changed: merged,
+    changedFrom: (!ackedPrev && p.changedFrom) ? p.changedFrom : (p.version || null),
+  };
+  writeEnvState(st);
+  return merged.length ? { from: st.protocol.changedFrom, titles: merged } : null;
+}
+
+/** Record something the code noticed in passing, for a check to interpret later. */
+export function recordEnvObservation(kind, value) {
+  try {
+    const st = readEnvState();
+    st.observations = st.observations || {};
+    const cur = st.observations[kind] || { values: [] };
+    if (value && !cur.values.includes(value)) cur.values.push(value);
+    else if (value) return;                       // already known — no write
+    cur.at = new Date().toISOString();
+    st.observations[kind] = cur;
+    writeEnvState(st);
+  } catch {}
+}
+
+/** Drop an observation that no longer holds, so its check goes quiet by itself. */
+export function clearEnvObservation(kind, value) {
+  try {
+    const st = readEnvState();
+    const cur = (st.observations || {})[kind];
+    if (!cur || !cur.values.includes(value)) return;
+    cur.values = cur.values.filter(v => v !== value);
+    writeEnvState(st);
+  } catch {}
+}
+
+/**
+ * What this environment needs, most severe first. Pure read — no side effects, so a
+ * caller may run it as often as it likes. Capped, because a list nobody finishes
+ * reading is a list nobody reads: three items, and the count tells the rest.
+ */
+export function envChecks({ session } = {}) {
+  const out = [];
+  const floor = (process.env.HUBD_AGENT || '').trim();
+  if (!floor) {
+    out.push({
+      id: 'author-floor', severity: 'high', actor: 'agent+restart',
+      what: 'HUBD_AGENT is not set on this server, so any write that omits an author fails instead of falling back to a name.',
+      remedy: 'Add HUBD_AGENT to this hubd server\'s env in the client config (e.g. --env HUBD_AGENT=dev-<project>), naming the function you perform, not the model. Takes effect when the client restarts the server. Until then, pass agent/by explicitly on every write.',
+    });
+  } else {
+    try { requireAuthor(floor, 'HUBD_AGENT'); }
+    catch { out.push({
+      id: 'author-floor-refused', severity: 'high', actor: 'agent+restart',
+      what: `HUBD_AGENT is "${floor}", which names a model, a client or a placeholder, so it is ignored and writes without an author fail.`,
+      remedy: 'Replace it with the function being performed — "dev-hubd", "reviewer-bsdos" — in the client config.',
+    }); }
+  }
+
+  const st = readEnvState();
+  const conflicted = ((st.observations || {})['cursor-conflict'] || {}).values || [];
+  if (conflicted.length) {
+    out.push({
+      id: 'queue-fanout-undeclared', severity: 'med', actor: 'agent',
+      what: `Two sessions were seen waiting on one cursor for: ${conflicted.join(', ')}. A message goes to exactly one of them, so the other never sees it.`,
+      remedy: `If those roles are meant to broadcast, add them to subscriber-roles.json in the team root and every waiter gets its own cursor. If they are work queues, this is working as intended — run a single waiter and the notice goes away.`,
+    });
+  }
+
+  const pc = protocolChanges();
+  if (pc && !(session && ((st.sessions || {})[session] || {}).protocolAcked === VERSION)) {
+    out.push({
+      id: 'protocol-changed', severity: 'low', actor: 'agent',
+      what: `The hub protocol moved${pc.from ? ' from v' + pc.from : ''} to v${VERSION}. Changed section(s): ${pc.titles.join(' · ')}.`,
+      remedy: 'Re-read those sections of HUBD.md in the hub root if they touch what you are doing. hubd does not judge which ones matter to you — you know what you are working on.',
+    });
+  }
+
+  const rank = { high: 0, med: 1, low: 2 };
+  out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return { items: out.slice(0, 3), total: out.length };
+}
+
+/** Remember that this session was told about the protocol change, so it is told once. */
+export function ackEnvNotices(session) {
+  if (!session) return;
+  try {
+    const st = readEnvState();
+    st.sessions = st.sessions || {};
+    st.sessions[session] = { ...(st.sessions[session] || {}), protocolAcked: VERSION, at: new Date().toISOString() };
+    writeEnvState(st);
+  } catch {}
+}
+
 function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
   let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
@@ -567,7 +747,10 @@ function ensureGitignored(entry) {
 }
 
 export function ensureProtocol(force) {
-  try { fs.mkdirSync(HUB, { recursive: true }); ensureGitignored('HUBD.md'); ensureGitignored('presence/'); } catch {}
+  try {
+    fs.mkdirSync(HUB, { recursive: true });
+    ensureGitignored('HUBD.md'); ensureGitignored('presence/'); ensureGitignored('.env-state.json');
+  } catch {}
   let body;
   try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
   catch { return { ok: false }; }
@@ -1221,11 +1404,18 @@ export function runWhatsNew(a = {}) {
   const entries = journalSince(hours);
   checkins[key] = new Date().toISOString();
   writeCheckins(checkins);
+  // "What did I miss" is the right place for "and what does this environment need":
+  // it is the tool a returning agent calls, and the protocol tells it to. Acknowledged
+  // per session, so a protocol change is announced once and not on every check-in —
+  // and the OTHER session on this host still hears it.
+  const env = envChecks({ session: a.session });
+  ackEnvNotices(a.session);
   return {
     agent: author, since: lastSeen, firstCheckin: !lastSeen,
     windowHours: Math.round(hours * 10) / 10,
     newEntries: entries.length,
     entries: entries.slice(0, 50),
+    ...(env.items.length ? { environment: env.items, environmentTotal: env.total } : {}),
   };
 }
 
