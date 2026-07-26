@@ -18,6 +18,28 @@ Report SUBSTANCE, never play-by-play. "I'm on it / in progress" is a **claim**, 
 report. A trivial step is **nothing**. Spamming the journal with progress is the failure
 mode this table exists to prevent.
 
+### When the hub tells you your environment needs work
+
+An upgrade can require something that is **not** in the code: a variable in your
+client's config, a role declared in the hub, a section of this file worth re-reading.
+`hub_whatsnew` returns those as `environment: [...]`, and any tool result may carry a
+one-line `⚠ environment:` notice pointing at it. `hub doctor` shows the same list to a
+human.
+
+Each item says **who can fix it** — act on that, do not guess:
+
+| `actor` | means | what you do |
+| --- | --- | --- |
+| `agent` | a file in the hub | just do it, then the item disappears by itself |
+| `agent+restart` | a client config | make the edit and say it needs a restart to take effect; work explicitly in the meantime |
+| `owner` | a human, often on another host | say so. File a button ONLY if it blocks you — hubd never writes to the owner's queue on its own |
+
+No item ever blocks a call. Nothing is "acknowledged" either: an item is gone when the
+condition is gone, so if you keep seeing one, it is still true.
+
+When a protocol section changes you get its title, not a verdict on whether it matters.
+hubd does not know what you are working on — you do. Re-read the ones that touch it.
+
 ### Say who you are — every write needs an author
 
 `agent` / `by` is **required** on everything that writes: report, sync, card set, task

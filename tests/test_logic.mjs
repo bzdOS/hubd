@@ -798,5 +798,102 @@ ok(/by required/.test(badFloor),
   'floor: a refused name as HUBD_AGENT is not laundered by the session suffix');
 fs.rmSync(FL, { recursive: true, force: true });
 
+// ── environment checks: an upgrade can need something OUTSIDE the code ─────────
+// Nothing used to say so, so an agent found out by having a call rejected, or never.
+const EV = mktmp();
+core.setHubBase(EV);
+const prevFloorEnv = process.env.HUBD_AGENT;
+
+// Sections, not "the file changed": an upgrade names what moved so the agent can
+// decide whether it cares. Bodies are trimmed, or a reflowed blank line would count.
+const secA = core.sectionHashes('## One\n\nbody one\n\n### Two\n\nbody two\n');
+const secB = core.sectionHashes('## One\n\nbody one\n\n\n### Two\n\nbody two CHANGED\n');
+ok(Object.keys(secA).join(',') === 'One,Two', `sectionHashes: headings become keys (got ${Object.keys(secA)})`);
+ok(secA.One === secB.One, 'sectionHashes: an extra blank line is not a change');
+ok(secA.Two !== secB.Two, 'sectionHashes: a changed body is a change');
+ok(!('(preamble)' in core.sectionHashes('stamp line\n\n## One\n\nbody\n')),
+  'sectionHashes: text before the first heading is excluded — a version stamp is not a change');
+
+// A first-ever run announces nothing: with no baseline there is no change, and
+// "everything is new" on a fresh hub is noise.
+ok(core.protocolChanges() === null, 'protocolChanges: no baseline → nothing to announce');
+const esf = path.join(EV, '.env-state.json');
+const seedBaseline = (mutateTitle, version) => {
+  const real = core.sectionHashes(fs.readFileSync(path.join(REPO, 'prompts/protocol.md'), 'utf8'));
+  real[mutateTitle] = 'stale00000';
+  fs.writeFileSync(esf, JSON.stringify({ protocol: { version, sections: real, changed: [], changedFrom: null } }, null, 1));
+};
+const firstTitle = Object.keys(core.sectionHashes(fs.readFileSync(path.join(REPO, 'prompts/protocol.md'), 'utf8')))[0];
+seedBaseline(firstTitle, '0.0.1');
+const pc1 = core.protocolChanges();
+ok(pc1 && pc1.titles.length === 1 && pc1.titles[0] === firstTitle,
+  `protocolChanges: names the section that moved (got ${pc1 && JSON.stringify(pc1.titles)})`);
+ok(pc1.from === '0.0.1', `protocolChanges: reports the version it moved from (got ${pc1.from})`);
+// Recomputed from stored state, not from the file on disk — so a later session still
+// hears it even though ensureProtocol already rewrote HUBD.md.
+ok(JSON.stringify(core.protocolChanges()) === JSON.stringify(pc1), 'protocolChanges: stable once stored, not recomputed away');
+// Nobody acknowledged it, so a second upgrade carries the earlier titles forward.
+const st1 = JSON.parse(fs.readFileSync(esf, 'utf8'));
+st1.protocol.version = '0.0.2';
+st1.protocol.sections[Object.keys(st1.protocol.sections)[1]] = 'stale11111';
+fs.writeFileSync(esf, JSON.stringify(st1, null, 1));
+const pc2 = core.protocolChanges();
+ok(pc2.titles.length === 2 && pc2.titles.includes(firstTitle),
+  `protocolChanges: an unacknowledged announcement is carried forward, not replaced (got ${JSON.stringify(pc2.titles)})`);
+ok(pc2.from === '0.0.1', `protocolChanges: "from" stays at the oldest unheard version (got ${pc2.from})`);
+
+// Told once per session — and the OTHER session on this host still hears it.
+const has = (r, id) => r.items.some(i => i.id === id);
+ok(has(core.envChecks({ session: 's1' }), 'protocol-changed'), 'envChecks: a session is told about the protocol change');
+core.ackEnvNotices('s1');
+ok(!has(core.envChecks({ session: 's1' }), 'protocol-changed'), 'envChecks: and not told twice');
+ok(has(core.envChecks({ session: 's2' }), 'protocol-changed'), 'envChecks: a second session on the same host is still told');
+
+// The floor check reads the environment it actually runs in.
+delete process.env.HUBD_AGENT;
+ok(has(core.envChecks(), 'author-floor'), 'envChecks: an unset HUBD_AGENT is reported');
+process.env.HUBD_AGENT = 'claude';
+ok(has(core.envChecks(), 'author-floor-refused'), 'envChecks: a refused HUBD_AGENT is reported as such');
+process.env.HUBD_AGENT = 'dev-test';
+ok(!has(core.envChecks(), 'author-floor') && !has(core.envChecks(), 'author-floor-refused'),
+  'envChecks: a usable floor reports nothing — a condition gates itself');
+// Actor is the axis that keeps this from nagging about what the agent cannot touch.
+delete process.env.HUBD_AGENT;
+ok(core.envChecks().items.find(i => i.id === 'author-floor').actor === 'agent+restart',
+  'envChecks: every item says who can fix it');
+ok(core.envChecks().items.every(i => i.what && i.remedy), 'envChecks: every item carries a remedy, not just a complaint');
+ok(core.envChecks().items.length <= 3, 'envChecks: capped — a list nobody finishes is a list nobody reads');
+
+// The queue conflict: stderr is invisible to an MCP client, so the warning used to be
+// unread. It is recorded, surfaces as a check, and clears itself once the role is
+// declared. Driven for real — a live competing waiter is this process's parent.
+const QC = mktmp();
+fs.mkdirSync(path.join(QC, 'queues'), { recursive: true });
+fs.mkdirSync(path.join(QC, '.qstate'), { recursive: true });
+fs.writeFileSync(path.join(QC, '.qstate', 'busy.waiter'),
+  JSON.stringify({ pid: process.ppid, since: new Date().toISOString() }));
+await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+ok(has(core.envChecks(), 'queue-fanout-undeclared'),
+  'envChecks: two waiters on one cursor become an actionable item, not a stderr line nobody sees');
+fs.writeFileSync(path.join(QC, 'subscriber-roles.json'), JSON.stringify(['busy']));
+await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+ok(!has(core.envChecks(), 'queue-fanout-undeclared'),
+  'envChecks: declaring the role clears it — no acknowledgement needed, the condition is gone');
+fs.rmSync(QC, { recursive: true, force: true });
+
+// gc sweeps session records by the same rule as cursor dirs.
+const stG = JSON.parse(fs.readFileSync(esf, 'utf8'));
+stG.sessions = { fresh: { protocolAcked: '9.9.9', at: new Date().toISOString() },
+                 old: { protocolAcked: '9.9.9', at: new Date(Date.now() - 30 * 86400000).toISOString() } };
+fs.writeFileSync(esf, JSON.stringify(stG, null, 1));
+run('gc', { HUBD_DIR: EV, HUBD_TEAM_DIR: EV });
+const stAfter = JSON.parse(fs.readFileSync(esf, 'utf8'));
+ok(!stAfter.sessions.old && !!stAfter.sessions.fresh,
+  `gc: sweeps a stale session record and keeps a fresh one (left ${Object.keys(stAfter.sessions)})`);
+
+if (prevFloorEnv === undefined) delete process.env.HUBD_AGENT; else process.env.HUBD_AGENT = prevFloorEnv;
+fs.rmSync(EV, { recursive: true, force: true });
+core.setHubBase(T0);
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

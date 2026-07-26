@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, loadPresence, ownerRoles, parseTs } from './core.mjs';
+import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -164,8 +164,12 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
   // identity to be a subscriber WITH, and the role is declared a fan-out role. Absent
   // either, the cursor stays where it has always been — shared per node — so competing
   // workers keep at-most-once delivery and existing offsets keep working.
-  const fanout = !!subscriber && subscriberRoles(r).includes(role);
+  const declared = subscriberRoles(r).includes(role);
+  const fanout = !!subscriber && declared;
   const stateDir = fanout ? path.join(r, '.qstate', subscriber) : path.join(r, '.qstate');
+  // Declaring the role is the fix for the conflict recorded below; once declared, stop
+  // reporting it. Cheap: clearEnvObservation only writes when it actually holds one.
+  if (declared) clearEnvObservation('cursor-conflict', role);
 
   fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
@@ -203,6 +207,9 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
       // Sharing a cursor is the conflict, not sharing a role: distinct subscribers
       // have their own cursor namespace and never reach this warning.
       process.stderr.write(`warning: another waiter (pid ${w.pid}) shares this cursor — one live consumer per cursor\n`);
+      // stderr is invisible to an MCP client, so this used to be a warning nobody read.
+      // Record it: an env check turns it into "declare the role, or run one waiter".
+      if (!declared) recordEnvObservation('cursor-conflict', role);
     }
   } catch { /* no marker or unreadable — fine */ }
 

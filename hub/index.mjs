@@ -13,7 +13,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence, runTrajectory, requireAuthor,
+  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
@@ -295,11 +295,29 @@ function withAuthorFloor(args) {
   return out;
 }
 
+// One line, once per process: the count and where the list is. An upgrade can require
+// something outside the code — a variable in this client's config, a role declared in
+// the hub — and nothing used to say so; the agent found out by having a call rejected,
+// or never. Deliberately not the list itself: a dump on every tool result is noise,
+// and noise is how a notice stops being read.
+let envNudgeLine;
+function envNudge() {
+  if (envNudgeLine !== undefined) return envNudgeLine;
+  let n = null;
+  try {
+    const env = envChecks();
+    if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — hub_whatsnew lists them with what to do.`;
+  } catch {}
+  return (envNudgeLine = n);
+}
+
 function nudges(name) {
   if (name === 'hub_onboarding' || name === 'hub_whatsnew') return [];
   const n = [];
   if (!onboarded) n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' });
   if (!whatsnewChecked) n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' });
+  const e = envNudge();
+  if (e) n.push({ type: 'text', text: e });
   return n;
 }
 
