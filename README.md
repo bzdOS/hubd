@@ -94,6 +94,15 @@ is a folder you own. They are two separate things — and that is the whole poin
   code from npm; your data travels in your own git. Two separate tracks: code from
   the package, data in your folder. Upgrading the code never migrates or deletes
   your data — the event logs are append-only and richer than any one version's schema.
+- **What an upgrade needs from you** — sometimes a new version wants something outside
+  the code: a variable in a client's config, a role declared in the hub, a protocol
+  section worth re-reading. hubd works that out and tells the agents itself:
+  `hub_whatsnew` returns an `environment` list, every item saying what is wrong, what
+  fixes it, and **who can** — the agent, the agent plus a client restart, or you. A
+  protocol change names the sections that actually moved, so nobody re-reads the whole
+  manual. `hub doctor` shows the same list to a human. Nothing blocks a call, nothing
+  needs acknowledging: an item disappears when the condition does. Per-node state in
+  `.env-state.json`, never mesh-synced — three machines have three environments.
 
 ## How it works
 

@@ -21,7 +21,7 @@ import {
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
-  runHeartbeat, runPresence,
+  runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 
@@ -463,6 +463,27 @@ if (cmd === 'doctor') {
     }
   }
 
+  // environment: what an upgrade needs that is NOT in the code — a variable in a
+  // client config, a role declared in the hub, a protocol section worth re-reading.
+  // Same list the agents get from hub_whatsnew; doctor is where a human sees it.
+  {
+    const env = envChecks();
+    if (env.total) {
+      console.log('');
+      console.log('environment: ' + env.total + ' item(s)');
+      for (const it of env.items) {
+        // Only count what is fixable IN THE HUB as a doctor warning. doctor inspects the
+        // hub; an unset variable in some MCP client's config is not the hub's fault and
+        // must not fail `hub doctor` in a shell or a CI step that never uses that client.
+        // It is still printed, and it is still HIGH in the agent-facing list.
+        if (it.actor === 'agent') warnings++;
+        console.log(`  ${it.severity.toUpperCase().padEnd(4)} [${it.actor}] ${it.what}`);
+        console.log(`       → ${it.remedy}`);
+      }
+      if (env.total > env.items.length) console.log(`  … and ${env.total - env.items.length} more`);
+    }
+  }
+
   console.log('');
   if (warnings) {
     console.log('doctor: ' + warnings + ' warning(s)');
@@ -802,6 +823,23 @@ if (cmd === 'gc') {
     return n;
   };
   try { removed += sweepCursors(path.join(resolveQueueRoot(), '.qstate'), ''); } catch {}
+  // Session records in .env-state.json accumulate the same way cursor dirs do — one per
+  // session that was told about a protocol change — so they go by the same rule.
+  try {
+    const esf = path.join(HUB, '.env-state.json');
+    const st = JSON.parse(fs.readFileSync(esf, 'utf8'));
+    const keep = {}, before = Object.keys(st.sessions || {}).length;
+    for (const [sid, rec] of Object.entries(st.sessions || {})) {
+      const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
+      if (at && nowMs - at <= 7 * 86400000) keep[sid] = rec;
+    }
+    if (before !== Object.keys(keep).length) {
+      st.sessions = keep;
+      fs.writeFileSync(esf, JSON.stringify(st, null, 1));
+      const n = before - Object.keys(keep).length;
+      console.log('  removed ' + n + ' stale session record(s)'); removed += n;
+    }
+  } catch {}
   console.log(removed ? `gc: removed ${removed} item(s)` : 'gc: nothing to clean');
   process.exit(0);
 }
