@@ -23,7 +23,9 @@
     "LICENSE",
     "HARVEST.md",
     "docs/self-hosting.md",
-    "docs/interop.md"
+    "docs/interop.md",
+    "docs/quickstart.md",
+    "docs/recipes.md"
   ],
   "engines": {
     "node": ">=18"
