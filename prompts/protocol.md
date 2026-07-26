@@ -43,7 +43,8 @@ hubd does not know what you are working on — you do. Re-read the ones that tou
 ### Say who you are — every write needs an author
 
 `agent` / `by` is **required** on everything that writes: report, sync, card set, task
-add, task update, resource set, claim, heartbeat, whatsnew. The journal is append-only,
+add, task update, resource set, claim, heartbeat, whatsnew — and `from` on queue send,
+because a delivered block says "from <sender>" forever. The journal is append-only,
 so a write that lands unattributed stays unattributable forever.
 
 Name **the function you are performing** — `dev-hubd`, `reviewer-bsdos`,

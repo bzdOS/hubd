@@ -652,6 +652,26 @@ ok(sharedOffsets.length === 1,
   `cursor: shared offset stays a plain file in .qstate, so existing offsets keep working (found ${sharedOffsets.join(',') || 'none'})`);
 fs.rmSync(QR, { recursive: true, force: true });
 
+// A fanout role's depth is per-reader: subscribers advance their own cursors, nothing
+// ever advances the shared one peekQueueDepth reads — so a byte count from it is a
+// phantom backlog that only grows, and a fanout OWNER role would show "buttons
+// waiting" forever. The brief must report the role as fanout, not a wrong number.
+const FB = mktmp();
+core.setHubBase(FB);
+fs.mkdirSync(path.join(FB, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(FB, 'subscriber-roles.json'), JSON.stringify(['announce']));
+fs.writeFileSync(path.join(FB, 'owner-roles.json'), JSON.stringify(['announce']));
+qSend('announce', 'to everybody', { from: 'test', root: FB });
+await qWait('announce', { timeout: 1, root: FB, subscriber: 'sess-a' });   // fully consumed by a subscriber
+core.runHeartbeat({ agent: 'agent-a', role: 'announce' });
+const fbRows = queueLib.queueSummaryForBrief({ root: FB });
+const fbRow = fbRows.find(r => r.role === 'announce');
+ok(fbRow && fbRow.fanout === true && fbRow.pending === null,
+  `brief: a declared fanout role reports fanout:true, pending:null — not the shared cursor's phantom count (got ${JSON.stringify(fbRow)})`);
+ok(queueLib.buttonsSummary(fbRows).count === 0,
+  'brief: a fanout owner role never counts as buttons waiting — that count could never clear');
+fs.rmSync(FB, { recursive: true, force: true });
+
 // sessionId must never depend on the model: explicit env wins, else the parent process
 // (stable across a server respawn), else null so the caller keeps the node cursor.
 const prevSess = process.env.HUBD_SESSION;
@@ -737,6 +757,11 @@ ok(/agent required/.test(throwsA(() => core.runSync({ path: AU })) || ''), 'auth
 ok(/by required/.test(throwsA(() => core.runCardSet({ project: 'p', digest: 'd' })) || ''), 'author: card-set requires it');
 ok(/by required/.test(throwsA(() => core.runReport({ project: 'p', text: 'note x' })) || ''), 'author: report requires it');
 ok(/agent required/.test(throwsA(() => core.runWhatsNew({})) || ''), 'author: whatsnew requires it');
+// The queue was the one durable write channel that skipped the rule: `from` defaulted
+// to 'unknown' (CLI) / 'mcp' (server) — the very placeholders refused everywhere else.
+ok(/from required/.test(throwsA(() => qSend('r', 'x', { root: AU })) || ''), 'author: queue send requires a sender');
+ok(/names a model, a client or a placeholder/.test(throwsA(() => qSend('r', 'x', { from: 'mcp', root: AU })) || ''),
+  'author: "mcp" (the old server default) is refused as a sender');
 
 // Releasing a lock is selected BY agent, not attributed to one — it must stay optional
 // or the "release by id" form becomes uncallable.
@@ -781,6 +806,11 @@ ok(/already claimed by/.test(floorCall('two', { project: 'p', area: 'shared' }, 
 // An explicit author is never rewritten by the floor.
 ok(floorCall('one', { project: 'p', text: 'mine', by: 'reviewer-hubd' }).task.by === 'reviewer-hubd',
   'floor: an explicit author wins over the floor untouched');
+// The floor reaches the queue too: hub_queue_send's `from` is an author like any other.
+const flQ = floorCall('one', { role: 'flr', text: 'queued by the floor' }, 'hub_queue_send');
+const flQText = flQ && flQ.file ? fs.readFileSync(flQ.file, 'utf8') : '';
+ok(/· from dev-hubd-/.test(flQText),
+  `floor: an omitted queue sender becomes the floor, not "mcp" (got ${(flQText.match(/from [^\n]+/) || ['nothing'])[0]})`);
 
 // A floor is held to the same rule as an argument: with a per-session suffix appended,
 // HUBD_AGENT=claude would arrive as "claude-<session>" and sail through the check while

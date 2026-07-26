@@ -64,6 +64,10 @@ check "init: AGENTS.md created" $?
 check "init: INBOX.md created" $?
 [ -f "$TMP/team/queues/README.md" ]
 check "init: queues/README.md created" $?
+# The template must describe the CURRENT queue model (per-host files, fan-out roles),
+# not the pre-0.4 one — a fresh team root otherwise gets a manual contradicting HUBD.md.
+grep -q "subscriber-roles.json" "$TMP/team/queues/README.md"
+check "init: queues/README.md documents fan-out (subscriber-roles.json)" $?
 [ -f "$TMP/team/.gitignore" ]
 check "init: .gitignore created" $?
 
@@ -129,9 +133,11 @@ rm -f "$HUBD_DIR/tasks.json.lock"
 # ── Case 6: doctor offset-beyond-size ──────────────────────────────────────
 
 mkdir -p "$TMP/team/.qstate" "$TMP/team/queues"
-# Create a minimal queue file so doctor enumerates it, then set an oversized offset
+# Create a minimal queue file so doctor enumerates it, then set an oversized offset.
+# The offset is keyed by the FULL filename (.qstate/<file>.offset) — the path the
+# real consumer (lib/queue.mjs) writes, and the one doctor must read.
 : > "$TMP/team/queues/smoketest.queue.md"
-printf '999999' > "$TMP/team/.qstate/smoketest.offset"
+printf '999999' > "$TMP/team/.qstate/smoketest.queue.md.offset"
 
 OUT6=$(cd "$TMP/team" && $CLI doctor 2>&1)
 RC6=$?
@@ -142,7 +148,7 @@ check "doctor offset-beyond-size: non-zero exit" $?
 echo "$OUT6" | grep -qi "offset beyond file size"
 check "doctor offset-beyond-size: output mentions offset warning" $?
 
-rm -f "$TMP/team/.qstate/smoketest.offset" "$TMP/team/queues/smoketest.queue.md"
+rm -f "$TMP/team/.qstate/smoketest.queue.md.offset" "$TMP/team/queues/smoketest.queue.md"
 
 # ── Case 7: queue roundtrip ─────────────────────────────────────────────────
 
@@ -162,6 +168,33 @@ RC7W2=$?
 check "queue second wait: exit 2" $?
 echo "$OUT7W2" | grep -qi "no_changes"
 check "queue second wait: output contains NO_CHANGES" $?
+
+# ── Case 7b: doctor reads the REAL offset and sees a live waiter ────────────
+# The wait above consumed everything; doctor must show pending 0B — the
+# filename-minus-suffix bug read a never-written path and showed the full size.
+OUT7D=$(cd "$TMP/team" && $CLI doctor 2>&1)
+echo "$OUT7D" | grep -q "smoketest.*pending 0B"
+check "doctor queue: consumed queue shows pending 0B" $?
+
+$CLI queue wait smoketest --timeout 6 >/dev/null 2>&1 &
+WPID=$!
+BG_PIDS="$BG_PIDS $WPID"
+sleep 1
+OUT7L=$(cd "$TMP/team" && $CLI doctor 2>&1)
+echo "$OUT7L" | grep -q "live waiter: pid $WPID"
+check "doctor queue: live waiter shown with its pid" $?
+kill "$WPID" 2>/dev/null || true
+wait "$WPID" 2>/dev/null
+
+# ── Case 7c: the sender is an author — no --from, no HUBD_AGENT -> refused ──
+OUT7A=$(HUBD_AGENT= $CLI queue send smoketest "no author" 2>&1)
+RC7A=$?
+[ "$RC7A" -ne 0 ]
+check "queue send: refused without --from / HUBD_AGENT" $?
+echo "$OUT7A" | grep -q "from required"
+check "queue send: error names the missing flag" $?
+HUBD_AGENT=dev-smoke $CLI queue send smoketest "floored" >/dev/null 2>&1
+check "queue send: HUBD_AGENT floors an omitted --from" $?
 
 # ── Case 8: waiter guard ────────────────────────────────────────────────────
 
