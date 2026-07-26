@@ -51,15 +51,20 @@ hub serve            # read-only kanban on localhost
 The npm package ships: `hub/` (binaries + lib), `prompts/`, `docs/`, `README.md`,
 `LICENSE`, and `HARVEST.md`. It does NOT include `hubd-company/`.
 
+New here? Two guides: the [quick start](docs/quickstart.md) walks the whole
+path — install → team folder → first agent → queues — and
+[recipes](docs/recipes.md) gives complete scenarios (a standing worker, an
+orchestrator fleet, owner buttons, harvesting a chat, infra topology).
+
 Connect your agent (any MCP client):
 
 ```bash
 claude mcp add --scope user hubd --env HUBD_AGENT=dev-<yourproject> -- npx -y @bzdos/hubd
 ```
 
-`HUBD_AGENT` is worth setting on day one. Every write to the journal names its
-author, and the field is required — an append-only log with an unattributed write
-in it stays unattributable forever. `HUBD_AGENT` is the floor: when a caller does
+`HUBD_AGENT` is worth setting on day one. Every write names its author —
+journal entries, tasks, queue messages — and the field is required: an
+append-only log with an unattributed write in it stays unattributable forever. `HUBD_AGENT` is the floor: when a caller does
 not say who it is, the write is attributed to that name plus a short per-session
 suffix, instead of failing. Name the **function**, not the model — `dev-hubd`,
 `reviewer-bsdos` — because which model you are is already in your client's own
