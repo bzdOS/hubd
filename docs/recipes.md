@@ -234,7 +234,20 @@ hub inbox               # what needs a DECISION: blocked, overdue, unassigned, s
 hub brief --hours 168   # the week's journal, stale cards, queue depths
 hub plan                # dependency layers: what unlocks what, where the cycles are
 hub log myproject -n 30 # one project's trail when something looks off
+hub doctor              # base, locks, and queues nobody has ever consumed
 ```
+
+Two lines in that output are about the hub lying to you rather than about the
+work. `⚠Nd behind` in `hub status` means a card stopped following its own
+project — re-sync that digest. Ghost queues in `hub doctor` mean old experiment
+roles are still counted as pending work; `hub queue gc` lists them and
+`--apply` archives them into `queues/archive/` (moved, never deleted). Left
+alone, both quietly inflate every number you are about to read.
+
+A weekly review is also the moment to keep the task vocabulary honest:
+`hub task retag` shows tasks whose `cat` is not one of technical / communicative
+/ decision / chore, and moves them into tags on `--apply` — so the by-type
+numbers in the chronicle stay countable.
 
 Then edit `AGENTS.md` — the rules, not the agents — with whatever the week
 taught you. For the narrative layer on top (an agent-written weekly chronicle

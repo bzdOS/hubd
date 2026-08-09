@@ -82,6 +82,14 @@ hub status          # every project, one line each
 hub get myproject   # one project in depth: card + journal + locks
 ```
 
+A `⚠Nd behind` next to a project means its card has fallen behind its own
+journal: the work moved, the digest didn't. Re-sync that one with a fresh
+digest. (A project that has simply gone quiet is never flagged.)
+
+Over MCP, long answers are capped to fit an agent's context and say what they
+left out in `truncated` — narrow the question, page with `limit`/`offset`, or
+pass `full: true`. The CLI is never capped; a terminal has `grep`.
+
 ## 5. The daily loop
 
 The channel table is the one thing worth memorising (it is the #1 mistake):
@@ -139,6 +147,18 @@ two sessions on one role split work instead of duplicating it. A role listed in
 its own cursor and sees every message. Decisions only a human can make go to an
 owner queue (list those role names in `HUB/owner-roles.json`) and `hub brief`
 rolls them up as "N buttons waiting".
+
+Experiments leave roles behind — a queue file is created by the first send and
+never removed, so old test roles keep showing pending work for a consumer that
+never existed. `hub brief` marks those `neverRead`, and `hub queue gc` cleans up:
+
+```bash
+hub queue gc              # dry run — what has never been consumed and is >30d old
+hub queue gc --apply      # move them to queues/archive/ (moved, never deleted)
+```
+
+An owner's own queue is never collected: a human reads it as a file, so having
+no cursor is normal there.
 
 ## 8. A second machine
 

@@ -86,7 +86,10 @@ decisions/facts = many lines (one per line):
   similar report) can close something that isn't done yet. Verify, don't
   trust your own claim any more than you'd trust another agent's. An id that
   matches no task comes back in the summary as `doneMissed` — it closed
-  NOTHING; recheck the id, that task is still open.
+  NOTHING; recheck the id, that task is still open. An id someone had ALREADY
+  closed comes back as `doneAlready`: the second close is a no-op, not a
+  second closing, so nothing double-counts — but it does mean two sessions
+  believed they owned that task, which is worth a look.
 
 ## Cards & sections
 
@@ -99,6 +102,29 @@ and don't know its slug? `hub_context({cwd:"<your absolute cwd>"})` resolves it 
 you (`.hubd` marker file → a card's recorded sync path → a folder-name guess, flagged
 `guessed:true` when it's not certain) and returns the digest in one call — use it
 instead of a manual `hub_get` when you already have a cwd.
+
+A card can be fresh and still lie. `hub status` / `hub brief` flag one whose digest has
+fallen behind its OWN journal (`digestStale`, `⚠Nd behind`): the project kept moving and
+the card didn't. That flag is a request to re-sync the digest, not a bug — and it never
+fires on a project that has simply gone quiet.
+
+## Tasks — one closed vocabulary, one open one
+
+`cat` is the closed one: **technical | communicative | decision | chore**. Every by-type
+number in the hub is counted on it, so it stays four values wide. Pass anything else and
+it is kept as a **tag**, not silently accepted as a category — tags are the open
+vocabulary, use them freely (`--tag ci --tag release`). `hub task retag` shows which
+existing tasks carry an off-enum category and moves them into tags on `--apply`.
+
+## Reading a big hub without drowning
+
+Every list-shaped tool answer is capped by default so it fits your context, and it TELLS
+you what it left out: look for `truncated` (`{key: {shown, hidden}}`) and the `hint`.
+There is nothing hidden from you — narrow the question (`project`, `hours`, `status`),
+page through it (`hub_task_list` takes `limit`/`offset` and always reports the full
+`total`), or pass `full: true` to get everything. The journal is trimmed before anything
+else, because recent chatter compresses best; open tasks and pending buttons are the last
+to go. The CLI is never capped — a terminal has `grep`.
 
 ## Resources & the relationship graph
 
@@ -118,6 +144,12 @@ sessions waiting on one role split the work rather than both doing it. A role na
 session has its own cursor and sees every message. `hub queue wait '*'` taps EVERY role
 at once (own offset — does not consume any role's messages), for a supervisor watching
 the fleet; several supervisors may tap at the same time without competing.
+
+A queue file is created by the first send and never disappears on its own, so an
+experiment leaves a role behind that nobody ever listens on. Those show up in `hub_brief`
+marked `neverRead` — messages waiting for a consumer that has never existed are not
+backlog, don't work them off. `hub queue gc` lists them (dry by default) and `--apply`
+moves them into `queues/archive/` — moved, never deleted, and never a human owner's queue.
 
 ### Buttons — an owner-decision queue is not an agent queue
 A task that needs OWNER to act outward (send, post, pay, call) splits in two: prep (an

@@ -417,6 +417,14 @@ export function queueSummaryForBrief({ root } = {}) {
   const owners = new Set(ownerRoles());
   const fanoutRoles = new Set(subscriberRoles(r));
 
+  // Which roles were ever consumed at all — the difference between "N waiting for someone who
+  // is away" and "N waiting for someone who has never existed". Both used to print identically.
+  const everRead = new Set();
+  for (const f of files) {
+    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
+    if (m && queueCursorSeen(r, f)) everRead.add(m[1]);
+  }
+
   return [...roles].sort().map(role => {
     // A declared broadcast role is consumed through PER-READER cursors
     // (.qstate/<subscriber>/) — nothing ever advances the shared cursor peekQueueDepth
@@ -426,8 +434,106 @@ export function queueSummaryForBrief({ root } = {}) {
     const { pending, oldestWaiting } = fanout ? { pending: null, oldestWaiting: null } : peekQueueDepth(role, { root: r });
     const forRole = presence.filter(p => p.role === role).sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
     const ageDays = oldestWaiting ? Math.floor((Date.now() - parseTs(oldestWaiting).getTime()) / 86400000) : null;
-    return { role, fanout, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null, isButton: owners.has(role), ageDays };
+    return { role, fanout, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null,
+      isButton: owners.has(role), ageDays, neverRead: !everRead.has(role) && !owners.has(role) };
   }).filter(s => s.pending > 0 || s.lastSeen);
+}
+
+/* ── Queue lifecycle ──
+ * A queue file is born on the first send to a role and never dies. In this hub that left 43
+ * files against ONE live cursor: 42 roles nobody had ever listened on — mostly one-off
+ * experiments (revtest, difftest, teamtest, zaika8fix) — still counted as pending work by
+ * hub_brief and read as fleet load by anyone glancing at it. Backlog addressed to a consumer
+ * that never existed is not backlog, and a number that only ever grows teaches its reader to
+ * ignore the number.
+ *
+ * "Never read" is the discriminator, not age. A cursor under .qstate means somebody really did
+ * consume this file through hub_queue_wait. Two things deliberately do NOT count as reading:
+ * a tap (.qstate/__watchall__/) — an orchestrator watching the fleet was never that role's
+ * consumer — and a HUMAN owner role, whose queue is read as a file by a person, so a missing
+ * cursor there is normal rather than evidence of a ghost.
+ *
+ * Nothing is deleted. A ghost is MOVED to queues/archive/, so every message stays readable and
+ * the move is one reviewable rename in the mesh's git history instead of a silent loss. */
+export function queueCursorSeen(root, file) {
+  const st = path.join(root, '.qstate');
+  if (fs.existsSync(path.join(st, `${file}.offset`))) return true;
+  try {
+    for (const d of fs.readdirSync(st, { withFileTypes: true })) {
+      if (!d.isDirectory() || d.name === '__watchall__') continue;   // a tap is not a consumer
+      if (fs.existsSync(path.join(st, d.name, `${file}.offset`))) return true;
+    }
+  } catch {}
+  return false;
+}
+
+/**
+ * Every queue file with what decides its fate: was it ever consumed, is anyone present for
+ * its role, how old is its newest message. Pure read — never moves or writes anything.
+ *
+ * @param {{ root?: string, days?: number }} options
+ * @returns {Array<{file, role, node, bytes, messages, newest, ageDays, read, lastSeen, isOwner, ghost}>}
+ */
+export function queueInventory({ root, days = 30 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
+  let presence = [];
+  try { presence = loadPresence(); } catch {}
+  const owners = new Set(ownerRoles());
+  const nowMs = Date.now();
+
+  return files.map(f => {
+    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
+    const role = m ? m[1] : f.replace(/\.queue\.md$/, '');
+    const node = m ? (m[2] || null) : null;
+    const full = path.join(qdir, f);
+    let text = '', bytes = 0, mtimeMs = nowMs;
+    try { text = fs.readFileSync(full, 'utf8'); } catch {}
+    try { const st = fs.statSync(full); bytes = st.size; mtimeMs = st.mtimeMs; } catch {}
+    const heads = text.match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || [];
+    const stamps = heads.map(h => h.slice(3, 19));
+    const newest = stamps.length ? stamps.reduce((x, y) => (x > y ? x : y)) : null;
+    // An empty file (queueWait creates one for its own node before anything is sent) has no
+    // message to date, so fall back to the file's own age — otherwise it is ageless and never
+    // collectable, which is the wrong answer for the emptiest kind of ghost.
+    const ageDays = Math.floor((nowMs - (newest ? parseTs(newest).getTime() : mtimeMs)) / 86400000);
+    const lastSeen = presence.filter(p => p.role === role).map(p => p.last_seen).sort().pop() || null;
+    const read = queueCursorSeen(r, f);
+    const isOwner = owners.has(role);
+    return { file: f, role, node, bytes, messages: heads.length, newest, ageDays, read, lastSeen, isOwner,
+      ghost: !read && !lastSeen && !isOwner && ageDays >= days };
+  });
+}
+
+/**
+ * Archive the ghost queues. Dry by default — prints what it WOULD move, so the first run is
+ * always safe to type. `apply` moves them into queues/archive/, never unlinks.
+ *
+ * @param {{ root?: string, days?: number, apply?: boolean }} options
+ */
+export function runQueueGc({ root, days = 30, apply = false } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const inv = queueInventory({ root: r, days });
+  const ghosts = inv.filter(x => x.ghost);
+  // Report what the age threshold is holding back, never just what it caught: in this hub 42
+  // of 43 files had never been consumed but only 5 were older than the default 30 days, and a
+  // bare "5 ghosts" would read as "the other 38 are fine".
+  const neverRead = inv.filter(x => !x.read && !x.lastSeen && !x.isOwner).length;
+  if (!apply) return { apply: false, days, count: ghosts.length, ghosts, live: inv.length - ghosts.length, neverRead, total: inv.length };
+  const dir = path.join(r, 'queues', 'archive');
+  fs.mkdirSync(dir, { recursive: true });
+  const moved = [], failed = [];
+  for (const g of ghosts) {
+    try {
+      let dest = path.join(dir, g.file);
+      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(dir, g.file.replace(/\.queue\.md$/, `.${n}.queue.md`));
+      fs.renameSync(path.join(r, 'queues', g.file), dest);
+      moved.push(g.file);
+    } catch { failed.push(g.file); }
+  }
+  return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts };
 }
 
 /**
