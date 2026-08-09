@@ -13,9 +13,9 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
-  now, parseTs, slugify, sh, cardPath, readCard,
+  now, parseTs, slugify, sh, cardPath, readCard, digestOf,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch,
-  runTaskAdd, runTaskList, runTaskUpdate,
+  runTaskAdd, runTaskList, runTaskUpdate, runTaskRetag, TASK_CATS,
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
@@ -23,7 +23,7 @@ import {
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -127,6 +127,9 @@ function formatBrief(data, hours) {
   if (data.staleCards.length) {
     lines.push('STALE CARDS: ' + data.staleCards.map(c => `${c.project} (${c.daysAgo}d)`).join(', '));
   }
+  if (data.staleDigests && data.staleDigests.length) {
+    lines.push('DIGEST BEHIND ITS JOURNAL: ' + data.staleDigests.map(c => `${c.project} (${c.daysBehind}d)`).join(', '));
+  }
   if (data.queues && data.queues.length) {
     lines.push('QUEUES:');
     for (const q of data.queues) {
@@ -135,8 +138,13 @@ function formatBrief(data, hours) {
       // A fanout role has no single pending count (per-reader cursors) — say so
       // instead of printing the shared cursor's phantom backlog.
       if (q.fanout) lines.push(`  broadcast ${q.role}${tag} (per-reader cursors) — ${seen}`);
-      else lines.push(`  ${q.pending} queued for ${q.role}${tag}${q.oldestWaiting ? ` (oldest ${q.oldestWaiting})` : ''} — ${seen}`);
+      // "never consumed" is a different fact from "nobody home right now": messages sit in a
+      // role no consumer has EVER opened, so this is not backlog to work off, it is a role to
+      // staff or archive (hub queue gc).
+      else lines.push(`  ${q.pending} queued for ${q.role}${tag}${q.oldestWaiting ? ` (oldest ${q.oldestWaiting})` : ''} — ${seen}${q.neverRead ? ', never consumed' : ''}`);
     }
+    const ghosts = data.queues.filter(q => q.neverRead && q.pending > 0).length;
+    if (ghosts) lines.push(`  (${ghosts} never-consumed role(s) — hub queue gc to see/archive them)`);
   }
   if (data.buttons && data.buttons.count > 0) {
     lines.push(`BUTTONS: ${data.buttons.count} waiting (oldest ${data.buttons.oldestDays}d) — ${data.buttons.items.map(b => b.role).join(', ')}`);
@@ -413,6 +421,15 @@ if (cmd === 'doctor') {
 
         console.log(line);
       }
+      // Ghost roll-up: files nobody ever consumed, nobody is present for, and that are not a
+      // human's queue. They inflate every pending number in the hub until they are archived.
+      const ghosts = queueInventory({ root: teamRoot }).filter(x => x.ghost);
+      if (ghosts.length) {
+        warnings++;
+        console.log('  ' + ghosts.length + ' ghost queue(s) — never consumed, no agent present, older than 30d  WARNING');
+        console.log('    ' + ghosts.slice(0, 8).map(g => g.file.replace(/\.queue\.md$/, '')).join(', ') +
+          (ghosts.length > 8 ? ', …' : '') + '  hint: hub queue gc  (dry run; --apply archives)');
+      }
     }
   }
 
@@ -523,7 +540,12 @@ if (cmd === 'status') {
   console.log(pad('slug', 26) + pad('synced', 22) + pad('open', 6) + 'digest');
   console.log('─'.repeat(90));
   for (const p of data.projects) {
-    console.log(pad(p.project, 26) + pad(p.synced, 22) + pad(p.openTasks, 6) + (p.digest.split('\n')[0] || '').slice(0, 40));
+    // The marker leads the digest instead of riding the `synced` column: that column is
+    // padded to 22 and already truncates "<date> by <author>", so a suffix there would be
+    // cut off exactly when it matters. A card 33 days behind its own journal otherwise
+    // looks perfectly fresh in every column on screen.
+    const lag = p.digestStale ? `⚠${p.digestStale.daysBehind}d behind · ` : '';
+    console.log(pad(p.project, 26) + pad(p.synced, 22) + pad(p.openTasks, 6) + lag + (p.digest.split('\n')[0] || '').slice(0, 40));
   }
   process.exit(0);
 }
@@ -591,6 +613,7 @@ if (cmd === 'report') {
   if (r.comms) parts.push(r.comms + ' comm' + (r.comms > 1 ? 's' : ''));
   if (r.next) parts.push('next set');
   if (r.done.length) parts.push('closed #' + r.done.join(' #'));
+  if (r.doneAlready && r.doneAlready.length) parts.push('already closed #' + r.doneAlready.join(' #'));
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
@@ -636,14 +659,20 @@ if (cmd === 'task') {
     const depends_on = needsRaw ? String(needsRaw).split(',').map(s => s.trim()).filter(Boolean).map(s => { const n = parseInt(s, 10); return String(n) === s ? n : s; }) : [];
     const resources = getFlags('--resource');   // structured link task → resource(s)
     const cat = getFlag('--cat');
+    const tags = getFlags('--tag');
     const assignee = getFlag('--assignee');
-    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, assignee: assignee || null, by: authorOrDie('--by'), depends_on, resources });
-    console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : ''));
+    const t = runTaskAdd({ project: proj, text, importance: imp || 'normal', deadline: dl || null, cat: cat || null, tags, assignee: assignee || null, by: authorOrDie('--by'), depends_on, resources });
+    const moved = cat && !t.task.cat;   // off-enum cat landed in tags — say so, don't swallow it
+    console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : '')
+      + ((t.task.tags || []).length ? `  #${t.task.tags.join(' #')}` : '')
+      + (moved ? `  (cat "${cat}" is not one of ${TASK_CATS.join('/')} — kept as a tag)` : ''));
   } else if (sub === 'done') {
     const id = args[2];   // bare number or node-scoped string (task #194) — runTaskUpdate compares by String()
     if (!id || id.startsWith('-')) die('Id required: hub task done <id>');
-    runTaskUpdate({ id, status: 'done', by: authorOrDie('--by') });
-    console.log(`Task #${id} closed`);
+    const r = runTaskUpdate({ id, status: 'done', by: authorOrDie('--by') });
+    console.log(r.noop === 'already-done'
+      ? `Task #${id} was already closed${r.closedAt ? ' ' + r.closedAt : ''} — nothing changed`
+      : `Task #${id} closed`);
   } else if (sub === 'list') {
     const proj = getFlag('-p');
     const st = getFlag('--status');
@@ -657,8 +686,16 @@ if (cmd === 'task') {
       console.log(`${mark} #${t.id} [${t.project}]${dl}${ass}${res} ${t.text}`);
     }
     console.log(`(${data.count} tasks)`);
+  } else if (sub === 'retag') {
+    const apply = args.includes('--apply');
+    const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
+    if (!r.count) { console.log(`Categories are clean: every cat is one of ${TASK_CATS.join('/')}`); process.exit(0); }
+    for (const x of r.tasks) console.log(`  #${x.id} [${x.project}] cat "${x.cat}" → tag #${x.tag}`);
+    console.log(apply
+      ? `Moved ${r.moved}/${r.count} off-enum categories into tags${r.failed.length ? ' (failed: #' + r.failed.join(' #') + ')' : ''}`
+      : `${r.count} task(s) carry an off-enum cat. Re-run with --apply --by <you> to move them into tags (append-only, nothing is rewritten).`);
   } else {
-    die('task subcommands: add, done, list');
+    die('task subcommands: add, done, list, retag');
   }
   process.exit(0);
 }
@@ -875,8 +912,7 @@ if (cmd === 'sync') {
   const cardFile = path.join(PROJ, slug + '.md');
   let oldDigest = '';
   if (fs.existsSync(cardFile)) {
-    const c = fs.readFileSync(cardFile, 'utf8');
-    oldDigest = (c.split('## Digest')[1] || '').split('## Facts')[0].trim();
+    oldDigest = digestOf(fs.readFileSync(cardFile, 'utf8')) || '';
   }
   const flagDigest = getFlag('-m') || getFlag('--digest');
   if (flagDigest && typeof flagDigest === 'string') {   // non-interactive (scriptable) sync
@@ -973,8 +1009,29 @@ else if (cmd === 'queue') {
         }
       }).catch(e => die(e.message));
     }
+  } else if (sub === 'gc') {
+    const days = parseInt(String(getFlag('--days') || '30'), 10);
+    const apply = args.includes('--apply');
+    const r = runQueueGc({ root: resolveQueueRoot(), days, apply });
+    for (const g of r.ghosts) {
+      console.log(`  ${g.file}  ${g.messages} msg, ${g.bytes}B, ${g.newest ? 'newest ' + g.newest : 'empty'}, ${g.ageDays}d, never read`);
+    }
+    if (apply) {
+      console.log(r.count
+        ? `Archived ${r.moved.length}/${r.count} ghost queue(s) → ${r.archive}${r.failed.length ? '  (failed: ' + r.failed.join(', ') + ')' : ''}`
+        : `Nothing to archive at --days ${days}`);
+      process.exit(0);
+    }
+    console.log(r.count
+      ? `${r.count} ghost queue(s) older than ${days}d, ${r.live} live. Nothing moved — re-run with --apply to archive them into queues/archive/ (moved, never deleted).`
+      : `No ghost queues older than ${days}d: every queue file has a cursor, a present agent, or is newer.`);
+    // Say what the threshold is hiding — the honest denominator, not just the catch.
+    if (r.neverRead > r.count) {
+      console.log(`  note: ${r.neverRead} of ${r.total} queue file(s) have never been consumed at all — ${r.neverRead - r.count} of them newer than ${days}d and left alone. Lower the bar with --days <N> once you know they are dead.`);
+    }
+    process.exit(0);
   } else {
-    die('queue subcommands: send, wait');
+    die('queue subcommands: send, wait, gc');
   }
 }
 
