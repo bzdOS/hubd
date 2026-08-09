@@ -39,6 +39,15 @@ hold.
   one: 18 one-off values across 37 tasks had turned the axis every by-type
   number rests on into noise. `hub task retag` previews and (with `--apply`)
   migrates existing ones — append-only set events, no log rewritten.
+- **CLI output stopped being cut at 64KB** — found while shipping the rest of
+  this release. Node writes to a pipe asynchronously and a pipe buffers 64KB, so
+  `process.exit()` right after a large `console.log` dropped the remainder:
+  `hub task list --json` (~300KB here) redirected to a file was whole, but piped
+  into `jq` arrived cut mid-token at exactly 65536 bytes, with nothing to tell
+  the reader. stdout/stderr are written synchronously now. Whether it showed at
+  all depended on a race with the reader, which is why nothing caught it — the
+  regression test uses a deliberately slow reader.
+
 - **Ghost queues** — a queue file is born on the first send and never dies; this
   hub had 43 files against ONE live cursor, and every never-consumed role was
   counted as pending work. `hub_brief` now flags them `neverRead`, `hub doctor`
