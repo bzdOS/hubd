@@ -1146,6 +1146,29 @@ ok(JSON.stringify(tiny, null, 1).length <= 2000 && tiny.tasks.length >= 1,
   `budget: an impossible budget empties the first list before gutting the last (tasks left ${tiny.tasks.length})`);
 ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a small payload is passed through untouched');
 
+// ── machine-readable output survives a pipe ──
+// A pipe buffers 64KB and Node writes to it asynchronously, so process.exit() right after a
+// large console.log used to drop the rest: `hub task list --json` came back cut mid-token,
+// valid-looking and short, with nothing saying it had been truncated. execSync reads through
+// a pipe, so this test sees exactly what `| jq` would.
+const PIPE = mktmp();
+fs.writeFileSync(path.join(PIPE, 'tasks.pipe.events.jsonl'),
+  Array.from({ length: 140 }, (_, i) => JSON.stringify({
+    ts: '2026-06-01 10:00', node: 'pipe', ev: 'add', id: `pipe-${i}`,
+    t: { id: `pipe-${i}`, project: 'p', text: 'x'.repeat(700), status: 'open', importance: 'normal', created: '2026-06-01 10:00', by: 'dev-t' },
+  })).join('\n') + '\n');
+// The reader has to be SLOW to start, or this test is a coin flip: whether the truncation
+// shows at all depends on whether the reader drains the pipe before the child exits, and a
+// fast reader (execSync's own capture, a prompt `| cat`) usually wins that race. A reader
+// that sleeps first guarantees the 64KB buffer fills while the writer is still going —
+// which is precisely the case a real consumer hits (`| jq`, an agent parsing the output).
+const piped = run('task list --json --status all | { sleep 0.4; cat; }', { HUBD_DIR: PIPE, HUBD_NODE: 'pipe' });
+ok(piped.out.length > 65536, `pipe: the payload really is bigger than a pipe buffer (${piped.out.length}B)`);
+let pipedJson = null; try { pipedJson = JSON.parse(piped.out); } catch {}
+ok(pipedJson && pipedJson.tasks.length === 140,
+  `pipe: a >64KB --json payload arrives whole and parses (${pipedJson ? pipedJson.tasks.length + ' tasks' : 'TRUNCATED at ' + piped.out.length + 'B'})`);
+fs.rmSync(PIPE, { recursive: true, force: true });
+
 fs.rmSync(DG, { recursive: true, force: true });
 fs.rmSync(ID, { recursive: true, force: true });
 fs.rmSync(QG, { recursive: true, force: true });

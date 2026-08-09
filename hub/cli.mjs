@@ -32,7 +32,34 @@ const cmd = args[0];
 
 /* ── helpers ── */
 function pad(s, n) { s = String(s ?? ''); return s.length >= n ? s.slice(0, n - 2) + '… ' : s + ' '.repeat(n - s.length); }
-function die(msg) { console.error('Error: ' + msg); process.exit(1); }
+/* Writing to a PIPE is asynchronous in Node, and a pipe buffers 64KB — so process.exit()
+ * straight after a large console.log throws away whatever has not drained yet. `hub task
+ * list --json` on a real base is ~300KB: redirected to a FILE (a synchronous write) it was
+ * whole, but piped into jq it arrived cut mid-token at exactly 65536 bytes, with nothing to
+ * tell the reader it had been truncated. Machine-readable output that silently loses its
+ * tail is worse than none.
+ *
+ * The fix belongs on the WRITE, not on the exit: deferring the exit until a drain callback
+ * would make every `done()` return to its caller and let the code after it run (it did —
+ * `task list --json` then printed the human table right after the JSON). So stdout and
+ * stderr are written synchronously here, and exiting stays instantaneous everywhere. */
+function writeAllSync(fd, text) {
+  const buf = Buffer.from(String(text));
+  let off = 0;
+  while (off < buf.length) {
+    try { off += fs.writeSync(fd, buf, off, buf.length - off); }
+    catch (e) {
+      if (e.code === 'EAGAIN') { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); continue; }  // pipe full, slow reader
+      if (e.code === 'EPIPE') return;   // reader went away — writing more is pointless, not an error
+      throw e;
+    }
+  }
+}
+console.log = (...a) => writeAllSync(1, a.join(' ') + '\n');
+console.error = (...a) => writeAllSync(2, a.join(' ') + '\n');
+console.warn = console.error;
+function done(code = 0) { process.exit(code); }
+function die(msg) { console.error('Error: ' + msg); done(1); }
 
 // rulesFile:start
 //   purpose: locate the team constitution (AGENTS.md). HUB (the real instance) wins; the team-root
@@ -256,7 +283,7 @@ if (cmd === 'upgrade') {
   if (!r.ok) die('could not materialise HUBD.md (protocol source missing?)');
   console.log(r.wrote ? `HUBD.md → v${r.version}` + (r.from ? ` (was v${r.from})` : ' (new)') : `HUBD.md already current (v${r.version})`);
   console.log('  agents read it for hub mechanics; team rules stay in AGENTS.md');
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'init') {
@@ -304,7 +331,7 @@ if (cmd === 'init') {
   console.log('  Connect an agent:  claude mcp add --scope user hubd -- npx -y @bzdos/hubd');
   console.log('  Check setup:       hub doctor');
   console.log('  Full org template: hubd-company/ in the hubd repository');
-  process.exit(0);
+  done(0);
 }
 
 /* ── doctor ── */
@@ -526,10 +553,10 @@ if (cmd === 'doctor') {
   console.log('');
   if (warnings) {
     console.log('doctor: ' + warnings + ' warning(s)');
-    process.exit(1);
+    done(1);
   } else {
     console.log('doctor: ok');
-    process.exit(0);
+    done(0);
   }
 }
 
@@ -547,26 +574,26 @@ if (cmd === 'status') {
     const lag = p.digestStale ? `⚠${p.digestStale.daysBehind}d behind · ` : '';
     console.log(pad(p.project, 26) + pad(p.synced, 22) + pad(p.openTasks, 6) + lag + (p.digest.split('\n')[0] || '').slice(0, 40));
   }
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'brief') {
   const hours = parseInt(getFlag('--hours') || getFlag('-h') || '48');
   const queues = queueSummaryForBrief({ root: resolveQueueRoot() });
   console.log(formatBrief({ ...runBrief({ hours }), queues, buttons: buttonsSummary(queues) }, hours));
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'inbox') {
   const hours = parseInt(getFlag('--hours') || '72');
   const r = runInbox({ hours });
-  if (r.empty) { console.log('inbox: clear — nothing needs a decision'); process.exit(0); }
+  if (r.empty) { console.log('inbox: clear — nothing needs a decision'); done(0); }
   const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n## ${title} (${rows.length})`); for (const x of rows) console.log('  ' + fmt(x)); } };
   P('BLOCKED', r.blocked, x => `${x.ts} [${x.project}/${x.agent}] ${x.text}`);
   P('OVERDUE', r.overdue, x => `#${x.id} [${x.project}] due ${x.deadline}${x.assignee ? ' @' + x.assignee : ''} — ${x.text}`);
   P('UNASSIGNED', r.unassigned, x => `#${x.id} [${x.project}] ${x.importance || ''} — ${x.text}`);
   P('STALE CLAIMS', r.staleClaims, x => `${x.project}/${x.area} @${x.agent} since ${x.since} (ttl ${x.ttlMin}m, expired)`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'plan' || cmd === 'trajectory') {
@@ -580,7 +607,7 @@ if (cmd === 'plan' || cmd === 'trajectory') {
   if (r.layers.length > 1) { console.log('\nUNLOCK ORDER (topo layers):'); r.layers.forEach((l, i) => console.log(`  L${i}: ${l.map(id => '#' + id).join(' ')}`)); }
   if (r.blocked.length) { console.log(`\nBLOCKED (${r.blocked.length}):`); for (const b of r.blocked) console.log(`  #${b.id} ← waiting on ${b.waitingOn.map(id => '#' + id).join(',')} — ${(b.text || '').slice(0, 50)}`); }
   if (r.cycles.length) console.log(`\n⚠ CYCLES (fix these deps): ${r.cycles.map(id => '#' + id).join(' ')}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'log') {
@@ -589,7 +616,7 @@ if (cmd === 'log') {
   for (const e of journalTail(proj, n)) {
     console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}`);
   }
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'report') {
@@ -603,7 +630,7 @@ if (cmd === 'report') {
   }
   if (!text || typeof text !== 'string' || !text.trim()) {           // no input → print the skeleton
     console.log(REPORT_TEMPLATE);
-    process.exit(0);
+    done(0);
   }
   const r = runReport({ project: proj, agent, text, kind });
   const parts = [];
@@ -620,7 +647,7 @@ if (cmd === 'report') {
   if (r.doneMissed && r.doneMissed.length) console.error('  warning: NOT closed (no such task): #' + r.doneMissed.join(' #') + ' — check the id with `hub task list`');
   const onlyNote = r.note && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'decide') {
@@ -630,7 +657,7 @@ if (cmd === 'decide') {
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
   const r = runReport({ project: proj, by: authorOrDie('--by'), text: `DECIDE: ${what}${typeof why === 'string' ? ' | ' + why : ''}` });
   console.log(`Decided on ${r.project}: +${r.decisions} → ## Decisions`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'next') {
@@ -639,7 +666,7 @@ if (cmd === 'next') {
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
   const r = runReport({ project: proj, by: authorOrDie('--by'), text: `NEXT: ${what}` });
   console.log(`Next step set on ${r.project}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'task') {
@@ -677,7 +704,7 @@ if (cmd === 'task') {
     const proj = getFlag('-p');
     const st = getFlag('--status');
     const data = runTaskList({ project: proj || undefined, status: (typeof st === 'string') ? st : 'open' });
-    if (args.includes('--json')) { console.log(JSON.stringify(data)); process.exit(0); }
+    if (args.includes('--json')) { console.log(JSON.stringify(data)); done(0); }
     for (const t of data.tasks) {
       const dl = t.deadline ? ` ⏰${t.deadline}` : '';
       const ass = t.assignee ? ` @${t.assignee}` : '';
@@ -689,7 +716,7 @@ if (cmd === 'task') {
   } else if (sub === 'retag') {
     const apply = args.includes('--apply');
     const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
-    if (!r.count) { console.log(`Categories are clean: every cat is one of ${TASK_CATS.join('/')}`); process.exit(0); }
+    if (!r.count) { console.log(`Categories are clean: every cat is one of ${TASK_CATS.join('/')}`); done(0); }
     for (const x of r.tasks) console.log(`  #${x.id} [${x.project}] cat "${x.cat}" → tag #${x.tag}`);
     console.log(apply
       ? `Moved ${r.moved}/${r.count} off-enum categories into tags${r.failed.length ? ' (failed: #' + r.failed.join(' #') + ')' : ''}`
@@ -697,7 +724,7 @@ if (cmd === 'task') {
   } else {
     die('task subcommands: add, done, list, retag');
   }
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'claim') {
@@ -708,7 +735,7 @@ if (cmd === 'claim') {
   const res = runClaim({ project: proj, area, agent, ttlMin: ttl });
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Lock: ${res.claim.id}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'release') {
@@ -716,7 +743,7 @@ if (cmd === 'release') {
   if (!id) die('Usage: hub release <id>');
   const res = runRelease({ id });
   console.log(`Locks released: ${res.removed}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'heartbeat') {
@@ -732,19 +759,19 @@ if (cmd === 'heartbeat') {
     ttlMin: (typeof ttl === 'string') ? parseInt(ttl, 10) : undefined,
   });
   console.log(`Heartbeat: ${res.agent} -> ${res.presence}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'presence') {
   const roleFlag = getFlag('--role');
   const data = runPresence({ role: (typeof roleFlag === 'string') ? roleFlag : undefined, aliveOnly: args.includes('--alive') });
-  if (!data.agents.length) { console.log('(no presence records)'); process.exit(0); }
+  if (!data.agents.length) { console.log('(no presence records)'); done(0); }
   for (const p of data.agents) {
     const mark = p.alive ? '●' : '○';
     console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}`);
   }
   console.log(`(${data.agents.length} agents, generated ${data.generated})`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'card') {
@@ -755,7 +782,7 @@ if (cmd === 'card') {
   const by = authorOrDie('--by');
   const res = runCardSet({ project: slug, digest, by });
   console.log(`Card set: ${res.project} → ${res.card}`);
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'resource' || cmd === 'res') {
@@ -790,7 +817,7 @@ if (cmd === 'resource' || cmd === 'res') {
   } else {
     die('resource subcommands: set, list, get');
   }
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'graph') {
@@ -817,7 +844,7 @@ if (cmd === 'graph') {
     console.log('\n⚠ dangling (target has no card — create it or it stays a note):');
     for (const d of data.dangling) console.log(`  ${d.from} —${d.rel}→ ${d.to}`);
   }
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'sections') {
@@ -825,14 +852,14 @@ if (cmd === 'sections') {
   for (const s of sectionsConfig()) console.log('  ' + pad(s.key, 16) + s.heading);
   console.log('\nlocalise in ONE file → HUB/sections.json  (merged by key onto the defaults)');
   console.log('  e.g. { "decisions": "<your heading>", "next": {"heading":"...","hint":"..."} }');
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'harvest') {
   const p = harvestPrompt();
   if (!p) die('HARVEST.md not found in this hubd package');
   console.log(p);   // paste-able Harvest Protocol prompt — ships with the code, not the repo
-  process.exit(0);
+  done(0);
 }
 
 // Who is running this command. Was `--agent || $USER || 'cli'`, which recorded 41
@@ -901,7 +928,7 @@ if (cmd === 'gc') {
     }
   } catch {}
   console.log(removed ? `gc: removed ${removed} item(s)` : 'gc: nothing to clean');
-  process.exit(0);
+  done(0);
 }
 
 if (cmd === 'sync') {
@@ -918,7 +945,7 @@ if (cmd === 'sync') {
   if (flagDigest && typeof flagDigest === 'string') {   // non-interactive (scriptable) sync
     const res = runSync({ path: dir, digest: flagDigest, agent: authorOrDie('--agent') });
     console.log(`Synced: ${res.project} → ${res.card}`);
-    process.exit(0);
+    done(0);
   }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const hint = oldDigest ? `[Enter = keep: "${oldDigest.slice(0, 60)}…"]` : '[new digest]';
@@ -927,7 +954,7 @@ if (cmd === 'sync') {
     const digest = answer.trim() || oldDigest || undefined;
     const res = runSync({ path: dir, digest, agent: authorOrDie('--agent') });
     console.log(`Synced: ${res.project} → ${res.card}`);
-    process.exit(0);
+    done(0);
   });
   // async readline keeps process alive until callback
 }
@@ -951,21 +978,21 @@ else if (cmd === 'install-hook') {
   }
   fs.chmodSync(hookFile, 0o755);
   console.log('Hook: ' + hookFile);
-  process.exit(0);
+  done(0);
 }
 
 else if (cmd === '_commit-hook') {
   // Hidden command: invoked from the post-commit hook. Must never break a commit.
   try {
     const repoPath = args[1];
-    if (!repoPath) process.exit(0);
+    if (!repoPath) done(0);
     const info = sh('git log -1 --format=%H%n%an%n%s', repoPath);
     const parts = info.split('\n');
     const sha = parts[0], author = parts[1], subject = parts.slice(2).join(' ').trim();
-    if (!sha) process.exit(0);
+    if (!sha) done(0);
     journalAppend({ ts: now(), project: slugify(path.basename(repoPath)), agent: 'git:' + author, kind: 'done', text: sha.slice(0, 7) + ' ' + subject });
   } catch {}
-  process.exit(0);
+  done(0);
 }
 
 else if (cmd === 'queue') {
@@ -980,7 +1007,7 @@ else if (cmd === 'queue') {
     try { qfile = queueSend(role, text, { from: authorOrDie('--from') }); }
     catch (e) { die(e.message); }
     console.log(`→ ${path.basename(qfile)} delivered`);
-    process.exit(0);
+    done(0);
   } else if (sub === 'wait') {
     const role = args[2];
     if (!role) die('Usage: hub queue wait <role|*> [--timeout <N>]');
@@ -992,20 +1019,20 @@ else if (cmd === 'queue') {
       queueWaitAll({ timeout }).then(result => {
         if (result.changed) {
           for (const e of result.events) console.log(`## from queue ${e.role}${e.node ? '.' + e.node : ''}\n${e.text}`);
-          process.exit(0);
+          done(0);
         } else {
           console.log('NO_CHANGES');
-          process.exit(2);
+          done(2);
         }
       }).catch(e => die(e.message));
     } else {
       queueWait(role, { timeout }).then(result => {
         if (result.changed) {
           console.log(result.text);
-          process.exit(0);
+          done(0);
         } else {
           console.log('NO_CHANGES');
-          process.exit(2);
+          done(2);
         }
       }).catch(e => die(e.message));
     }
@@ -1020,7 +1047,7 @@ else if (cmd === 'queue') {
       console.log(r.count
         ? `Archived ${r.moved.length}/${r.count} ghost queue(s) → ${r.archive}${r.failed.length ? '  (failed: ' + r.failed.join(', ') + ')' : ''}`
         : `Nothing to archive at --days ${days}`);
-      process.exit(0);
+      done(0);
     }
     console.log(r.count
       ? `${r.count} ghost queue(s) older than ${days}d, ${r.live} live. Nothing moved — re-run with --apply to archive them into queues/archive/ (moved, never deleted).`
@@ -1029,7 +1056,7 @@ else if (cmd === 'queue') {
     if (r.neverRead > r.count) {
       console.log(`  note: ${r.neverRead} of ${r.total} queue file(s) have never been consumed at all — ${r.neverRead - r.count} of them newer than ${days}d and left alone. Lower the bar with --days <N> once you know they are dead.`);
     }
-    process.exit(0);
+    done(0);
   } else {
     die('queue subcommands: send, wait, gc');
   }
@@ -1079,7 +1106,7 @@ else if (!cmd) {
     '  queue wait <role> [--timeout <N>]',
     '  serve [-p 7777]                  read-only kanban dashboard',
   ].join('\n'));
-  process.exit(0);
+  done(0);
 }
 
 else if (!['sync', 'install-hook', '_commit-hook', 'serve', 'queue'].includes(cmd)) {
