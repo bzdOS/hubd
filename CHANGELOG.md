@@ -4,6 +4,50 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.6.0 — 2026-08-01
+
+The honest-numbers release: four places where the hub quietly told its readers
+something that was not true, and one where it told them more than they could
+hold.
+
+- **Output budgets** — `hub_brief(hours=168)` once returned 196K characters and
+  did not fit the asking agent's context, which loses the whole answer rather
+  than its tail. Every list-shaped MCP answer now has a default ceiling and
+  reports what it left out in `truncated` (`{key: {shown, hidden}}`) plus a
+  `hint`; a silent cut is indistinguishable from "that's all there is". The
+  journal is trimmed first everywhere it appears, open tasks and buttons last;
+  lists go to a readable floor before any of them goes empty. `full: true`
+  opts out, `hub_task_list` takes `limit`/`offset` and always reports `total`.
+  The CLI is never capped — a terminal has `grep`.
+- **The digest ended at the wrong place** — it was cut at a literal `## Facts`,
+  so on a hub that localises its sections (or any card whose next heading is
+  something else) `hub_status` and `hub_context` reported the whole card body
+  as the one-line digest, and `hub_sync` compared each new digest against that
+  blob — "the digest changed" was true on every sync, archiving the full card
+  into history each time. Now cut at the next `## `, in one shared helper.
+- **A card that trails its own journal** — `hub status` marks it `⚠Nd behind`
+  and `hub_brief` lists it under `staleDigests`. Distinct from a stale card: a
+  dormant project's card may be old and still true, while a busy project's goes
+  wrong within days (one card here sat 33 days behind its own journal).
+- **Closing a closed task is a no-op** — two sessions finishing the same handoff
+  both reported `DONE:` (34 minutes apart, on task #189), which appended a
+  second done event and moved the close time, so every count downstream saw two
+  closes and the lifespan silently grew by the gap. The attempt is still
+  journalled, and a report gets it back as `doneAlready`, separate from `done`.
+- **`cat` is a closed vocabulary again** — technical | communicative | decision
+  | chore. Anything else is kept as a **tag** instead of becoming a category of
+  one: 18 one-off values across 37 tasks had turned the axis every by-type
+  number rests on into noise. `hub task retag` previews and (with `--apply`)
+  migrates existing ones — append-only set events, no log rewritten.
+- **Ghost queues** — a queue file is born on the first send and never dies; this
+  hub had 43 files against ONE live cursor, and every never-consumed role was
+  counted as pending work. `hub_brief` now flags them `neverRead`, `hub doctor`
+  warns, and `hub queue gc` lists them (dry by default) and archives them into
+  `queues/archive/` on `--apply` — moved, never deleted, and never an owner's
+  own queue, which a human legitimately reads as a file. The dry run also says
+  how many never-consumed files the age threshold is holding back, so the
+  default never reads as "the rest are fine".
+
 ## 0.5.0 — 2026-07-26
 
 The attribution-and-environment release. **Breaking:** an author is now

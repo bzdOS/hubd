@@ -295,6 +295,23 @@ export function readCard(name) {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
+/* The "## Digest" body ends at the NEXT "## " heading — never at a literal "## Facts".
+ * Cutting on that one name only worked for cards whose following section happens to be
+ * Facts. On a hub that localises its sections (HUB/sections.json) or on any card_set card
+ * without that exact heading, the "digest" swallowed the whole rest of the body: hub_status
+ * and hub_context reported an entire card where a one-liner belongs, and runSync compared a
+ * new digest against that blob — so "the digest changed" was true on every sync and archived
+ * the full card into history each time. runResourceSet already cut on the next heading; this
+ * is the same rule, in one place, for project cards. */
+export function digestOf(text) {
+  if (!text) return null;
+  const i = text.indexOf('## Digest');
+  if (i === -1) return null;
+  const rest = text.slice(i + '## Digest'.length);
+  const nm = rest.match(/\n## /);
+  return (nm ? rest.slice(0, nm.index) : rest).trim();
+}
+
 /* ── Tasks (event-sourced) ──
  * Truth lives in append-only per-host logs tasks.<node>.events.jsonl (like the
  * journal): each machine appends only to its own file, so several machines
@@ -449,6 +466,38 @@ export function journalTail(project, n = 12) {
   return filtered.slice(-n);
 }
 
+/* Newest journal timestamp per project, in ONE pass over the merged journal.
+ * The freshness contract a card owes its reader is not "was it touched lately" but
+ * "does it still describe what the project has been doing": a card can be days old and
+ * perfectly true on a quiet project, while a busy one goes wrong within a day. So the
+ * signal is the GAP between the card's last touch and the project's last journal entry
+ * (one card here sat 33 days behind its own journal). Compared through parseTs, not as strings —
+ * the journal carries both "YYYY-MM-DD HH:MM" and ISO stamps, and ' ' sorts before 'T'. */
+export function lastJournalByProject() {
+  const out = {};
+  for (const f of journalFiles()) {
+    try {
+      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+        if (!l.trim()) continue;
+        try {
+          const e = JSON.parse(l);
+          if (!e.project || !e.ts) continue;
+          const cur = out[e.project];
+          if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) out[e.project] = e.ts;
+        } catch {}
+      }
+    } catch {}
+  }
+  return out;
+}
+
+/** How far a card's digest trails its project's own journal, or null if it doesn't. */
+export function digestLag(cardTouchedAt, lastJournalAt, staleDays) {
+  if (!cardTouchedAt || cardTouchedAt === '?' || !lastJournalAt) return null;
+  const behind = Math.floor((parseTs(lastJournalAt).getTime() - parseTs(cardTouchedAt).getTime()) / 86400000);
+  return behind >= staleDays ? { daysBehind: behind, lastJournal: lastJournalAt } : null;
+}
+
 export function journalSince(hours) {
   const cutoff = Date.now() - hours * 3600000;
   const all = [];
@@ -464,6 +513,79 @@ export function journalSince(hours) {
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge per-host files by time
   return all.reverse(); // newest first
+}
+
+/* ── Output budgets ──
+ * hub_brief(hours=168) once returned 196K characters and did not fit the context of the agent
+ * that asked for it. Nothing was wrong with the data — the tool simply had no idea it was
+ * talking to a reader with a finite window, and a reply that does not fit is worth less than a
+ * short one: the agent loses the whole call, not the tail of it.
+ *
+ * So every list-shaped answer gets a default ceiling, and the reply SAYS what it left out
+ * (`truncated`) instead of quietly ending early — a silent cut is indistinguishable from
+ * "that's all there is", which is how a caller comes to believe a lie about its own hub.
+ *
+ * Two stages. First a per-key top-N. Then, if the payload is still over budget, lists are cut
+ * further IN PLAN ORDER — the plan lists the journal first everywhere it appears, because
+ * recent chatter is the most compressible thing in any of these answers and open tasks or
+ * pending buttons are the least. `full: true` opts out entirely; that is the caller's call to
+ * make, and it stays available so nothing is unreachable through the tool.
+ *
+ * Applied at the MCP boundary only (see index.mjs): the CLI writes to a terminal, where a
+ * human can pipe, grep and scroll, and truncating there would hide data from the one reader
+ * who can handle all of it. */
+export const OUTPUT_BUDGET_CHARS = Math.max(2000, parseInt(process.env.HUBD_MAX_OUTPUT_CHARS || '', 10) || 40000);
+
+// `indent` defaults to what the MCP transport actually serialises with (JSON.stringify(r, null, 1)),
+// not to compact JSON: pretty-printing adds a newline and a run of spaces per key, which came to
+// ~15% on a real brief — measuring the compact form let a payload pass the budget and still arrive
+// over it, which is the one failure this whole mechanism exists to prevent.
+export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDGET_CHARS, indent = 1 } = {}) {
+  if (full || !obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const out = { ...obj };
+  const truncated = {};
+  const totals = {};
+  const note = (key, arr) => { truncated[key] = { shown: arr.length, hidden: totals[key] - arr.length }; };
+
+  for (const [key, limit] of plan) {
+    const arr = out[key];
+    if (!Array.isArray(arr)) continue;
+    totals[key] = arr.length;
+    if (arr.length > limit) { out[key] = arr.slice(0, limit); note(key, out[key]); }
+  }
+
+  // Headroom for the two keys this function adds itself: `truncated` and `hint` are written
+  // AFTER the last measurement, and a budget blind to them is a budget missed by exactly the
+  // size of its own explanation.
+  const budget = Math.max(1000, maxChars - 400);
+  const size = () => JSON.stringify(out, null, indent).length;
+  // Quarter at a time: a handful of re-serialisations rather than one per element, and it never
+  // overshoots to empty where a smaller cut would have fit.
+  const shrink = (floor) => {
+    for (const [key] of plan) {
+      if (size() <= budget) return;
+      let arr = out[key];
+      if (!Array.isArray(arr)) continue;
+      while (arr.length > floor && size() > budget) {
+        arr = arr.slice(0, Math.max(floor, arr.length - Math.max(1, Math.ceil(arr.length / 4))));
+        out[key] = arr;
+        note(key, arr);
+      }
+    }
+  };
+  // Two passes, because a list cut to nothing is worse than several lists cut short: first take
+  // every list down to a still-readable floor in plan order, and only if that is not enough let
+  // them go empty — again in plan order, so the journal empties before the open tasks do.
+  shrink(5);
+  shrink(0);
+
+  if (Object.keys(truncated).length) {
+    out.truncated = truncated;
+    out.hint = 'Capped to fit an agent context — ' +
+      Object.entries(truncated).map(([k, v]) => `${k}: ${v.shown} shown, ${v.hidden} hidden`).join(' · ') +
+      '. Pass full:true for everything, or narrow the question (project, hours, status).';
+  }
+  return out;
 }
 
 /* ── Tool implementations ── */
@@ -809,7 +931,7 @@ export function runSync(a) {
   const git = gitFacts(dir);
   const markers = markerFiles(dir);
   const prev = readCard(pname);
-  const oldDigest = prev ? (prev.split('## Digest')[1] || '').split('## Facts')[0].trim() : null;
+  const oldDigest = digestOf(prev);
   const digest = a.digest || oldDigest || '_no digest yet — pass one on the next sync_';
 
   // Auto-detect project metrics (version, test count) and git diff since last sync.
@@ -860,7 +982,7 @@ export function runCardSet(a) {
   const slug = slugify(pname);
   const digest = String(a.digest).trim();
   const prev = readCard(pname);
-  const oldDigest = prev ? (prev.split('## Digest')[1] || '').split('## Facts')[0].trim() : null;
+  const oldDigest = digestOf(prev);
   if (oldDigest && digest !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
@@ -1056,7 +1178,7 @@ export function runReport(a) {
     const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
     if (tag) b[tag].push(m[2].trim()); else b.note.push(ln.trim());
   }
-  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneMissed: [], tasks: [], note: false };
+  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false };
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
     let text = readCard(project) || cardBaseFor(project);
     for (const d of b.decide) {
@@ -1077,7 +1199,15 @@ export function runReport(a) {
     // A typo'd id used to vanish silently — the task stayed open and nothing said so.
     // DONE closes without per-task confirmation, so a miss must be loud: it goes in
     // the summary (doneMissed) for the caller to see and recheck.
-    if (id) { try { runTaskUpdate({ id, status: 'done', by }); summary.done.push(id); } catch { summary.doneMissed.push(id); } }
+    // Three outcomes, three lists: closed by this report, already closed by someone else
+    // (no-op — see runTaskUpdate), and no such id. Folding the middle one into `done` would
+    // report work this session did not do.
+    if (id) {
+      try {
+        const r = runTaskUpdate({ id, status: 'done', by });
+        (r.noop === 'already-done' ? summary.doneAlready : summary.done).push(id);
+      } catch { summary.doneMissed.push(id); }
+    }
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   if (b.note.length) {
@@ -1087,12 +1217,14 @@ export function runReport(a) {
   return summary;
 }
 
-export function runStatus() {
+export function runStatus(a = {}) {
+  const staleDays = a.staleDays ?? 7;
+  const lastJournal = lastJournalByProject();
   const db = loadTasks();
   const files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md'));
   const projects = files.map(f => {
     const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
-    const digest = (c.split('## Digest')[1] || '').split('## Facts')[0].trim().slice(0, 300);
+    const digest = (digestOf(c) || '').slice(0, 300);
     // hub_card_set cards write `- set:`, not `- synced:` — they used to show '?' here
     // (and never count as stale in runBrief). Either timestamp is a last touch.
     const synced = (c.match(/- (?:synced|set): ([^\n]+)/) || [])[1] || '?';
@@ -1106,6 +1238,12 @@ export function runStatus() {
     if (version) p.version = version;
     if (tests) p.tests = tests;
     if (sinceSync) p.sinceSync = sinceSync;
+    // `synced` is the whole display string ("<ts> by <author>") — parse the timestamp out
+    // of it, or parseTs sees "2026-06-26T09:42 by dev-mac", returns NaN, and the lag check
+    // silently never fires (it did exactly that until this line existed).
+    const syncedTs = (synced.match(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?/) || [])[0] || null;
+    const lag = digestLag(syncedTs, lastJournal[slug], staleDays);
+    if (lag) p.digestStale = lag;
     return p;
   });
   return { projects, recentJournal: journalTail(null, 10) };
@@ -1235,7 +1373,7 @@ export function runContext(a) {
   const ctx = resolveContext(cwd);
   if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [] };
   const card = readCard(ctx.project);
-  const digest = card ? (card.split('## Digest')[1] || '').split('## Facts')[0].trim().slice(0, 300) : null;
+  const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
   const claimsDb = loadClaims();
   return {
     ...ctx,
@@ -1272,17 +1410,39 @@ function nextLocalSeq() {
   return maxN + 1;
 }
 
-// Canonical task category vocabulary: technical | communicative | decision | chore.
-// `cat` is the single field for this; `kind` is a legacy alias — don't add new fields
-// or invent new category values, keep the set small.
+/* Canonical task category vocabulary: technical | communicative | decision | chore.
+ * `cat` is the single field for this; `kind` is a legacy alias.
+ *
+ * The vocabulary is closed on purpose. `cat` answers exactly one question — what KIND of
+ * work this is — and every number built on it (conversion by type, median time-to-done per
+ * kind, the narrative layer's "what does this operator actually finish") only means something
+ * while the axis stays four values wide. Left open, it drifted: this hub collected 18 one-off
+ * values (build, jail, semmarkup, cost-estimation, ...) across 37 tasks, most of them a bucket
+ * of one, and the analytics quietly became noise.
+ *
+ * An off-enum value is NOT rejected, though — "jail" is real information, it just isn't a
+ * category. It moves to `tags`, which is open by design. Nothing a caller said is lost; the
+ * axis stays countable. */
+export const TASK_CATS = ['technical', 'communicative', 'decision', 'chore'];
+
+export function normalizeCat(cat, tags) {
+  const clean = [...new Set((Array.isArray(tags) ? tags : []).map(x => slugify(x)).filter(Boolean))];
+  const v = String(cat ?? '').trim().toLowerCase();
+  if (!v) return { cat: null, tags: clean, moved: null };
+  if (TASK_CATS.includes(v)) return { cat: v, tags: clean, moved: null };
+  const tag = slugify(v);
+  return { cat: null, tags: clean.includes(tag) ? clean : [...clean, tag], moved: tag };
+}
+
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
   return withLock(TASK_EVENTS, () => {
     const id = `${JOURNAL_NODE}-${nextLocalSeq()}`;
+    const norm = normalizeCat(a.cat, a.tags);
     const t = {
       id, project: slugify(a.project), text: a.text,
       importance: a.importance || 'normal', deadline: a.deadline || null,
-      cat: a.cat || null, assignee: a.assignee || null, status: 'open',
+      cat: norm.cat, tags: norm.tags, assignee: a.assignee || null, status: 'open',
       created: now(), by: author,
       depends_on: Array.isArray(a.depends_on) ? a.depends_on : [],
       resources: Array.isArray(a.resources) ? a.resources.map(slugify) : [],
@@ -1300,7 +1460,14 @@ export function runTaskList(a) {
   let list = db.tasks;
   if (a.project) list = list.filter(t => t.project === slugify(a.project));
   if (st !== 'all') list = list.filter(t => t.status === st);
-  return { count: list.length, tasks: list };
+  // Paging is the deliberate alternative to a silent cap: the caller that wants the 269th task
+  // can reach it, instead of being told "100 tasks" by a tool that had 322. `total` is always
+  // the full matching count, so a page never masquerades as the whole answer.
+  const total = list.length;
+  const offset = Math.max(0, parseInt(a.offset, 10) || 0);
+  const limit = a.limit != null ? Math.max(1, parseInt(a.limit, 10) || 1) : null;
+  if (offset || limit != null) list = list.slice(offset, limit != null ? offset + limit : undefined);
+  return { count: list.length, total, offset, tasks: list };
 }
 
 export function runTaskUpdate(a) {
@@ -1317,10 +1484,30 @@ export function runTaskUpdate(a) {
     // `importance` belongs here too: hub_task_add accepts it, so a task could be
     // given a priority at creation and never change it again, while `deadline` right
     // next to it was editable. Passing it to update returned ok and silently did nothing.
-    for (const k of ['status', 'importance', 'text', 'deadline', 'cat', 'assignee']) if (a[k] != null) patch[k] = a[k];
+    for (const k of ['status', 'importance', 'text', 'deadline', 'assignee']) if (a[k] != null) patch[k] = a[k];
+    // cat and tags move together: an off-enum cat becomes a tag (see normalizeCat), so
+    // editing either one has to recompute both from the task's current pair.
+    if (a.cat != null || a.tags != null) {
+      const norm = normalizeCat(a.cat != null ? a.cat : t.cat, a.tags != null ? a.tags : t.tags);
+      patch.cat = norm.cat;
+      patch.tags = norm.tags;
+    }
     if (Array.isArray(a.depends_on)) patch.depends_on = a.depends_on;
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
-    if (a.status === 'done') patch.done = now();
+    /* Closing a closed task is a no-op, not a second closing. `DONE:` in a report closes
+     * ids without asking, and two agents finishing the same handoff both report it (task
+     * #189 was closed twice, 34 minutes apart, by two sessions) — which used to append a
+     * second done event and move `done` to the later timestamp, so every count downstream
+     * saw two closes and the task's own lifespan silently grew by the gap. The attempt is
+     * still worth a line in the journal: it says two sessions believed they owned it. */
+    const reclose = a.status === 'done' && t.status === 'done';
+    if (reclose) delete patch.status;
+    else if (a.status === 'done') patch.done = now();
+    if (reclose && !Object.keys(patch).length) {
+      journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
+        text: '= task #' + t.id + ' already closed' + (t.done ? ' ' + t.done : '') + ' — no-op' });
+      return { ok: true, noop: 'already-done', closedAt: t.done || null, task: t };
+    }
     // Key the set to the task's ORIGIN (node,id) — NOT this writer's node + finalId — so the
     // unchanged reducer resolves it to the canonical task even when THIS node historically
     // collided on the finalId (else `set` mis-hits the writer's own remapped task). _origin
@@ -1328,9 +1515,36 @@ export function runTaskUpdate(a) {
     const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
     rebuildTaskCache();
-    journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
+    if (!a.quiet) journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
     return { ok: true, task: { ...t, ...patch } };
   });
+}
+
+/* Soft migration for the off-enum categories already in a base: move each one into `tags`.
+ * Append-only, as the task-log contract requires — this replays them through runTaskUpdate,
+ * which writes `set` events; no file is rewritten and no field is dropped. Dry by default:
+ * a migration you cannot preview first is a migration nobody runs twice.
+ * The per-task journal lines are suppressed (quiet) in favour of ONE summary entry — a
+ * migration is a single act, and 37 identical "~ task edited" lines would flood every brief
+ * and whatsnew across the mesh with something no reader needs item by item. */
+export function runTaskRetag(a = {}) {
+  const offEnum = (t) => {
+    const v = String(t.cat ?? '').trim().toLowerCase();
+    return v && !TASK_CATS.includes(v);
+  };
+  const affected = loadTasks().tasks.filter(offEnum)
+    .map(t => ({ id: t.id, project: t.project, cat: t.cat, tag: slugify(t.cat) }));
+  if (!a.apply) return { apply: false, count: affected.length, tasks: affected };
+  const by = requireAuthor(a.by, 'by');
+  let moved = 0;
+  const failed = [];
+  for (const x of affected) {
+    try { runTaskUpdate({ id: x.id, cat: x.cat, by, quiet: true }); moved++; }
+    catch { failed.push(x.id); }
+  }
+  if (moved) journalAppend({ ts: now(), project: 'general', agent: by, kind: 'note',
+    text: `cat→tags: ${moved} task(s) moved off-enum categories into tags (${[...new Set(affected.map(x => x.tag))].join(', ')})` });
+  return { apply: true, count: affected.length, moved, failed, tasks: affected };
 }
 
 export function runBrief(a = {}) {
@@ -1355,19 +1569,28 @@ export function runBrief(a = {}) {
   const journalRecent = journalSince(hours);
 
   const staleCards = [];
+  // Two different silences, deliberately reported apart: staleCards = nobody touched this
+  // card in N days (it may still be true — the project could be dormant); staleDigests =
+  // the project kept WORKING and its card did not follow, which is the one that misleads.
+  const staleDigests = [];
+  const lastJournal = lastJournalByProject();
   try {
     for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
       const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
       const m = c.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);   // card-set cards go stale too
       if (m) {
+        const project = f.replace('.md', '');
         const daysAgo = Math.floor((nowMs - parseTs(m[1]).getTime()) / 86400000);
-        if (daysAgo >= staleDays) staleCards.push({ project: f.replace('.md', ''), synced: m[1], daysAgo });
+        if (daysAgo >= staleDays) staleCards.push({ project, synced: m[1], daysAgo });
+        const lag = digestLag(m[1], lastJournal[project], staleDays);
+        if (lag) staleDigests.push({ project, synced: m[1], ...lag });
       }
     }
   } catch {}
+  staleDigests.sort((x, y) => y.daysBehind - x.daysBehind);
 
   const claimsDb = loadClaims();
-  return { tasksOpen, journalRecent, staleCards, activeClaims: activeClaims(claimsDb.claims), generated: now() };
+  return { tasksOpen, journalRecent, staleCards, staleDigests, activeClaims: activeClaims(claimsDb.claims), generated: now() };
 }
 
 /* ── Onboarding / what's-new ── */

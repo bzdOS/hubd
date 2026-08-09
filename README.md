@@ -41,9 +41,10 @@ included in the npm package; it comes from the repo.
 ```bash
 npm i -g @bzdos/hubd   # installs both binaries: hubd (MCP server) + hub (CLI)
 hub init             # scaffold a team folder: AGENTS.md, INBOX.md, queues/
-hub doctor           # check hub base, team root, locks and queues
-hub status           # every project at a glance
+hub doctor           # check hub base, team root, locks, queues, ghost queues
+hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
+hub queue gc         # list queues nobody ever consumed (--apply archives them)
 hub serve            # read-only kanban on localhost
 # one-off, without install: npx -p @bzdos/hubd hub status
 ```

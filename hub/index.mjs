@@ -13,7 +13,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks,
+  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
@@ -44,8 +44,10 @@ const TOOLS = [
       kind: { type: 'string', enum: ['done', 'broken', 'blocked', 'note'], description: 'default: note' },
     }, required: ['project', 'agent', 'text'] } },
 
-  { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',
-    inputSchema: { type: 'object', properties: {} } },
+  { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',
+    inputSchema: { type: 'object', properties: {
+      staleDays: { type: 'integer', description: 'digest counts as behind after N days of journal it does not reflect, default 7' },
+    } } },
 
   { name: 'hub_get', description: 'Everything about ONE project: its full card (digest + facts), recent journal entries for it, and any active soft-locks. Use after hub_status or hub_search points you at a project.',
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
@@ -65,7 +67,8 @@ const TOOLS = [
       project: { type: 'string' }, text: { type: 'string' },
       importance: { type: 'string', enum: ['high', 'med', 'normal'], description: 'default normal' },
       deadline: { type: 'string', description: 'YYYY-MM-DD, optional' },
-      cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'], description: 'task category, optional' },
+      cat: { type: 'string', description: 'one of technical | communicative | decision | chore. Anything else is kept — as a tag, not a category: the four values are the axis every by-type number is counted on, so it stays closed.' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'free-form labels — the open vocabulary next to the closed cat one' },
       assignee: { type: 'string', description: 'agent name or owner, optional' },
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on (bare number or a node-scoped id like "planck-3")' },
@@ -73,9 +76,11 @@ const TOOLS = [
     }, required: ['project', 'text', 'by'] } },
 
   { name: 'hub_task_list',
-    description: 'List backlog tasks. Filter by project and/or status.',
+    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, status: { type: 'string', enum: ['open', 'done', 'all'] },
+      limit: { type: 'integer', description: 'page size' },
+      offset: { type: 'integer', description: 'skip this many, for paging through a long backlog' },
     } } },
 
   { name: 'hub_task_update',
@@ -83,14 +88,16 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "planck-3"' }, status: { type: 'string', enum: ['open', 'done'] },
       importance: { type: 'string', enum: ['high', 'med', 'normal'] },
-      text: { type: 'string' }, deadline: { type: 'string' }, cat: { type: 'string', enum: ['technical', 'communicative', 'decision', 'chore'] },
+      text: { type: 'string' }, deadline: { type: 'string' },
+      cat: { type: 'string', description: 'technical | communicative | decision | chore — anything else is kept as a tag instead' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'free-form labels; replaces the task\'s tag list' },
       assignee: { type: 'string' }, by: { type: 'string' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
     }, required: ['id', 'by'] } },
 
   { name: 'hub_brief',
-    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
+    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'journal window, default 48' },
       staleDays: { type: 'integer', description: 'card considered stale after N days, default 7' },
@@ -206,8 +213,37 @@ const TOOLS = [
     } } },
 ];
 
+/* Per-tool output budgets (see capOutput in lib/core.mjs). Order matters: the FIRST key of a
+ * plan is cut first when the payload is still too large, so every plan leads with its journal
+ * or its most repetitive list and ends with the things a caller asked the tool for. A tool
+ * absent from this table is already small by construction (single card, one record, counts). */
+const OUTPUT_PLANS = {
+  hub_brief:      [['journalRecent', 30], ['queues', 40], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40]],
+  hub_status:     [['recentJournal', 10], ['projects', 60]],
+  hub_get:        [['journal', 15], ['claims', 20]],
+  hub_whatsnew:   [['entries', 50]],
+  hub_search:     [['hits', 40]],
+  hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25]],
+  hub_kanban:     [['inbox', 30], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
+  hub_task_list:  [['tasks', 100]],
+  hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
+  hub_graph:      [['edges', 200], ['dangling', 50]],
+  hub_presence:   [['agents', 60]],
+  hub_resource_list: [['resources', 100]],
+};
+
+// Every capped tool advertises the same escape hatch, injected in ONE place so that adding a
+// plan above can never leave a tool whose output is trimmed with no documented way out.
+for (const name of Object.keys(OUTPUT_PLANS)) {
+  const t = TOOLS.find(x => x.name === name);
+  if (!t) continue;
+  t.inputSchema = t.inputSchema || { type: 'object', properties: {} };
+  t.inputSchema.properties = t.inputSchema.properties || {};
+  t.inputSchema.properties.full = { type: 'boolean', description: 'return everything, uncapped. By default long lists are trimmed to fit an agent context and what was left out is reported in `truncated`.' };
+}
+
 const DISPATCH = {
-  hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: () => runStatus(),
+  hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: (a) => runStatus(a),
   hub_get: runGet, hub_search: runSearch, hub_context: runContext,
   hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
   // queues: HUB captured synchronously here, same reasoning as hub_queue_send/wait below —
@@ -373,11 +409,14 @@ async function handleMessage(msg, mode = 'stdio') {
       // server, so "the caller forgot to say who it is" degrades to a real name from
       // the config instead of to a placeholder. An explicit argument always wins, so a
       // session that knows its own function can still be more specific than the floor.
-      const r = await fn(withAuthorFloor(params?.arguments || {}));
+      const argv = withAuthorFloor(params?.arguments || {});
+      const r = await fn(argv);
       if (name === 'hub_onboarding') onboarded = true;
       if (name === 'hub_whatsnew') whatsnewChecked = true;
       const extra = mode === 'stdio' ? nudges(name) : [];
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(r, null, 1) }, ...extra], isError: false } };
+      // One choke point for every tool's size, so no new tool can forget it.
+      const capped = OUTPUT_PLANS[name] ? capOutput(r, OUTPUT_PLANS[name], { full: !!argv.full }) : r;
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(capped, null, 1) }, ...extra], isError: false } };
     } catch (e) {
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + e.message }], isError: true } };
     }

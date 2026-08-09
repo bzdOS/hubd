@@ -1021,5 +1021,135 @@ if (prevFloorEnv === undefined) delete process.env.HUBD_AGENT; else process.env.
 fs.rmSync(EV, { recursive: true, force: true });
 core.setHubBase(T0);
 
+// ── the digest ends at the next heading, not at a literal "## Facts" ──
+// A localised hub (sections.json) or any card whose next section simply is not "Facts"
+// used to report its whole body as the digest — in hub_status, in hub_context, and as the
+// baseline runSync compares against (so every sync "changed" the digest and archived the
+// entire card into history).
+const DG = mktmp();
+core.setHubBase(DG);
+fs.writeFileSync(path.join(DG, 'projects', 'loc.md'),
+  '# loc\n\n- slug: loc\n- set: 2026-07-01 10:00 by dev-t\n\n## Digest\n\nthe one-line digest\n\n## Next step\n\n- do the thing\n\n## Gates\n\n- kill if X\n');
+ok(core.digestOf(fs.readFileSync(path.join(DG, 'projects', 'loc.md'), 'utf8')) === 'the one-line digest',
+  'digest: cut at the next ## heading, not at the word Facts');
+const dgStatus = core.runStatus().projects.find(p => p.project === 'loc');
+ok(dgStatus && dgStatus.digest === 'the one-line digest',
+  `status: reports the digest, not the whole card (got ${JSON.stringify((dgStatus || {}).digest || '').slice(0, 60)})`);
+ok(core.digestOf('# x\n\nno digest section here\n') === null, 'digest: a card without ## Digest yields null');
+
+// ── a card that trails its own journal is flagged, a quiet project is not ──
+const ymd = (d) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 16).replace('T', ' ');
+fs.writeFileSync(path.join(DG, 'projects', 'busy.md'), `# busy\n\n- slug: busy\n- set: ${ymd(40)} by dev-t\n\n## Digest\n\nold news\n`);
+fs.writeFileSync(path.join(DG, 'projects', 'quiet.md'), `# quiet\n\n- slug: quiet\n- set: ${ymd(40)} by dev-t\n\n## Digest\n\nstill true\n`);
+fs.writeFileSync(path.join(DG, 'journal.t.jsonl'),
+  JSON.stringify({ ts: ymd(1), project: 'busy', agent: 'dev-t', kind: 'note', text: 'work kept happening' }) + '\n' +
+  JSON.stringify({ ts: ymd(41), project: 'quiet', agent: 'dev-t', kind: 'note', text: 'last thing that ever happened' }) + '\n');
+const lagged = core.runStatus().projects.find(p => p.project === 'busy');
+const calm = core.runStatus().projects.find(p => p.project === 'quiet');
+ok(lagged && lagged.digestStale && lagged.digestStale.daysBehind >= 38,
+  `staleness: a card 39d behind its own journal is flagged (got ${JSON.stringify((lagged || {}).digestStale)})`);
+ok(calm && !calm.digestStale, 'staleness: a dormant project whose journal stopped first is NOT flagged');
+ok(core.runBrief().staleDigests.some(s => s.project === 'busy'), 'staleness: brief lists it under staleDigests');
+
+// ── closing a closed task is a no-op, not a second close ──
+const ID = mktmp();
+core.setHubBase(ID);
+const idT = core.runTaskAdd({ project: 'p', text: 'close me twice', by: 'dev-t' }).task;
+const close1 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'dev-t' });
+const close2 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'other-t' });
+ok(!close1.noop && close2.noop === 'already-done', 'idempotent done: the second close reports itself as a no-op');
+const idEvents = fs.readFileSync(path.join(ID, `tasks.${core.JOURNAL_NODE}.events.jsonl`), 'utf8')
+  .trim().split('\n').map(l => JSON.parse(l)).filter(e => e.patch && e.patch.status === 'done');
+ok(idEvents.length === 1, `idempotent done: exactly one done event on disk (got ${idEvents.length})`);
+ok(core.journalTail('p', 20).some(e => /already closed/.test(e.text)), 'idempotent done: the attempt is still journalled');
+const close3 = core.runTaskUpdate({ id: idT.id, status: 'done', assignee: 'zed', by: 'dev-t' });
+ok(close3.task.assignee === 'zed' && close3.task.done === close1.task.done,
+  'idempotent done: a re-close carrying a real edit applies the edit and keeps the original close time');
+
+// ── cat is a closed vocabulary; anything else survives as a tag ──
+ok(core.normalizeCat('technical').cat === 'technical', 'cat: a canonical value passes through');
+ok(core.normalizeCat('Chore ').cat === 'chore', 'cat: trimmed and lower-cased');
+const offEnum = core.normalizeCat('jail', ['ci']);
+ok(offEnum.cat === null && offEnum.tags.join(',') === 'ci,jail', `cat: an off-enum value becomes a tag (got ${JSON.stringify(offEnum)})`);
+const catTask = core.runTaskAdd({ project: 'p', text: 'built in a jail', cat: 'jail', by: 'dev-t' }).task;
+ok(catTask.cat === null && catTask.tags.includes('jail'), 'cat: task add routes an off-enum cat into tags');
+// the migration is append-only: it writes set events, it does not rewrite the legacy log
+fs.writeFileSync(path.join(ID, 'tasks.legacy.events.jsonl'),
+  JSON.stringify({ ts: '2026-06-01 10:00', node: 'legacy', ev: 'add', id: 'legacy-1', t: { id: 'legacy-1', project: 'p', text: 'old', cat: 'semmarkup', status: 'open' } }) + '\n');
+const legacyBefore = fs.readFileSync(path.join(ID, 'tasks.legacy.events.jsonl'), 'utf8');
+ok(core.runTaskRetag({}).count === 1, 'retag: dry run finds the off-enum task and changes nothing');
+ok(core.runTaskRetag({ apply: true, by: 'dev-t' }).moved === 1, 'retag: apply moves it');
+ok(fs.readFileSync(path.join(ID, 'tasks.legacy.events.jsonl'), 'utf8') === legacyBefore,
+  'retag: the legacy event log is untouched (append-only contract)');
+const retagged = core.runTaskList({ status: 'all' }).tasks.find(t => String(t.id) === 'legacy-1');
+ok(retagged.cat === null && retagged.tags.includes('semmarkup'), 'retag: the old category survives as a tag');
+
+// ── paging beats a silent cap ──
+for (let i = 0; i < 5; i++) core.runTaskAdd({ project: 'many', text: 'task ' + i, by: 'dev-t' });
+const page = core.runTaskList({ project: 'many', limit: 2, offset: 1 });
+ok(page.count === 2 && page.total === 5 && page.offset === 1,
+  `task list: a page reports its own size AND the full total (got ${JSON.stringify({ c: page.count, t: page.total })})`);
+
+// ── ghost queues: never consumed, never deleted ──
+const QG = mktmp();
+fs.mkdirSync(path.join(QG, 'queues'), { recursive: true });
+fs.mkdirSync(path.join(QG, '.qstate'), { recursive: true });
+fs.writeFileSync(path.join(QG, 'owner-roles.json'), '["boss"]');
+const oldMsg = '\n## 2026-01-02 10:00 · from alice\nancient\n';
+fs.writeFileSync(path.join(QG, 'queues', 'ghost.n1.queue.md'), oldMsg);
+fs.writeFileSync(path.join(QG, 'queues', 'live.n1.queue.md'), oldMsg);
+fs.writeFileSync(path.join(QG, '.qstate', 'live.n1.queue.md.offset'), '0');   // a registered consumer that has not drained yet
+fs.writeFileSync(path.join(QG, 'queues', 'boss.n1.queue.md'), oldMsg);
+fs.mkdirSync(path.join(QG, '.qstate', '__watchall__'), { recursive: true });
+fs.writeFileSync(path.join(QG, '.qstate', '__watchall__', 'tapped.n1.queue.md.offset'), '5');
+fs.writeFileSync(path.join(QG, 'queues', 'tapped.n1.queue.md'), oldMsg);
+const q = await import(path.join(REPO, 'hub/lib/queue.mjs'));
+core.setHubBase(QG);   // ownerRoles() reads HUB
+const inv = q.queueInventory({ root: QG, days: 30 });
+const byFile = Object.fromEntries(inv.map(x => [x.file, x]));
+ok(byFile['ghost.n1.queue.md'].ghost === true, 'queue gc: a never-consumed old queue is a ghost');
+ok(byFile['live.n1.queue.md'].ghost === false, 'queue gc: a queue with a cursor is spared');
+ok(byFile['boss.n1.queue.md'].ghost === false, 'queue gc: a human owner queue is spared (a person reads it as a file)');
+ok(byFile['tapped.n1.queue.md'].ghost === true, 'queue gc: a __watchall__ tap does not count as having consumed it');
+const gcDry = q.runQueueGc({ root: QG, days: 30 });
+ok(gcDry.apply === false && fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
+  'queue gc: the dry run moves nothing');
+const gcRun = q.runQueueGc({ root: QG, days: 30, apply: true });
+ok(gcRun.moved.length === 2 && !fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
+  `queue gc: apply archives the ghosts (moved ${gcRun.moved.length})`);
+ok(fs.readFileSync(path.join(QG, 'queues', 'archive', 'ghost.n1.queue.md'), 'utf8') === oldMsg,
+  'queue gc: archived content is byte-identical — moved, never deleted');
+ok(fs.existsSync(path.join(QG, 'queues', 'live.n1.queue.md')) && fs.existsSync(path.join(QG, 'queues', 'boss.n1.queue.md')),
+  'queue gc: live and owner queues stay put');
+ok(q.queueSummaryForBrief({ root: QG }).find(r => r.role === 'live').neverRead === false,
+  'brief: a consumed role is not flagged never-read');
+
+// ── output budgets ──
+const bigPayload = { journal: Array.from({ length: 200 }, (_, i) => ({ ts: '2026-07-01 10:00', text: 'x'.repeat(200) + i })),
+              tasks: Array.from({ length: 80 }, (_, i) => ({ id: i, text: 'y'.repeat(100) })) };
+const plan = [['journal', 30], ['tasks', 40]];
+const capped = core.capOutput(bigPayload, plan, { maxChars: 20000 });
+ok(capped.journal.length <= 30 && capped.tasks.length <= 40, 'budget: per-key top-N applies');
+ok(JSON.stringify(capped, null, 1).length <= 20000,
+  `budget: the payload really fits, measured the way the transport serialises it (got ${JSON.stringify(capped, null, 1).length})`);
+ok(capped.truncated.journal.hidden === 200 - capped.journal.length && /hidden/.test(capped.hint),
+  'budget: what was hidden is stated, never silently dropped');
+// Order matters only once the governor actually has to cut: squeeze hard enough that the
+// per-key top-N alone cannot fit the payload, then the journal must give way before the tasks.
+const squeezed = core.capOutput(bigPayload, plan, { maxChars: 8000 });
+ok(squeezed.journal.length < 30 && squeezed.tasks.length === 40,
+  `budget: under pressure the journal gives way first and the tasks stay whole (journal ${squeezed.journal.length}, tasks ${squeezed.tasks.length})`);
+ok(core.capOutput(bigPayload, plan, { maxChars: 20000, full: true }).journal.length === 200,
+  'budget: full:true returns everything');
+const tiny = core.capOutput(bigPayload, plan, { maxChars: 2000 });
+ok(JSON.stringify(tiny, null, 1).length <= 2000 && tiny.tasks.length >= 1,
+  `budget: an impossible budget empties the first list before gutting the last (tasks left ${tiny.tasks.length})`);
+ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a small payload is passed through untouched');
+
+fs.rmSync(DG, { recursive: true, force: true });
+fs.rmSync(ID, { recursive: true, force: true });
+fs.rmSync(QG, { recursive: true, force: true });
+core.setHubBase(T0);
+
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);
