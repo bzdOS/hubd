@@ -36,6 +36,25 @@ cost, and which of those belongs to a project at all.
   that mixes an observed span with a guessed rate gets quoted later as if
   somebody had counted. An entry with no numbers is refused — an absent value
   must not become a recorded zero.
+- **`hub init` stopped scaffolding into source checkouts** — with no argument it
+  took the cwd, so run from a code repo it dropped `AGENTS.md`, `INBOX.md`,
+  `queues/` and `specs/` in there, ready to be committed by accident. It now
+  refuses when the cwd has a `.git` and no hub data, names both safe
+  alternatives, and `--here` overrides — the same shape of guard the queue
+  resolver already had for misrouted sends. This project's own `.gitignore`
+  carries `/queues/` and `/INBOX.md` entries: the scar of this exact misroute,
+  papered over rather than fixed. It happened again while healthchecking 0.9.0,
+  which is how it got found.
+- **One node identity for the whole hub** — queue filenames read the hostname
+  directly while the journal and the task log went through `HUBD_NODE`, so on a
+  host whose identity had to be normalised by that variable, `journal.<node>.jsonl`
+  and `<role>.<node>.queue.md` disagreed about the same machine. That is the
+  ghost-employee bug from the other side: a hostname change already invented a
+  node nobody hired, and half the files honouring an override while the other
+  half ignore it is how one machine becomes two. Found by running the packaged
+  tree against a real hub. Renaming the write target strands nothing — readers
+  match `<role>.<anything>.queue.md`, so files written under the old name are
+  still read; verified live, with the old and new files aggregating in one ledger.
 - **Scope layers** — not everything belongs to a project. `hub_operator` reads
   the operator card (the human's rhythm, the framing that works, and
   **Boundaries** — what is never collected; agents read that section and never

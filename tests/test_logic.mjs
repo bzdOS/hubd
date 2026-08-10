@@ -679,7 +679,10 @@ const LK = mktmp();
 fs.mkdirSync(path.join(LK, 'queues'), { recursive: true });
 qSend('locked', 'contended message', { from: 'test', root: LK });
 fs.mkdirSync(path.join(LK, '.qstate'), { recursive: true });
-const lkNode = (os.hostname() || 'node').split('.')[0] || 'node';
+// core.JOURNAL_NODE, not a second copy of the hostname formula: queue filenames follow the
+// SAME node identity as the journal and the task log (HUBD_NODE included), and this test
+// duplicating the old formula is exactly how the two drifted apart in the first place.
+const lkNode = core.JOURNAL_NODE;
 const lkLock = path.join(LK, '.qstate', `locked.${lkNode}.queue.md.offset.lock`);
 fs.writeFileSync(lkLock, '');   // someone else is mid-drain on this cursor
 const lkBlocked = await qWait('locked', { timeout: 1, root: LK });
@@ -1442,6 +1445,34 @@ ok(/cto-t/.test(amended.appended) && /\d{4}-\d{2}-\d{2}/.test(amended.appended),
 core.runRules({ append: 'and a second one', by: 'cto-t' });
 ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) || []).length === 1,
   'rules: a second amendment joins the same heading instead of starting another');
+
+// ── init does not scaffold a team into somebody's source checkout ──
+// Found by healthchecking 0.9.0: `hub init` with no argument took the cwd, and run from a code
+// repo it dropped AGENTS.md / INBOX.md / queues/ / specs/ in there, ready to be committed by
+// accident. This repo's own .gitignore carries /queues/ and /INBOX.md — the scar of the same
+// misroute, papered over rather than fixed.
+const IN = mktmp();
+execSync('git init -q .', { cwd: IN });
+// cwd matters here and run() inherits the test process's own — which IS a checkout, so using it
+// would have re-run the very misroute this test is about, in this repo.
+const inCwd = (a) => {
+  try { return { code: 0, out: execSync(`${CLI} ${a}`, { cwd: IN, env: { ...process.env, HUBD_DIR: path.join(IN, 'hubbase') }, encoding: 'utf8' }) }; }
+  catch (e) { return { code: e.status ?? 1, out: (e.stdout || '') + (e.stderr || '') }; }
+};
+const initRepo = inCwd('init');
+ok(initRepo.code === 1 && /source checkout/.test(initRepo.out),
+  `init: refuses a bare init inside a checkout (code ${initRepo.code})`);
+ok(!fs.existsSync(path.join(IN, 'AGENTS.md')) && !fs.existsSync(path.join(IN, 'specs')),
+  'init: and writes nothing at all when it refuses');
+const initTarget = path.join(IN, 'team');
+fs.mkdirSync(initTarget);
+inCwd(`init ${initTarget}`);
+ok(fs.existsSync(path.join(initTarget, 'AGENTS.md')) && fs.existsSync(path.join(initTarget, 'queues', 'README.md')),
+  'init: an explicit folder still scaffolds');
+inCwd('init --here');
+ok(fs.existsSync(path.join(IN, 'AGENTS.md')),
+  'init: --here overrides the guard, so a deliberate scaffold-in-place is one flag away');
+fs.rmSync(IN, { recursive: true, force: true });
 
 // ── machine-readable output survives a pipe ──
 // A pipe buffers 64KB and Node writes to it asynchronously, so process.exit() right after a
