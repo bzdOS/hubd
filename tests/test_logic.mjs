@@ -1446,6 +1446,25 @@ core.runRules({ append: 'and a second one', by: 'cto-t' });
 ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) || []).length === 1,
   'rules: a second amendment joins the same heading instead of starting another');
 
+// ── the journal says WHAT changed on a task, not merely that something did ──
+// "~ task #N → edited" made the most useful event in a coordination log (somebody took this
+// task) indistinguishable from a typo fix in its text. Found while filming the kanban: the live
+// activity line for an assignment read "edited".
+const JW = mktmp();
+core.setHubBase(JW);
+const jwT = core.runTaskAdd({ project: 'p', text: 'the work', by: 'dev-t' }).task;
+core.runTaskUpdate({ id: jwT.id, assignee: 'dev-atlas', by: 'lead-t' });
+core.runTaskUpdate({ id: jwT.id, importance: 'high', deadline: '2026-12-01', by: 'lead-t' });
+core.runTaskUpdate({ id: jwT.id, status: 'done', by: 'dev-atlas' });
+const jwLines = core.journalTail('p', 20).filter(e => e.kind === 'task').map(e => e.text);
+ok(jwLines.some(l => /@dev-atlas/.test(l)), `journal: an assignment names the new owner (got ${JSON.stringify(jwLines)})`);
+ok(jwLines.some(l => /importance high/.test(l) && /due 2026-12-01/.test(l)),
+  'journal: a priority and deadline change name both');
+ok(jwLines.some(l => /→ done$/.test(l)), 'journal: a close still reads as done');
+ok(!jwLines.some(l => /→ edited$/.test(l)), 'journal: nothing falls back to the useless word');
+fs.rmSync(JW, { recursive: true, force: true });
+core.setHubBase(T0);
+
 // ── init does not scaffold a team into somebody's source checkout ──
 // Found by healthchecking 0.9.0: `hub init` with no argument took the cwd, and run from a code
 // repo it dropped AGENTS.md / INBOX.md / queues/ / specs/ in there, ready to be committed by
