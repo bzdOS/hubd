@@ -35,8 +35,11 @@ examples/        what a real working day looks like in the journal
 
 ## Start in three steps
 
-1. **Use this template** (button above) — or clone and copy the tree into an
-   existing private repo. The structure doesn't need to be the repo root.
+1. **Copy this folder** into a repo of your own — one command:
+   `npx degit bzdOS/hubd/hubd-company my-company`, then `cd my-company && git init`.
+   Cloning the hubd repo and copying the folder by hand works the same. The
+   structure doesn't need to be the repo root. Keep your copy **private**: it will
+   fill up with your work.
 2. Edit `AGENTS.md`: put your name in as Owner, keep the roles you need,
    delete the ones you don't.
 3. Open a fresh agent session, paste `roles/cto.md` (or any role) as the first
