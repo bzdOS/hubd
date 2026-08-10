@@ -154,7 +154,20 @@ function drainFile(qdir, stateDir, f) {
  * @param {{ from: string, root?: string, node?: string }} options
  * @returns {string} path to the queue file
  */
-export function queueSend(role, text, { from, root, node } = {}) {
+/* Which task a message is about. A HOLD reply to a task once sat consumed in a queue while the
+ * task itself stayed plain open/high with no trace of the blocker for four days — the reply and
+ * the task had no way to reference each other. So a sender may name the task, the reference is
+ * stamped into the block header (durable, mesh-synced, and still matching the header pattern
+ * every reader already uses), and a consumer gets the ids back with the text so it can report
+ * against them instead of guessing what the message was about. */
+export const TASK_REF_RE = /·\s*task\s*#([^\s·]+)/gi;
+export function parseTaskRefs(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(TASK_REF_RE)) if (!out.includes(m[1])) out.push(m[1]);
+  return out;
+}
+
+export function queueSend(role, text, { from, root, node, task } = {}) {
   // A queue block is a durable, mesh-synced write that says "from <sender>" forever —
   // so the sender is held to the same rule as every other author. This used to default
   // to 'unknown' (CLI) / 'mcp' (server): exactly the placeholders requireAuthor refuses
@@ -168,7 +181,10 @@ export function queueSend(role, text, { from, root, node } = {}) {
   const qfile = path.join(qdir, `${role}.${nd}.queue.md`);
 
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const entry = `\n## ${ts} · from ${sender}\n${String(text).trim()}\n`;
+  // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
+  // prefix every existing reader (peekQueueDepth, doctor, the archive) keys on.
+  const ref = (task ?? '') !== '' ? ` · task #${String(task).trim()}` : '';
+  const entry = `\n## ${ts} · from ${sender}${ref}\n${String(text).trim()}\n`;
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
@@ -256,7 +272,11 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
         const t = drainFile(qdir, stateDir, f);
         if (t) parts.push(t);
       }
-      if (parts.length) return { changed: true, text: parts.join('\n').trim() };
+      if (parts.length) {
+        const text = parts.join('\n').trim();
+        const tasks = parseTaskRefs(text);
+        return { changed: true, text, ...(tasks.length ? { tasks } : {}) };
+      }
       if (Date.now() >= deadline) return { changed: false };
 
       writeWaiter();
@@ -333,7 +353,11 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
       const events = [];
       for (const f of sourceFiles()) {
         const t = drainFile(qdir, stateDir, f);
-        if (t) { const { role, node } = parseFile(f); events.push({ role, node, text: t }); }
+        if (t) {
+          const { role, node } = parseFile(f);
+          const tasks = parseTaskRefs(t);
+          events.push({ role, node, text: t, ...(tasks.length ? { tasks } : {}) });
+        }
       }
       if (events.length) return { changed: true, events };
       if (Date.now() >= deadline) return { changed: false };
@@ -505,6 +529,67 @@ export function queueInventory({ root, days = 30 } = {}) {
     return { file: f, role, node, bytes, messages: heads.length, newest, ageDays, read, lastSeen, isOwner,
       ghost: !read && !lastSeen && !isOwner && ageDays >= days };
   });
+}
+
+/**
+ * One host-agnostic ledger of a role's traffic: how much has been DELIVERED and how much is
+ * still pending, aggregated across every per-host file.
+ *
+ * Why this exists: per-host files each look authoritative on their own. A reply that had
+ * already been consumed elsewhere sat in `worker.<host>.queue.md`, and read with
+ * plain `cat` from another host it looked like it had never been delivered — there was no view
+ * that answered "delivered or pending?" without opening N files and knowing which cursor
+ * belonged to which. Byte offsets are split on a Buffer, never on a JS string: a cursor counts
+ * bytes, and slicing UTF-16 code units instead would miscount every non-ASCII message.
+ *
+ * @param {{ root?: string, role?: string }} options
+ */
+export function queueLedger({ root, role } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return { roles: [] }; }
+  const fanoutRoles = new Set(subscriberRoles(r));
+  const owners = new Set(ownerRoles());
+  const HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm;
+  const countHeads = (s) => (s.match(HEAD) || []).length;
+
+  const byRole = new Map();
+  for (const f of files) {
+    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
+    const rl = m ? m[1] : f.replace(/\.queue\.md$/, '');
+    if (role && rl !== role) continue;
+    let buf = Buffer.alloc(0);
+    try { buf = fs.readFileSync(path.join(qdir, f)); } catch {}
+    let cursor = null;
+    try { cursor = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10); } catch {}
+    const off = Math.min(Math.max(0, cursor || 0), buf.length);
+    const total = countHeads(buf.toString('utf8'));
+    const delivered = countHeads(buf.subarray(0, off).toString('utf8'));
+    // Per-subscriber cursors (broadcast roles): each reader has its own position, so there is
+    // no single "delivered" for the role — report the readers instead of averaging them into a
+    // number that is true for nobody.
+    const readers = [];
+    try {
+      for (const d of fs.readdirSync(stateDir, { withFileTypes: true })) {
+        if (!d.isDirectory() || d.name === '__watchall__') continue;
+        try {
+          const c = parseInt(fs.readFileSync(path.join(stateDir, d.name, `${f}.offset`), 'utf8').trim(), 10) || 0;
+          readers.push({ subscriber: d.name, delivered: countHeads(buf.subarray(0, Math.min(c, buf.length)).toString('utf8')) });
+        } catch {}
+      }
+    } catch {}
+    if (!byRole.has(rl)) byRole.set(rl, { role: rl, fanout: fanoutRoles.has(rl), isButton: owners.has(rl), total: 0, delivered: 0, pending: 0, files: [], readers: [] });
+    const agg = byRole.get(rl);
+    agg.total += total; agg.delivered += delivered; agg.pending += total - delivered;
+    agg.files.push({ file: f, node: m && m[2] ? m[2] : null, total, delivered, pending: total - delivered, cursor: cursor == null ? null : off, bytes: buf.length });
+    for (const rd of readers) {
+      const found = agg.readers.find(x => x.subscriber === rd.subscriber);
+      if (found) found.delivered += rd.delivered; else agg.readers.push({ ...rd });
+    }
+  }
+  return { roles: [...byRole.values()].sort((a, b) => (a.role < b.role ? -1 : 1)) };
 }
 
 /**
