@@ -18,7 +18,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit,
+  sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
@@ -659,7 +659,7 @@ if (cmd === 'report') {
     done(0);
   }
   let r;
-  try { r = runReport({ project: proj, agent, text, kind }); }
+  try { r = runReport({ project: proj, agent, text, kind, private: args.includes('--private') }); }
   catch (e) { die(e.message); }   // a strict refusal is a message to read, not a stack trace
   const parts = [];
   if (r.decisions) parts.push(r.decisions + ' decision' + (r.decisions > 1 ? 's' : ''));
@@ -669,6 +669,7 @@ if (cmd === 'report') {
   if (r.next) parts.push('next set');
   if (r.done.length) parts.push('closed #' + r.done.join(' #'));
   if (r.doneAlready && r.doneAlready.length) parts.push('already closed #' + r.doneAlready.join(' #'));
+  if (r.private) parts.push('PRIVATE (journal.life.jsonl, local only, never synced)');
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
@@ -903,6 +904,100 @@ if (cmd === 'section') {
       provenance: typeof src === 'string' ? src : undefined, mode: args.includes('--set') ? 'set' : 'append' });
   } catch (e) { die(e.message); }
   console.log(`${r.project} → ## ${r.section}${r.created ? '  (section created — check the name if you expected it to exist)' : ''}`);
+  done(0);
+}
+
+if (cmd === 'now' || cmd === 'whatnext') {
+  const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
+  const r = runNext({ project: proj || undefined, assignee: getFlag('--assignee') || undefined });
+  if (!r.task) { console.log('nothing to do: ' + r.why); done(0); }
+  const t = r.task;
+  console.log(`#${t.id} [${t.project}]${t.deadline ? ' \u23f0' + t.deadline : ''}${t.assignee ? ' @' + t.assignee : ''}`);
+  console.log(t.text);
+  console.log(`\nwhy: ${r.why}`);
+  console.log(`(${r.eligible} ready, ${r.blockedCount} blocked` + (r.runnerUp ? `; next after it: #${r.runnerUp.id}` : '') + ')');
+  done(0);
+}
+
+if (cmd === 'agenda') {
+  const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
+  const r = runAgenda({ project: proj || undefined });
+  const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); } };
+  console.log(`\u2500\u2500 AGENDA${proj ? ' \u00b7 ' + proj : ''} \u00b7 ${r.generated} \u2500\u2500  ready ${r.counts.eligible} \u00b7 blocked ${r.counts.blocked}`);
+  const line = (x) => `#${x.id} [${x.project}]${x.deadline ? ' \u23f0' + x.deadline : ''}${x.assignee ? ' @' + x.assignee : ''} ${x.text}`;
+  P('OVERDUE', r.overdue, line);
+  P('DUE SOON', r.dueSoon, line);
+  P('OWNER BUTTONS (only a human can press)', r.ownerButtons, line);
+  P('AGENT WORK, READY NOW', r.agentReady, line);
+  P('BLOCKED', r.blocked, x => line(x) + '  \u2190 waits on #' + x.waitingOn.join(' #'));
+  if (!r.counts.eligible && !r.counts.blocked) console.log('\nnothing open');
+  done(0);
+}
+
+if (cmd === 'recall') {
+  const q = args[1] && !args[1].startsWith('-') ? args[1] : getFlag('-q');
+  if (!q || typeof q !== 'string') die('Usage: hub recall "<what do we know about X>" [--limit N] [--stale-days N]');
+  let r;
+  try { r = runRecall({ query: q, limit: parseInt(String(getFlag('--limit') || '20'), 10), staleDays: parseInt(String(getFlag('--stale-days') || '30'), 10) }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  console.log(`recall "${r.query}" \u2014 ${r.total} hit(s), top ${r.hits.length}`);
+  for (const h of r.hits) {
+    console.log(`\n[${h.kind}] ${h.where}${h.asOf ? '  as of ' + h.asOf : ''}${h.stale ? `  \u26a0 ${h.ageDays}d old \u2014 was true then, verify` : ''}`);
+    console.log('  ' + h.text.replace(/\n+/g, ' ').slice(0, 220));
+  }
+  if (r.hint) console.log('\n' + r.hint);
+  done(0);
+}
+
+if (cmd === 'usage') {
+  if (args[1] === 'add') {
+    let r;
+    try {
+      r = runUsageAdd({
+        agent: authorOrDie('--agent'), project: getFlag('-p') || undefined, task: getFlag('--task') || undefined,
+        seconds: getFlag('--seconds'), tokensIn: getFlag('--tokens-in'), tokensOut: getFlag('--tokens-out'),
+        costUsd: getFlag('--cost'), model: getFlag('--model') || undefined,
+      });
+    } catch (e) { die(e.message); }
+    const x = r.recorded;
+    console.log(`recorded for ${x.agent}${x.project ? ' [' + x.project + ']' : ''}${x.task ? ' #' + x.task : ''}: ` +
+      [x.seconds !== null ? x.seconds + 's' : null, (x.tokensIn || x.tokensOut) ? ((x.tokensIn || 0) + (x.tokensOut || 0)) + ' tokens' : null,
+       x.costUsd !== null ? '$' + x.costUsd : null].filter(Boolean).join(', '));
+    done(0);
+  }
+  const days = parseInt(String(getFlag('--days') || '7'), 10);
+  const r = runUsage({ days, project: getFlag('-p') || undefined });
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  console.log(`\u2500\u2500 USAGE \u00b7 ${days}d${r.project ? ' \u00b7 ' + r.project : ''} \u2500\u2500`);
+  console.log(`SUPPLIED by callers (${r.supplied.calls} report(s)): ${Math.round(r.supplied.seconds / 60)} min \u00b7 ` +
+    `${r.supplied.tokensIn + r.supplied.tokensOut} tokens \u00b7 $${r.supplied.costUsd}`);
+  for (const [p, v] of Object.entries(r.supplied.byProject).sort((x, y) => y[1].costUsd - x[1].costUsd).slice(0, 10)) {
+    console.log(`  ${p}: ${Math.round(v.seconds / 60)} min \u00b7 ${v.tokens} tokens \u00b7 $${Math.round(v.costUsd * 100) / 100}`);
+  }
+  console.log(`MEASURED by the hub: ${r.measured.tasksClosed} task(s) closed` +
+    (r.measured.medianDaysToClose !== null ? `, median ${r.measured.medianDaysToClose}d open-to-close` : ''));
+  console.log('note: ' + r.note);
+  done(0);
+}
+
+if (cmd === 'rules') {
+  const app = getFlag('--append');
+  if (typeof app === 'string') {
+    let r; try { r = runRules({ append: app, by: authorOrDie('--by'), teamRoot: resolveQueueRoot() }); } catch (e) { die(e.message); }
+    console.log(`amended ${r.file}:\n  ${r.appended}`);
+    done(0);
+  }
+  const r = runRules({ teamRoot: resolveQueueRoot() });
+  if (!r.exists) { console.log(r.hint); done(1); }
+  console.log(r.text);
+  done(0);
+}
+
+if (cmd === 'operator') {
+  const r = runOperatorGet();
+  if (!r.exists) { console.log(r.hint + '\n\nsuggested sections:\n' + r.scaffold); done(1); }
+  console.log(r.card);
   done(0);
 }
 

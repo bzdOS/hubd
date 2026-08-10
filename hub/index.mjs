@@ -14,6 +14,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
+  runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
@@ -53,6 +54,7 @@ const TOOLS = [
       project: { type: 'string' }, agent: { type: 'string' },
       text: { type: 'string' },
       kind: { type: 'string', enum: ['done', 'broken', 'blocked', 'note'], description: 'default: note' },
+      private: { type: 'boolean', description: 'route this entry to the LOCAL-ONLY life braid (journal.life.jsonl — gitignored, never mesh-synced) and stamp it private. Prose only: DECIDE:/FACT:/COMM:/NEXT: write into a card, and cards are synced, so mixing the two would publish what you asked to keep local.' },
     }, required: ['project', 'agent', 'text'] } },
 
   { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',
@@ -127,6 +129,49 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       projects: { type: 'array', items: { type: 'string' }, description: 'restrict to these project slugs' },
     } } },
+
+  { name: 'hub_next',
+    description: 'The ONE task to do now, and why it won — not a list. Picking from a list is work, and a session that has to pick tends to pick the easy one. A task whose dependencies are still open is never eligible, however loud it is. Says explicitly when the chosen one is the owner\'s to press rather than an agent\'s.',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string' }, assignee: { type: 'string' },
+    } } },
+
+  { name: 'hub_agenda',
+    description: 'The day split by WHO CAN ACT: agent work ready now, the owner\'s buttons (owner_kind human, or assigned to a role declared in HUB/owner-roles.json), what is blocked and on what, overdue and due-soon. Different question from hub_brief (everything that is going on) and hub_inbox (what needs a decision): this one answers "what can I actually start", which a mixed list hides.',
+    inputSchema: { type: 'object', properties: { project: { type: 'string' } } } },
+
+  { name: 'hub_recall',
+    description: 'What do we know about X — ranked across project cards, their sections, decisions, the journal and tasks, instead of hub_search\'s flat exact-substring list or hub_get\'s everything-about-one-project. Scoring is deterministic and readable: term coverage first, then where the line lives (a decision outranks a passing note), then recency. EVERY hit carries the date it was true as of and a stale flag — recall\'s real failure mode is handing over a two-month-old fact with this morning\'s confidence.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string' },
+      limit: { type: 'integer', description: 'default 20' },
+      staleDays: { type: 'integer', description: 'a hit older than this is flagged stale, default 30' },
+    }, required: ['query'] } },
+
+  { name: 'hub_usage_add',
+    description: 'Record what only YOU can see about a piece of work: seconds, tokens, cost, model. The hub cannot observe any of these, so they arrive here explicitly and are reported back as SUPPLIED, never mixed with what the hub measured itself. At least one number is required — an empty entry would record a $0 session.',
+    inputSchema: { type: 'object', properties: {
+      agent: { type: 'string' }, project: { type: 'string' }, task: { type: ['integer', 'string'] },
+      seconds: { type: 'number' }, tokensIn: { type: 'integer' }, tokensOut: { type: 'integer' },
+      costUsd: { type: 'number' }, model: { type: 'string' },
+    }, required: ['agent'] } },
+
+  { name: 'hub_usage',
+    description: 'What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add, since the hub cannot see them) and MEASURED (closed-task spans and journal events, the hub\'s own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.',
+    inputSchema: { type: 'object', properties: {
+      days: { type: 'integer', description: 'default 7' }, project: { type: 'string' }, agent: { type: 'string' },
+    } } },
+
+  { name: 'hub_rules',
+    description: 'The team constitution (AGENTS.md) over MCP: read it, or append an amendment. hubd mechanics live in the generated HUBD.md — this is the file where the rules YOU set live. An amendment is APPENDED under one dated, attributed heading and never edits a line already there: rewriting a rule destroys the record of what it used to say, which is exactly what hub_audit needs to quote.',
+    inputSchema: { type: 'object', properties: {
+      append: { type: 'string', description: 'the amendment, one line. Omit to read.' },
+      by: { type: 'string', description: 'required with append' },
+    } } },
+
+  { name: 'hub_operator',
+    description: 'The operator card: facts and preferences about the HUMAN — rhythm, what framing works, and the Boundaries section listing what is never collected. Belongs to no project and changes slower than any of them. Agents READ Boundaries and never edit it. Returns a scaffold and how to create it if there is no card yet.',
+    inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_brief',
     description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
@@ -263,6 +308,8 @@ const OUTPUT_PLANS = {
   hub_graph:      [['edges', 200], ['dangling', 50]],
   hub_presence:   [['agents', 60]],
   hub_audit:      [['findings', 40]],
+  hub_recall:     [['hits', 20]],
+  hub_agenda:     [['blocked', 40], ['agentReady', 40], ['dueSoon', 20], ['overdue', 20], ['ownerButtons', 20]],
   hub_lint:       [['findings', 40]],
   hub_resource_list: [['resources', 100]],
 };
@@ -293,6 +340,9 @@ const DISPATCH = {
   // itself without closing an import cycle (see runAudit).
   hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: HUB }) }),
   hub_lint: runLint,
+  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall,
+  hub_usage: runUsage, hub_usage_add: runUsageAdd,
+  hub_rules: (a) => runRules({ ...a, teamRoot: HUB }), hub_operator: () => runOperatorGet(),
   hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
