@@ -1340,6 +1340,109 @@ ok(!core.runAudit({ days: 3650 }).findings.some(f => f.id === 'gate-expired'),
 ok(core.runAudit({ days: 3650 }).notes.some(n => /buttons not checked/.test(n)),
   'audit: with no queue rows passed in, the button check says it was skipped instead of reporting all-clear');
 
+// ── one next thing, and the day split by who can act ──
+const NX = mktmp();
+core.setHubBase(NX);
+fs.writeFileSync(path.join(NX, 'owner-roles.json'), '["alice"]');
+const nxDep = core.runTaskAdd({ project: 'p', text: 'the prep', by: 'dev-t' }).task;
+const nxBlocked = core.runTaskAdd({ project: 'p', text: 'loud but blocked', importance: 'high', depends_on: [nxDep.id], by: 'dev-t' }).task;
+const nxOwner = core.runTaskAdd({ project: 'p', text: 'owner decides', assignee: 'alice', by: 'dev-t' }).task;
+const nx = core.runNext({});
+ok(String(nx.task.id) === String(nxDep.id),
+  `next: a blocked high-importance task never wins over a ready one (${nx.task && nx.task.id})`);
+ok(nx.blockedCount === 1 && nx.eligible === 2, `next: reports what was eligible and what was blocked (${nx.eligible}/${nx.blockedCount})`);
+core.runTaskUpdate({ id: nxDep.id, status: 'done', by: 'dev-t' });
+const nx2 = core.runNext({});
+ok(String(nx2.task.id) === String(nxBlocked.id) && /importance high/.test(nx2.why),
+  'next: closing the dependency unblocks it, and the reason is stated');
+const ag = core.runAgenda({});
+ok(ag.ownerButtons.length === 1 && String(ag.ownerButtons[0].id) === String(nxOwner.id),
+  'agenda: a task assigned to a DECLARED owner role is a button, not agent work');
+ok(!ag.agentReady.some(t => String(t.id) === String(nxOwner.id)),
+  'agenda: and it is kept out of "agent work, ready now" — a list whose point is that you can start everything in it');
+const nxAll = core.runTaskList({ status: 'open' }).count;
+ok(ag.counts.agentReady + ag.counts.ownerButtons + ag.counts.blocked === nxAll,
+  `agenda: every open task lands in exactly one column (${ag.counts.agentReady}+${ag.counts.ownerButtons}+${ag.counts.blocked} vs ${nxAll})`);
+
+// ── recall: ranked, and honest about age ──
+const RC = mktmp();
+core.setHubBase(RC);
+const old = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 16).replace('T', ' ');
+fs.writeFileSync(path.join(RC, 'projects', 'p.md'),
+  `# p\n\n- slug: p\n- set: ${old} by dev-t\n\n## Digest\n\nthe widget pipeline runs nightly\n\n## Decisions\n\n- ${old}: chose the widget queue over polling\n\n## Metrics\n\n- ${old}: widget throughput 40/s\n`);
+fs.writeFileSync(path.join(RC, 'journal.t.jsonl'),
+  JSON.stringify({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'touched the widget config today' }) + '\n');
+const rcl = core.runRecall({ query: 'widget queue', staleDays: 30 });
+ok(rcl.hits.length >= 3 && rcl.hits.every(h => h.asOf !== null), 'recall: every hit carries the date it was true as of');
+ok(/widget queue/i.test(rcl.hits[0].text),
+  `recall: a hit matching BOTH terms outranks one matching a single term (top: ${rcl.hits[0].text.slice(0, 50)})`);
+ok(rcl.hits.some(h => h.stale === true) && /verify/i.test(rcl.hint || ''),
+  'recall: an old hit is flagged stale and the answer says to verify before acting');
+ok(rcl.hits.some(h => h.stale === false), 'recall: a fresh hit is not flagged');
+let rcErr = ''; try { core.runRecall({ query: '  ' }); } catch (e) { rcErr = e.message; }
+ok(/query required/.test(rcErr), 'recall: an empty query is refused, not answered with everything');
+
+// ── usage: measured and supplied never mix ──
+const US = mktmp();
+core.setHubBase(US);
+let usErr = ''; try { core.runUsageAdd({ agent: 'dev-t', project: 'p' }); } catch (e) { usErr = e.message; }
+ok(/nothing to record/.test(usErr),
+  'usage: an entry with no numbers is refused — an absent value must not become a recorded zero');
+core.runUsageAdd({ agent: 'dev-t', project: 'p', seconds: 900, tokensIn: 120000, tokensOut: 8000, costUsd: 1.85, model: 'm' });
+core.runUsageAdd({ agent: 'other-t', project: 'q', costUsd: 0.15 });
+const usTask = core.runTaskAdd({ project: 'p', text: 'closed one', by: 'dev-t' }).task;
+core.runTaskUpdate({ id: usTask.id, status: 'done', by: 'dev-t' });
+const us = core.runUsage({ days: 7 });
+ok(us.supplied.calls === 2 && us.supplied.costUsd === 2 && us.supplied.tokensIn === 120000,
+  `usage: supplied numbers aggregate (${JSON.stringify({ c: us.supplied.calls, $: us.supplied.costUsd })})`);
+ok(us.supplied.byProject.p.seconds === 900 && us.supplied.byAgent['other-t'].costUsd === 0.15,
+  'usage: split by project and by agent');
+ok(us.measured.tasksClosed === 1 && /SUPPLIED/.test(us.note) && /MEASURED/.test(us.note),
+  'usage: the measured half is the hub\'s own arithmetic, and the answer says which half is which');
+ok(core.runUsage({ days: 7, project: 'q' }).supplied.calls === 1, 'usage: filters by project');
+
+// ── scope layers: the operator, the private braid, the rules ──
+const SL = mktmp();
+core.setHubBase(SL);
+const opMissing = core.runOperatorGet();
+ok(opMissing.exists === false && /hub_card_set/.test(opMissing.hint) && /Boundaries/.test(opMissing.scaffold),
+  'operator: absent card returns how to make one, not an error');
+core.runCardSet({ project: 'operator', digest: 'the one human', by: 'dev-t' });
+core.runSectionAdd({ project: 'operator', section: 'Boundaries', text: 'health is never collected', by: 'dev-t' });
+core.runCardSet({ project: 'realproject', digest: 'a real one', by: 'dev-t' });
+ok(core.runOperatorGet().exists === true, 'operator: reads back');
+ok(!core.runStatus().projects.some(p => p.project === 'operator') &&
+   core.runStatus().projects.some(p => p.project === 'realproject'),
+  'operator: it is a card but NOT a project — it never appears in the project table');
+ok(core.runRecall({ query: 'health collected' }).hits.some(h => /never collected/.test(h.text)),
+  'operator: recall reaches it on purpose — person-level facts are exactly what recall is for');
+
+const priv = core.runReport({ project: 'personal', by: 'dev-t', text: 'energy was low', private: true });
+ok(priv.private === true && fs.existsSync(path.join(SL, 'journal.life.jsonl')),
+  'private: prose goes to the local-only life braid');
+ok(!fs.readFileSync(path.join(SL, `journal.${core.JOURNAL_NODE}.jsonl`), 'utf8').includes('energy was low'),
+  'private: and NOT into the mesh-synced journal');
+ok(JSON.parse(fs.readFileSync(path.join(SL, 'journal.life.jsonl'), 'utf8').trim()).private === true,
+  'private: the entry is stamped, so anything copying text can tell what it is holding');
+ok(fs.readFileSync(path.join(SL, '.gitignore'), 'utf8').includes('journal.life.jsonl'),
+  'private: the braid is gitignored — never mesh-synced');
+let privErr = '';
+try { core.runReport({ project: 'personal', by: 'dev-t', text: 'FACT: public thing', private: true }); } catch (e) { privErr = e.message; }
+ok(/only prose lines can be private/.test(privErr),
+  'private: mixing a structured prefix with private is refused instead of quietly publishing it');
+
+fs.writeFileSync(path.join(SL, 'AGENTS.md'), '# rules\n\nThe first rule.\n');
+ok(/The first rule/.test(core.runRules({}).text), 'rules: readable over the tool');
+const amended = core.runRules({ append: 'gates need dates', by: 'cto-t' });
+const rulesText = fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8');
+ok(/## Amendments/.test(rulesText) && /gates need dates/.test(rulesText) && /The first rule/.test(rulesText),
+  'rules: an amendment is appended under one heading and the original text is untouched');
+ok(/cto-t/.test(amended.appended) && /\d{4}-\d{2}-\d{2}/.test(amended.appended),
+  'rules: the amendment is dated and attributed — an incident has to be able to quote it');
+core.runRules({ append: 'and a second one', by: 'cto-t' });
+ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) || []).length === 1,
+  'rules: a second amendment joins the same heading instead of starting another');
+
 // ── machine-readable output survives a pipe ──
 // A pipe buffers 64KB and Node writes to it asynchronously, so process.exit() right after a
 // large console.log used to drop the rest: `hub task list --json` came back cut mid-token,
@@ -1363,7 +1466,7 @@ ok(pipedJson && pipedJson.tasks.length === 140,
   `pipe: a >64KB --json payload arrives whole and parses (${pipedJson ? pipedJson.tasks.length + ' tasks' : 'TRUNCATED at ' + piped.out.length + 'B'})`);
 fs.rmSync(PIPE, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD]) fs.rmSync(d, { recursive: true, force: true });
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
