@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, withLock } from './core.mjs';
+import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, withLock } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -108,9 +108,17 @@ export function subscriberRoles(root) {
   } catch { return []; }
 }
 
+/* ONE node identity for the whole hub. This used to read the hostname directly while the journal
+ * and the task log went through JOURNAL_NODE (which honours HUBD_NODE) — so on a host whose
+ * identity had to be normalised by that variable, journal.<node>.jsonl said one thing and
+ * <role>.<node>.queue.md said another, for the same machine. That is the ghost-employee bug from
+ * the other side: a hostname change already invented a node nobody hired, and half the files
+ * following an override while the other half ignore it is how one machine becomes two.
+ *
+ * Renaming the write target is safe: readers match <role>.<anything>.queue.md, so files written
+ * under the old name are still read and no message is stranded — only new appends move. */
 function nodeName() {
-  try { return (os.hostname() || 'node').split('.')[0] || 'node'; }
-  catch { return 'node'; }
+  return JOURNAL_NODE;
 }
 
 /**

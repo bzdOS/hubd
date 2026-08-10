@@ -294,6 +294,29 @@ if (cmd === 'init') {
     die('Folder not found: ' + targetDir);
   }
 
+  /* `init` scaffolds a TEAM folder into a directory, and with no argument that directory is the
+   * cwd — which is right when you deliberately cd into a fresh folder, and wrong in the one case
+   * it actually happens: standing in a source checkout. Then AGENTS.md, INBOX.md, queues/ and
+   * specs/ appear in somebody's repo, ready to be committed by accident. This project's own
+   * .gitignore carries /queues/ and /INBOX.md entries — that is the scar of this exact misroute,
+   * papered over instead of fixed, and it happened again while healthchecking 0.9.0.
+   *
+   * Same shape of guard as resolveQueueRootInfo's misroute warning: a checkout is a repo with a
+   * .git and no hub DATA in it. Refuse, name both the safe alternatives, and let --here override —
+   * a deliberate "yes, scaffold my repo root" stays one flag away. */
+  const looksLikeCheckout = !pathArg && !args.includes('--here') &&
+    fs.existsSync(path.join(targetDir, '.git')) &&
+    !['sections.json', 'tasks.json', 'claims.json', 'HUBD.md'].some(f => fs.existsSync(path.join(targetDir, f))) &&
+    !fs.readdirSync(targetDir).some(f => /^journal.*\.jsonl$/.test(f));
+  if (looksLikeCheckout) {
+    die('refusing to scaffold a team into ' + targetDir + ' — it looks like a source checkout ' +
+      '(.git present, no hub data). A team folder is not a code repo.\n' +
+      '  hub init <folder>   scaffold there\n' +
+      '  hub init ' + HUB + '   scaffold your hub base\n' +
+      '  hub init --here     do it here anyway');
+  }
+  console.log('scaffolding a team folder in ' + targetDir);
+
   function ensureFile(relName, content) {
     const full = path.join(targetDir, relName);
     const dir = path.dirname(full);
