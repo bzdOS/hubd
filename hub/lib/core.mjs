@@ -554,6 +554,318 @@ export function journalSince(hours) {
   return all.reverse(); // newest first
 }
 
+/* ── Rules: which of them are checks, and which are only wishes ──
+ * A rule written as prose gets broken; a rule that is a check does not. That is the whole
+ * finding behind this file — gates expired silently for weeks, and attention diverged from
+ * what the cards declared by an order of magnitude, while both rules sat plainly written down.
+ *
+ * HUB/rules.json, one file, two sections:
+ *   { "strict": { "<lintId>": true, ... },
+ *     "laws":   { "<lintId or audit finding id>": { "text": "<the rule, verbatim>",
+ *                                                   "since": "YYYY-MM-DD", "source": "AGENTS.md" } } }
+ *
+ * `strict` is OPT-IN and empty by default: hubd never starts refusing work because it was
+ * upgraded. `laws` is what an incident QUOTES — the point of the audit is that the only
+ * authority a person reliably accepts is their own past self, with a date on it. Without a
+ * local law the finding still fires; it just cites the engine's own wording and says so. */
+export function rulesConfig() {
+  let o = {};
+  try { o = JSON.parse(fs.readFileSync(path.join(HUB, 'rules.json'), 'utf8')) || {}; } catch {}
+  const strict = (o.strict && typeof o.strict === 'object') ? o.strict : {};
+  const laws = (o.laws && typeof o.laws === 'object') ? o.laws : {};
+  // Which projects are money bets. DECLARED, never inferred: most cards in a real hub say
+  // outright that they are not one ("not a money bet — craft"), and a gate-needs-a-date check
+  // run over all of them produced 11 findings where the rule covers a handful. A check that
+  // cries about things its rule does not cover is how a check stops being read.
+  const money = Array.isArray(o.money) ? o.money.map(slugify) : [];
+  return { strict, laws, money };
+}
+
+/** The law behind a finding: the owner's own words with the date they wrote them, if declared. */
+export function lawFor(id, fallback) {
+  const l = rulesConfig().laws[id];
+  if (l && typeof l === 'object' && l.text) {
+    return { text: String(l.text), since: l.since || null, source: l.source || null, declared: true };
+  }
+  return { text: fallback, since: null, source: null, declared: false };
+}
+
+/** The body of one "## Heading" section, or null. Read-side twin of editSection. */
+export function sectionBody(text, heading) {
+  const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp('^## ' + esc + '[ \\t]*$', 'm').exec(String(text || ''));
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const rest = String(text).slice(start);
+  const nm = rest.match(/\n## /);
+  return (nm ? rest.slice(0, nm.index) : rest).trim();
+}
+
+const headingFor = (key) => (sectionsConfig().find(s => s.key === key) || {}).heading || key;
+const isPlaceholder = (body) => !body || /^<[^>]*>$/.test(body.trim());
+
+/** A project's declared MODE — a bare "MODE: ..." line anywhere in its card. */
+export function modeOf(card) {
+  const m = String(card || '').match(/^MODE:\s*(.+)$/m);
+  return m ? m[1].trim() : null;
+}
+// Deliberately coarse: three buckets is all any check here needs, and a card's MODE is prose.
+export function modeClass(mode) {
+  const v = String(mode || '').toLowerCase();
+  if (!v) return null;
+  if (/\bidea\b|seed/.test(v)) return 'idea';
+  if (/background|slow.?burn|\bjob\b|dormant|paused/.test(v)) return 'background';
+  if (/active|shipped|money|revenue|launch/.test(v)) return 'active';
+  return 'other';
+}
+
+function projectCards() {
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
+      try { out.push({ slug: f.replace(/\.md$/, ''), text: fs.readFileSync(path.join(PROJ, f), 'utf8') }); } catch {}
+    }
+  } catch {}
+  return out;
+}
+
+/**
+ * Every rule that CAN be checked, checked. Read-only, never throws, never files anything.
+ * A lint appears in `findings` whether or not it is enforced; `enforced` says which ones the
+ * instance opted into, so "we have a rule about that" and "the rule bites" stay distinguishable.
+ */
+export function runLint(a = {}) {
+  const { strict, money } = rulesConfig();
+  const findings = [];
+  const notes = [];
+  const gatesHeading = headingFor('gates');
+  const restrict = Array.isArray(a.projects) ? a.projects.map(slugify) : null;
+
+  // (1) A gate with no date cannot expire, so it is not a gate — it is an intention. Only money
+  //     bets are held to it (see rulesConfig), and silence here is reported, not implied.
+  if (!money.length) {
+    notes.push('gate-without-date checked nothing: no money bets are declared. List them in rules.json → money ["<slug>", ...] — the gate rule only covers those.');
+  }
+  for (const c of projectCards()) {
+    if (restrict && !restrict.includes(c.slug)) continue;
+    if (!money.includes(c.slug)) continue;
+    const body = sectionBody(c.text, gatesHeading);
+    if (isPlaceholder(body)) continue;
+    if (!/\d{4}-\d{2}-\d{2}/.test(body)) {
+      findings.push({ id: 'gate-without-date', severity: 'med', project: c.slug,
+        what: `${c.slug} is a declared money bet and its ${gatesHeading} section names a criterion but no date — nothing can ever declare it missed`,
+        fix: `add the date to ## ${gatesHeading} (hub section add ${c.slug} gates "<criterion> by YYYY-MM-DD" --by <you>)` });
+    }
+  }
+
+  // (2) A decision only a human can make, filed as one undivided task, is a task nobody can
+  //     start: the agent part and the 30-second human part have to be separable to move.
+  for (const t of loadTasks().tasks.filter(t => t.status === 'open')) {
+    if (restrict && !restrict.includes(t.project)) continue;
+    const human = t.owner_kind === 'human';
+    const comms = (t.cat || t.kind) === 'communicative';
+    if (human && comms && !(Array.isArray(t.depends_on) && t.depends_on.length)) {
+      findings.push({ id: 'button-without-prep', severity: 'med', project: t.project, task: t.id,
+        what: `#${t.id} [${t.project}] is a human-owned communicative task with no prep it depends on — the owner has to both prepare and decide`,
+        fix: 'split it: an agent task that prepares the package, and this one depending on it (hub_task_update depends_on)' });
+    }
+  }
+
+  for (const f of findings) {
+    const law = lawFor(f.id, f.id === 'gate-without-date'
+      ? 'A gate is a date plus a criterion; without a date it is an intention.'
+      : 'Work only the owner can do splits into prep (an agent) and the button (the owner).');
+    f.law = law.text; f.lawSince = law.since; f.lawDeclared = law.declared;
+    f.enforced = !!strict[f.id];
+  }
+  const enforcedIds = Object.keys(strict).filter(k => strict[k]);
+  return { findings, notes, enforced: enforcedIds, generated: now() };
+}
+
+/* ── Audit: what was declared against what happened ──
+ * This is a role that was run BY HAND for weeks before it was allowed to become code — the same
+ * road harvest took. What it found, repeatedly, is why it exists: gates expire in silence, and
+ * the share of attention a project actually gets diverges from the mode its own card declares by
+ * an order of magnitude. Neither is a mistake anyone makes on purpose; both are invisible without
+ * arithmetic.
+ *
+ * Three properties are deliberate, and each one is a refusal:
+ *
+ * NOT A DASHBOARD. The output is incidents — tasks somebody owns — plus one report. A number on a
+ * screen changes nothing after the tab is closed.
+ *
+ * IT QUOTES THE OWNER, NOT ITSELF. Every incident carries the rule it enforces and the date that
+ * rule was written (rules.json → laws). The only authority reliably accepted here is one's own
+ * past self with a date on it; an engine's opinion is worth nothing by comparison.
+ *
+ * A WEEKLY RUN MUST NOT PILE UP. Every finding has a stable key, stamped into the incident text
+ * as [audit:<key>]; applying skips a key that is already open. Otherwise the fifth run has filed
+ * the same five incidents five times and the backlog is the noise it was meant to remove. */
+const AUDIT_DEFAULTS = {
+  'gate-expired': 'A money bet whose gate date has passed without a verdict goes to background; coming back needs a DECIDE with a new date.',
+  'attention-vs-mode': 'A card declares what a project IS; where the journal goes declares what it is really getting. When they disagree, one of the two is a lie.',
+  'button-stale': 'A package waiting on the owner is either decided or withdrawn — an unanswered button is a decision made by default.',
+  'card-behind-journal': 'A card that stopped following its own project misinforms every session that reads it next.',
+  'task-without-project': 'Work with no project cannot be prioritised against anything.',
+};
+
+/**
+ * Compare declarations with behaviour. Read-only unless `apply` is set.
+ *
+ * @param {{days?:number, apply?:boolean, by?:string, staleButtonDays?:number}} a
+ */
+export function runAudit(a = {}) {
+  const days = a.days ?? 7;
+  const staleButtonDays = a.staleButtonDays ?? 7;
+  const { money } = rulesConfig();
+  const today = new Date().toISOString().slice(0, 10);
+  const nowMs = Date.now();
+  const findings = [];
+  const notes = [];
+  const gatesHeading = headingFor('gates');
+  const cards = projectCards();
+  const tasks = loadTasks().tasks;
+  const open = tasks.filter(t => t.status === 'open');
+
+  // (1) Gates x calendar. A date in the gate that has passed, with no decision recorded since —
+  //     the decision is what turns an expiry into a verdict, so its absence IS the finding.
+  if (!money.length) notes.push('gates x calendar checked nothing: no money bets declared (rules.json -> money).');
+  const decisionsSince = {};
+  for (const e of journalSince(365 * 24)) {
+    if (e.kind === 'decision' && e.project) {
+      const cur = decisionsSince[e.project];
+      if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) decisionsSince[e.project] = e.ts;
+    }
+  }
+  for (const c of cards) {
+    if (!money.includes(c.slug)) continue;
+    const body = sectionBody(c.text, gatesHeading);
+    if (isPlaceholder(body)) continue;
+    const dates = (body.match(/\d{4}-\d{2}-\d{2}/g) || []).sort();
+    const last = dates[dates.length - 1];
+    if (!last || last >= today) continue;
+    const decided = decisionsSince[c.slug];
+    if (decided && decided.slice(0, 10) > last) continue;   // a verdict was recorded after the date
+    findings.push({ id: 'gate-expired', key: `gate-expired:${c.slug}:${last}`, severity: 'high', project: c.slug,
+      what: `${c.slug}: gate date ${last} passed with no decision recorded since`,
+      fix: `either DECIDE a new date or let it drop to background — hub decide "<verdict>" --why "<why>" -p ${c.slug}` });
+  }
+
+  // (2) Attention x declared MODE. Both directions are wrong in the same way: a card that says
+  //     one thing while the journal says another.
+  const windowEntries = journalSince(days * 24).filter(e => e.project);
+  const total = windowEntries.length;
+  const share = {};
+  for (const e of windowEntries) share[e.project] = (share[e.project] || 0) + 1;
+  if (!total) notes.push(`attention x mode checked nothing: no journal entries in the last ${days}d.`);
+  for (const c of cards) {
+    const cls = modeClass(modeOf(c.text));
+    if (!cls || !total) continue;
+    const pct = Math.round(((share[c.slug] || 0) / total) * 100);
+    if ((cls === 'background' || cls === 'idea') && pct > 30) {
+      findings.push({ id: 'attention-vs-mode', key: `attention-vs-mode:${c.slug}:over`, severity: 'med', project: c.slug,
+        what: `${c.slug} declares MODE ${cls} but took ${pct}% of ${total} journal entries in ${days}d`,
+        fix: `either promote it in the card (MODE:) or move the work — one of the two is currently false` });
+    }
+    if (cls === 'active' && money.includes(c.slug) && pct < 10) {
+      findings.push({ id: 'attention-vs-mode', key: `attention-vs-mode:${c.slug}:under`, severity: 'med', project: c.slug,
+        what: `${c.slug} is a declared money bet in MODE active but took only ${pct}% of ${total} journal entries in ${days}d`,
+        fix: 'either it is not active (say so in the card) or it is starved (schedule it)' });
+    }
+  }
+
+  // (3) Buttons that nobody pressed. Not a slow decision — an unmade one.
+  //     The rows come from the CALLER: queue.mjs imports this file, so reading queues from here
+  //     would close an import cycle, and every tool here is synchronous by contract (see
+  //     setHubBase) so a dynamic import is not an option either. Absent rows = say so.
+  if (Array.isArray(a.queues)) {
+    for (const r of a.queues) {
+      if (!r.isButton || !(r.pending > 0) || (r.ageDays ?? 0) < staleButtonDays) continue;
+      findings.push({ id: 'button-stale', key: `button-stale:${r.role}:${r.oldestWaiting || ''}`, severity: 'high', role: r.role,
+        what: `${r.pending} item(s) waiting in the owner queue "${r.role}", oldest ${r.ageDays}d`,
+        fix: 'decide it or withdraw it — an unanswered button decides by default' });
+    }
+  } else {
+    notes.push('stale buttons not checked: the caller passed no queue rows (hub audit and the MCP tool both do).');
+  }
+
+  // (4) Cards that stopped following their own project — the same lag hub_status marks, filed.
+  const lastJournal = lastJournalByProject();
+  for (const c of cards) {
+    const m = c.text.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);
+    if (!m) continue;
+    const lag = digestLag(m[1], lastJournal[c.slug], 14);
+    if (lag) findings.push({ id: 'card-behind-journal', key: `card-behind-journal:${c.slug}`, severity: 'med', project: c.slug,
+      what: `${c.slug}: card last touched ${m[1]}, its journal moved on ${lag.daysBehind}d further (to ${lag.lastJournal})`,
+      fix: `re-sync the digest: hub card ${c.slug} -m "<what is true now>" --by <you>` });
+  }
+
+  // (5) Orphans.
+  for (const t of open.filter(t => !t.project)) {
+    findings.push({ id: 'task-without-project', key: `task-without-project:${t.id}`, severity: 'low', task: t.id,
+      what: `#${t.id} has no project`, fix: 'assign one, or close it' });
+  }
+
+  // The thermometer: reported, never filed. A rate is not a violation, and dressing one up as an
+  // incident is how an audit loses the reader it needs.
+  const closedInWindow = tasks.filter(t => t.status === 'done' && t.done && parseTs(t.done).getTime() >= nowMs - days * 86400000);
+  const rate = (list) => {
+    const by = {};
+    for (const t of list) {
+      const k = t.cat || t.kind || 'none';
+      by[k] = by[k] || { closed: 0 };
+      by[k].closed++;
+    }
+    return by;
+  };
+  const numbers = {
+    windowDays: days,
+    journalEntries: total,
+    attentionShare: Object.fromEntries(Object.entries(share).sort((x, y) => y[1] - x[1]).slice(0, 10)),
+    closedByCat: rate(closedInWindow),
+    closedByAssignee: Object.entries(closedInWindow.reduce((acc, t) => {
+      const k = t.assignee || 'unassigned'; acc[k] = (acc[k] || 0) + 1; return acc;
+    }, {})).sort((x, y) => y[1] - x[1]).slice(0, 10),
+    openTasks: open.length,
+  };
+
+  for (const f of findings) {
+    const law = lawFor(f.id, AUDIT_DEFAULTS[f.id] || f.id);
+    f.law = law.text; f.lawSince = law.since; f.lawDeclared = law.declared;
+  }
+  const rank = { high: 0, med: 1, low: 2 };
+  findings.sort((x, y) => rank[x.severity] - rank[y.severity]);
+
+  if (!a.apply) return { apply: false, findings, notes, numbers, generated: now() };
+
+  // Applying: one incident task per finding whose key is not already open, then ONE report.
+  const by = requireAuthor(a.by, 'by');
+  const openText = open.map(t => String(t.text || ''));
+  const filed = [], skipped = [];
+  for (const f of findings) {
+    const stamp = `[audit:${f.key}]`;
+    if (openText.some(x => x.includes(stamp))) { skipped.push(f.key); continue; }
+    const cite = f.law + (f.lawSince ? ` (rule recorded ${f.lawSince})` : f.lawDeclared ? '' : ' [engine default — declare your own in rules.json -> laws]');
+    try {
+      const t = runTaskAdd({
+        project: f.project || 'general',
+        text: `AUDIT ${f.id}: ${f.what}. Rule: ${cite}. Fix: ${f.fix} ${stamp}`,
+        importance: f.severity === 'high' ? 'high' : f.severity === 'med' ? 'med' : 'normal',
+        cat: f.id === 'attention-vs-mode' ? 'decision' : 'chore',
+        by,
+      });
+      filed.push({ key: f.key, task: t.task.id });
+    } catch { skipped.push(f.key); }
+  }
+  const lines = [
+    ...Object.entries(numbers.attentionShare).map(([p, n]) => `FACT: attention ${days}d: ${p} ${n}/${total} entries (${Math.round((n / total) * 100)}%)`),
+    `FACT: closed in ${days}d by category: ${Object.entries(numbers.closedByCat).map(([k, v]) => k + ' ' + v.closed).join(', ') || 'none'}`,
+    `NOTE: audit pass ${now()}: ${findings.length} finding(s), ${filed.length} filed, ${skipped.length} already open`,
+  ];
+  runReport({ project: 'general', by, text: lines.join('\n'), kind: 'note' });
+  return { apply: true, findings, notes, numbers, filed, skipped, generated: now() };
+}
+
 /* ── Output budgets ──
  * hub_brief(hours=168) once returned 196K characters and did not fit the context of the agent
  * that asked for it. Nothing was wrong with the data — the tool simply had no idea it was
@@ -1210,12 +1522,28 @@ export function runReport(a) {
   const by = requireAuthor(a.by ?? a.agent, 'by');
   const SEC = reportSections();
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [] };
+  // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
+  // Only the second kind is what the strict check below is about, so they cannot share a flag.
+  let explicitNote = false;
   for (const raw of String(a.text || '').split('\n')) {
     const ln = raw.replace(/\s+$/, '');
     if (!ln.trim()) continue;
     const m = ln.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
     const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
-    if (tag) b[tag].push(m[2].trim()); else b.note.push(ln.trim());
+    if (tag) { if (tag === 'note') explicitNote = true; b[tag].push(m[2].trim()); }
+    else b.note.push(ln.trim());
+  }
+  // Opt-in (rules.json → strict.rejectNoteOnlyReport): a report made of nothing but prose is
+  // almost always coordination wearing a report's clothes — "I'm on it" belongs in a claim, and
+  // a session that files prose leaves the card exactly as uninformative as it found it. Off by
+  // default, because refusing a write is the harshest thing this engine can do and an upgrade
+  // must never start doing it uninvited.
+  const noteOnly = b.note.length && !explicitNote && !b.decide.length && !b.fact.length && !b.hypo.length &&
+    !b.comm.length && !b.next.length && !b.done.length && !b.task.length;
+  if (noteOnly && rulesConfig().strict.rejectNoteOnlyReport) {
+    throw new Error('strict: this report is prose only. Use a prefix so it lands somewhere a later reader will find it — ' +
+      'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: — or, if you are just saying you started, hub claim instead. ' +
+      '(rules.json → strict.rejectNoteOnlyReport; NOTE: <text> still works for a real aside.)');
   }
   const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false };
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {

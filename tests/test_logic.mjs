@@ -1252,6 +1252,94 @@ ok(led.total === 4 && led.delivered === 3 && led.pending === 1,
 ok(led.files.length >= 2 && led.files.every(f => f.total === f.delivered + f.pending),
   'ledger: every per-host file reconciles on its own too');
 
+// ── rules: a check, or an admitted wish ──
+const RL = mktmp();
+core.setHubBase(RL);
+fs.writeFileSync(path.join(RL, 'projects', 'shop.md'),
+  '# shop\n\n- slug: shop\n- set: 2026-08-09 10:00 by dev-t\n\nMODE: active — selling\n\n## Digest\n\nx\n\n## Gates\n\n- 100 paying users, or stop\n');
+fs.writeFileSync(path.join(RL, 'projects', 'craft.md'),
+  '# craft\n\n- slug: craft\n- set: 2026-08-09 10:00 by dev-t\n\n## Digest\n\ny\n\n## Gates\n\n- not a money bet, no date on purpose\n');
+const lintQuiet = core.runLint({});
+ok(!lintQuiet.findings.some(f => f.id === 'gate-without-date') && lintQuiet.notes.some(n => /no money bets are declared/.test(n)),
+  'lint: with no money bet declared the gate rule checks nothing AND says so (silence is reported, not implied)');
+fs.writeFileSync(path.join(RL, 'rules.json'), JSON.stringify({
+  money: ['shop'],
+  strict: { 'gate-without-date': true, rejectNoteOnlyReport: true },
+  laws: { 'gate-without-date': { text: 'A money bet without a dated gate goes to background', since: '2026-07-04' } },
+}));
+const lintOn = core.runLint({});
+const gwd = lintOn.findings.filter(f => f.id === 'gate-without-date');
+ok(gwd.length === 1 && gwd[0].project === 'shop',
+  `lint: only the DECLARED money bet is held to the gate rule (got ${gwd.map(f => f.project).join(',') || 'none'})`);
+ok(gwd[0].enforced === true && gwd[0].lawDeclared === true && gwd[0].lawSince === '2026-07-04',
+  'lint: the finding quotes the local law with its date and says it is enforced');
+core.runTaskAdd({ project: 'shop', text: 'ask the owner to post it', cat: 'communicative', by: 'dev-t' });
+const humanTask = core.runTaskAdd({ project: 'shop', text: 'owner posts it', cat: 'communicative', by: 'dev-t' }).task;
+core.runTaskUpdate({ id: humanTask.id, by: 'dev-t', tags: [] });   // no-op edit, keeps shape
+fs.appendFileSync(path.join(RL, `tasks.${core.JOURNAL_NODE}.events.jsonl`),
+  JSON.stringify({ ts: core.now(), node: core.JOURNAL_NODE, ev: 'set', id: humanTask._origin ? humanTask._origin.id : humanTask.id, patch: { owner_kind: 'human' } }) + '\n');
+const lintBtn = core.runLint({}).findings.filter(f => f.id === 'button-without-prep');
+ok(lintBtn.length === 1 && String(lintBtn[0].task) === String(humanTask.id),
+  `lint: a human-owned communicative task with no prep is flagged (got ${lintBtn.length})`);
+core.runTaskUpdate({ id: humanTask.id, depends_on: [1], by: 'dev-t' });
+ok(!core.runLint({}).findings.some(f => f.id === 'button-without-prep'),
+  'lint: giving it a prep it depends on clears the finding');
+
+// strict: prose-only reports are refused ONLY when the instance opted in, and an explicit
+// NOTE: is a deliberate aside, not the thing being refused
+let strictErr = '';
+try { core.runReport({ project: 'shop', by: 'dev-t', text: 'just working on it' }); } catch (e) { strictErr = e.message; }
+ok(/strict/.test(strictErr) && /hub claim/.test(strictErr), 'strict: a prose-only report is refused with the alternative named');
+ok(core.runReport({ project: 'shop', by: 'dev-t', text: 'NOTE: a real aside' }).note === true,
+  'strict: an explicit NOTE: still lands — the message promises that, so it must be true');
+ok(core.runReport({ project: 'shop', by: 'dev-t', text: 'FACT: three paying users' }).facts === 1,
+  'strict: a structured report is untouched');
+fs.writeFileSync(path.join(RL, 'rules.json'), '{}');
+ok(core.runReport({ project: 'shop', by: 'dev-t', text: 'prose again' }).note === true,
+  'strict: off by default — an upgrade never starts refusing writes uninvited');
+
+// ── audit: declarations vs behaviour, filed as incidents that quote the owner ──
+const AUD = mktmp();
+core.setHubBase(AUD);
+fs.writeFileSync(path.join(AUD, 'rules.json'), JSON.stringify({
+  money: ['shop'],
+  laws: { 'gate-expired': { text: 'An expired gate means background until a DECIDE sets a new date', since: '2026-07-04' } },
+}));
+fs.writeFileSync(path.join(AUD, 'projects', 'shop.md'),
+  '# shop\n\n- slug: shop\n- set: 2026-08-09 10:00 by dev-t\n\nMODE: active — selling\n\n## Digest\n\nx\n\n## Gates\n\n- 100 paying users by 2026-07-01, or stop\n');
+fs.writeFileSync(path.join(AUD, 'projects', 'hobby.md'),
+  '# hobby\n\n- slug: hobby\n- set: 2026-08-09 10:00 by dev-t\n\nMODE: background — for fun\n\n## Digest\n\ny\n');
+const auRows = [];
+for (let i = 0; i < 9; i++) auRows.push({ ts: `2026-08-09 10:0${i}`, project: 'hobby', agent: 'dev-t', kind: 'note', text: 'tinkering' });
+auRows.push({ ts: '2026-08-09 11:00', project: 'shop', agent: 'dev-t', kind: 'note', text: 'one shop thing' });
+fs.writeFileSync(path.join(AUD, 'journal.t.jsonl'), auRows.map(r => JSON.stringify(r)).join('\n') + '\n');
+const au = core.runAudit({ days: 3650 });
+const auGate = au.findings.find(f => f.id === 'gate-expired');
+const auAttn = au.findings.find(f => f.id === 'attention-vs-mode');
+ok(auGate && auGate.project === 'shop' && /2026-07-01/.test(auGate.what),
+  'audit: a money bet whose gate date passed with no decision since is a finding');
+ok(auGate.lawDeclared && auGate.lawSince === '2026-07-04',
+  'audit: the incident quotes the owner\'s own rule and the date it was written');
+ok(auAttn && auAttn.project === 'hobby' && /90%/.test(auAttn.what),
+  `audit: a background project taking most of the attention is a finding (got ${auAttn && auAttn.what})`);
+ok(au.numbers && au.numbers.attentionShare && !au.findings.some(f => f.id === 'done-rate'),
+  'audit: close rates are numbers in the report, never filed as violations');
+ok(au.apply === false && core.runTaskList({ status: 'all' }).count === 0, 'audit: read-only unless asked');
+const applied = core.runAudit({ days: 3650, apply: true, by: 'auditor-t' });
+ok(applied.filed.length === applied.findings.length && applied.filed.length >= 2,
+  `audit: apply files one incident per finding (${applied.filed.length}/${applied.findings.length})`);
+const incident = core.runTaskList({ status: 'open' }).tasks.find(t => /AUDIT gate-expired/.test(t.text));
+ok(incident && /Rule: An expired gate/.test(incident.text) && /\[audit:gate-expired:shop:2026-07-01\]/.test(incident.text),
+  'audit: the incident carries the quoted rule and a stable key');
+const twice = core.runAudit({ days: 3650, apply: true, by: 'auditor-t' });
+ok(twice.filed.length === 0 && twice.skipped.length === applied.filed.length,
+  `audit: a second pass files nothing — keyed dedup, so a weekly run cannot pile up (${twice.filed.length} filed)`);
+core.runReport({ project: 'shop', by: 'dev-t', text: 'DECIDE: shop stays active, new gate 2026-12-01 | two paying users appeared' });
+ok(!core.runAudit({ days: 3650 }).findings.some(f => f.id === 'gate-expired'),
+  'audit: a DECIDE recorded after the gate date clears the finding — the verdict is what was missing');
+ok(core.runAudit({ days: 3650 }).notes.some(n => /buttons not checked/.test(n)),
+  'audit: with no queue rows passed in, the button check says it was skipped instead of reporting all-clear');
+
 // ── machine-readable output survives a pipe ──
 // A pipe buffers 64KB and Node writes to it asynchronously, so process.exit() right after a
 // large console.log used to drop the rest: `hub task list --json` came back cut mid-token,
@@ -1275,7 +1363,7 @@ ok(pipedJson && pipedJson.tasks.length === 140,
   `pipe: a >64KB --json payload arrives whole and parses (${pipedJson ? pipedJson.tasks.length + ' tasks' : 'TRUNCATED at ' + piped.out.length + 'B'})`);
 fs.rmSync(PIPE, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL]) fs.rmSync(d, { recursive: true, force: true });
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

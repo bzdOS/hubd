@@ -18,7 +18,7 @@ import {
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
-  sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
+  sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit,
   journalTail, journalSince, journalFiles,
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
@@ -658,7 +658,9 @@ if (cmd === 'report') {
     console.log(REPORT_TEMPLATE);
     done(0);
   }
-  const r = runReport({ project: proj, agent, text, kind });
+  let r;
+  try { r = runReport({ project: proj, agent, text, kind }); }
+  catch (e) { die(e.message); }   // a strict refusal is a message to read, not a stack trace
   const parts = [];
   if (r.decisions) parts.push(r.decisions + ' decision' + (r.decisions > 1 ? 's' : ''));
   if (r.facts) parts.push(r.facts + ' fact' + (r.facts > 1 ? 's' : ''));
@@ -902,6 +904,55 @@ if (cmd === 'section') {
   } catch (e) { die(e.message); }
   console.log(`${r.project} → ## ${r.section}${r.created ? '  (section created — check the name if you expected it to exist)' : ''}`);
   done(0);
+}
+
+if (cmd === 'audit') {
+  const days = parseInt(String(getFlag('--days') || '7'), 10);
+  const apply = args.includes('--apply');
+  const queues = queueSummaryForBrief({ root: resolveQueueRoot() });
+  let r;
+  try { r = runAudit({ days, apply, queues, by: apply ? authorOrDie('--by') : undefined }); }
+  catch (e) { die(e.message); }
+  console.log(`── AUDIT · ${r.generated} · window ${days}d ──`);
+  for (const n of r.notes) console.log('  note: ' + n);
+  const N = r.numbers;
+  console.log(`\nNUMBERS (a thermometer, not a verdict):`);
+  console.log(`  journal entries: ${N.journalEntries} · open tasks: ${N.openTasks}`);
+  console.log(`  attention share: ` + (Object.entries(N.attentionShare).map(([p, n]) => `${p} ${Math.round((n / (N.journalEntries || 1)) * 100)}%`).join(' · ') || 'none'));
+  console.log(`  closed by category: ` + (Object.entries(N.closedByCat).map(([k, v]) => `${k} ${v.closed}`).join(' · ') || 'none'));
+  console.log(`  closed by assignee: ` + (N.closedByAssignee.map(([k, n]) => `${k} ${n}`).join(' · ') || 'none'));
+  if (!r.findings.length) { console.log('\nno findings — declarations and behaviour agree'); done(0); }
+  console.log(`\nFINDINGS (${r.findings.length}):`);
+  for (const f of r.findings) {
+    const mark = f.severity === 'high' ? '!' : f.severity === 'med' ? '~' : ' ';
+    console.log(` ${mark} [${f.id}] ${f.what}`);
+    console.log(`     rule: ${f.law}${f.lawSince ? ' (recorded ' + f.lawSince + ')' : f.lawDeclared ? '' : '  ← engine default; declare yours in rules.json → laws'}`);
+    console.log(`     fix:  ${f.fix}`);
+  }
+  if (apply) {
+    console.log(`\nfiled ${r.filed.length} incident(s)` + (r.filed.length ? ': #' + r.filed.map(x => x.task).join(' #') : '') +
+      (r.skipped.length ? `; ${r.skipped.length} already open (deduped by key)` : ''));
+    console.log('one report written to project "general"');
+  } else {
+    console.log('\nnothing filed. Re-run with --apply --by <you> to turn each finding into an incident task (a key already open is never filed twice).');
+  }
+  done(r.findings.length ? 1 : 0);
+}
+
+if (cmd === 'lint') {
+  const r = runLint({});
+  for (const n of r.notes) console.log('note: ' + n);
+  if (!r.findings.length) {
+    console.log('lint: nothing to report' + (r.enforced.length ? '  (enforced: ' + r.enforced.join(', ') + ')' : '  (no rule is enforced — see rules.json → strict)'));
+    done(0);
+  }
+  for (const f of r.findings) {
+    console.log(`${f.enforced ? '!' : ' '} [${f.id}] ${f.what}`);
+    console.log(`    rule: ${f.law}${f.lawSince ? ' (' + f.lawSince + ')' : ''}${f.lawDeclared ? '' : '  ← not declared locally; add it to rules.json → laws so an incident can quote YOU'}`);
+    console.log(`    fix:  ${f.fix}`);
+  }
+  console.log(`\n${r.findings.length} finding(s). Enforced: ${r.enforced.length ? r.enforced.join(', ') : 'none'} — turn a rule on in ${path.join(HUB, 'rules.json')} → strict.`);
+  done(1);
 }
 
 if (cmd === 'sections') {

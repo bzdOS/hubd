@@ -13,7 +13,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput,
+  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
@@ -112,6 +112,21 @@ const TOOLS = [
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
     }, required: ['id', 'by'] } },
+
+  { name: 'hub_audit',
+    description: 'Compare what the hub DECLARES with what actually happened, and turn each disagreement into an incident somebody owns. Checks: a money bet whose gate date passed with no decision since · a project whose share of the journal contradicts the MODE its card declares · owner buttons nobody pressed · a card that stopped following its own journal · tasks with no project. Read-only by default; `apply` files one incident task per finding and writes ONE report. Every finding quotes the rule it enforces with the date that rule was written (HUB/rules.json -> laws), because an engine\'s opinion carries no weight and your own past decision does. Findings are keyed, so a weekly run never files the same incident twice. NOT a dashboard: the numbers it prints (attention share, close rates) are a thermometer and are never filed as violations.',
+    inputSchema: { type: 'object', properties: {
+      days: { type: 'integer', description: 'window for the attention/close-rate numbers, default 7' },
+      staleButtonDays: { type: 'integer', description: 'an owner button older than this is a finding, default 7' },
+      apply: { type: 'boolean', description: 'file the incidents (requires by). Default false — look first.' },
+      by: { type: 'string', description: 'required with apply: the function you are performing, e.g. "auditor-weekly"' },
+    } } },
+
+  { name: 'hub_lint',
+    description: 'Every rule that CAN be checked, checked — the difference between a rule the hub enforces and one that is only written down somewhere. Reports a money bet whose gate has no date, and a human-owned communicative task with no prep it depends on (the owner would have to both prepare and decide). Each finding says whether the instance actually enforces it (HUB/rules.json -> strict, opt-in and empty by default) and quotes the local rule if one is declared. Read-only, never files anything.',
+    inputSchema: { type: 'object', properties: {
+      projects: { type: 'array', items: { type: 'string' }, description: 'restrict to these project slugs' },
+    } } },
 
   { name: 'hub_brief',
     description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
@@ -247,6 +262,8 @@ const OUTPUT_PLANS = {
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
   hub_graph:      [['edges', 200], ['dangling', 50]],
   hub_presence:   [['agents', 60]],
+  hub_audit:      [['findings', 40]],
+  hub_lint:       [['findings', 40]],
   hub_resource_list: [['resources', 100]],
 };
 
@@ -272,6 +289,10 @@ const DISPATCH = {
     const queues = queueSummaryForBrief({ root: HUB });
     return { ...runBrief(a), queues, buttons: buttonsSummary(queues) };
   },
+  // queues are read HERE and handed in: lib/queue.mjs imports core, so core cannot read them
+  // itself without closing an import cycle (see runAudit).
+  hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: HUB }) }),
+  hub_lint: runLint,
   hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,

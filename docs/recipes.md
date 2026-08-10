@@ -235,7 +235,19 @@ hub brief --hours 168   # the week's journal, stale cards, queue depths
 hub plan                # dependency layers: what unlocks what, where the cycles are
 hub log myproject -n 30 # one project's trail when something looks off
 hub doctor              # base, locks, and queues nobody has ever consumed
+hub lint                # which of your rules are checks, and which are only written down
+hub audit --days 7      # declarations vs behaviour; --apply --by <you> files the incidents
 ```
+
+`hub audit` is the part that does not depend on you noticing anything. It reads
+what the cards DECLARE (gates with dates, `MODE:` lines) against what actually
+happened (the journal, the task log) and reports the disagreements: a gate whose
+date passed with no decision since, a project in `MODE: background` eating most
+of the week's attention, buttons nobody pressed, a card that stopped following
+its own journal. With `--apply` each one becomes an incident task quoting **your**
+rule and the date you wrote it (`HUB/rules.json` → `laws`) — the only authority
+that reliably lands is your own past self. Findings are keyed, so running it every
+Monday never files the same incident twice.
 
 Two lines in that output are about the hub lying to you rather than about the
 work. `⚠Nd behind` in `hub status` means a card stopped following its own
