@@ -4,6 +4,52 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.7.0 — 2026-08-10
+
+Section-level card writes, plus the seven tooling gaps a real session filed
+after spending an afternoon on "where does this actually run".
+
+- **`hub_section_add`** — append ONE line to ONE section of a card, everything
+  around it untouched (`hub section add <proj> <section> "<text>"`). Until now a
+  tool could write the digest (`hub_card_set`) and the four sections the report
+  router owns; `Gates`, `Metrics`, `Market` and every hand-written section were
+  reachable only by editing raw markdown — the operation that once ate curated
+  content. Takes a section KEY or a literal heading (so a localised hub works
+  either way), an optional `provenance` recorded next to the date, and
+  `mode: set` for the sections that are a single current value. A missing
+  heading is created and the reply says `created: true`, because a typo growing
+  a second nearly identical section is the failure mode here.
+- **`hub_task_get(id)`** — one task plus what blocks it and what it blocks. The
+  counterpart `hub_resource_get` always had; without it, knowing a number but
+  not its project meant guessing project × status (three wasted calls in the
+  session that filed this). `hub task get <id>` on the CLI.
+- **A miss now points somewhere** — `hub_get(<name>)` used to dead-end at
+  "run hub_sync" while that exact name sat in the RESOURCE namespace.
+  It now says which namespace holds the name and which tool reads it, and
+  suggests near-miss slugs. `hub_search`'s description says to start there when
+  you know a keyword but not the project.
+- **A queue message can name its task** — `--task <id>` / `task` stamps the id
+  into the delivered block (after the sender, so every existing reader still
+  matches) and hands it back to the consumer as `tasks`. A HOLD reply once sat
+  consumed in a queue for four days while the task itself read plain open, with
+  no trace of the blocker anywhere. An id matching nothing is flagged, not
+  refused.
+- **`hub queue status [role]`** — delivered vs pending, aggregated across every
+  per-host file. A single per-host file is not an answer: a message already
+  popped elsewhere reads as never-delivered in it. Byte offsets are split on a
+  Buffer, so a non-ASCII message cannot skew the count.
+- **Closing a task warns about its resources** — a task closed with resources
+  still marked `planned` left the resource card (and `hub_graph`) claiming
+  "planned" a day later. The close reports which ones look stale and the one
+  call that fixes them; it deliberately does NOT cascade, because only the
+  person closing knows whether the thing is really live.
+- **Project aliases** — a mid-flight rename left the old and the new slug
+  both holding tasks, so asking by either name answered about half the project.
+  `HUB/project-aliases.json` (`{"old": "canonical"}`) resolves reads both ways
+  (task list, journal, `hub_get`, locks) while new work lands on the canonical
+  slug; nothing is renamed on disk. `hub doctor` flags slug pairs that look like
+  one project, with the exact file to write.
+
 ## 0.6.0 — 2026-08-01
 
 The honest-numbers release: four places where the hub quietly told its readers

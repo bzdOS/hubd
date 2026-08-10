@@ -103,10 +103,27 @@ you (`.hubd` marker file → a card's recorded sync path → a folder-name guess
 `guessed:true` when it's not certain) and returns the digest in one call — use it
 instead of a manual `hub_get` when you already have a cwd.
 
+To write ONE line into ONE section — `Gates`, `Metrics`, `Market`, or any section a human
+added — use `hub_section_add({project, section, text, by, provenance?})` (`hub section add
+<proj> <section> "<text>"`). It appends through the same machinery reports use, so everything
+around it survives, and it creates a missing heading — check `created` in the reply, because a
+typo is how a card grows two nearly identical sections. For Decisions / Facts / Communication /
+Next step, a normal report with `DECIDE:`/`FACT:`/`COMM:`/`NEXT:` is still the right call.
+`provenance` records where a line came from, next to the date it was written.
+
 A card can be fresh and still lie. `hub status` / `hub brief` flag one whose digest has
 fallen behind its OWN journal (`digestStale`, `⚠Nd behind`): the project kept moving and
 the card didn't. That flag is a request to re-sync the digest, not a bug — and it never
 fires on a project that has simply gone quiet.
+
+Know a task id? `hub_task_get(id)` returns it plus what blocks it and what it blocks — never go
+guessing project × status against `hub_task_list`. Know only a keyword? `hub_search` first: it
+searches every card and the whole journal and tells you which project owns the thing.
+
+One project can answer to two names: a rename leaves the old slug holding its own tasks, so
+`HUB/project-aliases.json` (`{"old": "canonical"}`) makes reads resolve BOTH ways while new work
+lands on the canonical slug. Nothing is renamed on disk. `hub doctor` points out slug pairs that
+look like one project.
 
 ## Tasks — one closed vocabulary, one open one
 
@@ -144,6 +161,13 @@ sessions waiting on one role split the work rather than both doing it. A role na
 session has its own cursor and sees every message. `hub queue wait '*'` taps EVERY role
 at once (own offset — does not consume any role's messages), for a supervisor watching
 the fleet; several supervisors may tap at the same time without competing.
+
+Say what a message is ABOUT: `hub queue send <role> "<text>" --from <you> --task <id>` stamps the
+task into the delivered block, and the consumer gets the ids back with the text (`tasks`). Report
+the outcome onto those tasks — a HOLD that lives only in a consumed message leaves the task
+reading plain open, with no trace of the blocker. To see what has actually been delivered versus
+what is still waiting, across every host's file at once: `hub queue status [role]`. One per-host
+file read on its own is not the answer — a message already popped elsewhere looks undelivered in it.
 
 A queue file is created by the first send and never disappears on its own, so an
 experiment leaves a role behind that nobody ever listens on. Those show up in `hub_brief`
