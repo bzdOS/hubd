@@ -27,9 +27,15 @@ Like `sshd` and `ssh`. The daemon serves agents; the CLI serves you.
 
 ## Quick start
 
-**Option A — start a company (GitHub template).** Use the **"Use this template"**
-button on the [`hubd-company/`](hubd-company/) directory — or clone and copy
-that folder into an existing private repo. You get a ready org structure:
+**Option A — start a company (copy the folder).** One command drops
+[`hubd-company/`](hubd-company/) into a folder of your own:
+
+```bash
+npx degit bzdOS/hubd/hubd-company my-company   # then: cd my-company && git init
+```
+
+Or clone this repo and copy the folder — it doesn't have to be your repo root.
+You get a ready org structure:
 constitution (AGENTS.md), role onboardings, project cards, an operator card,
 queues, recipes, and a weekly agent-written `chronicle/`
 ([the narrative layer](docs/narrative-layer.md)).
