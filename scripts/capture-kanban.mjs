@@ -156,7 +156,10 @@ const vf = `fps=5,scale=${W}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colo
 if (WANT_GIF) {
   fs.mkdirSync(media, { recursive: true });
   execFileSync('ffmpeg', ['-y', '-framerate', '5', '-i', path.join(FRAMES, 'f%03d.png'), '-vf', vf, gif], { stdio: 'ignore' });
-  fs.copyFileSync(path.join(FRAMES, 'f012.png'), path.join(media, 'kanban.png'));   // the still fallback
+  // The still fallback is taken AFTER both moves have landed: one frame that shows three full
+  // columns and the two live activity lines, rather than a board mid-transition.
+  const still = fs.existsSync(path.join(FRAMES, 'f022.png')) ? 'f022.png' : `f${String(Math.min(12, n - 1)).padStart(3, '0')}.png`;
+  fs.copyFileSync(path.join(FRAMES, still), path.join(media, 'kanban.png'));
   console.log(`${n} frames -> ${gif} (${Math.round(fs.statSync(gif).size / 1024)}KB) + kanban.png`);
 } else {
   console.log(`${n} frames in ${FRAMES}\nassemble with:\n  ffmpeg -y -framerate 5 -i ${path.join(FRAMES, 'f%03d.png')} -vf "${vf}" ${gif}`);
