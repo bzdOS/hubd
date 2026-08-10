@@ -474,7 +474,7 @@ export function queueSummaryForBrief({ root } = {}) {
 /* ── Queue lifecycle ──
  * A queue file is born on the first send to a role and never dies. In this hub that left 43
  * files against ONE live cursor: 42 roles nobody had ever listened on — mostly one-off
- * experiments (revtest, difftest, teamtest, zaika8fix) — still counted as pending work by
+ * experiments (revtest, difftest, teamtest, ...) — still counted as pending work by
  * hub_brief and read as fleet load by anyone glancing at it. Backlog addressed to a consumer
  * that never existed is not backlog, and a number that only ever grows teaches its reader to
  * ignore the number.
