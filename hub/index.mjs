@@ -8,8 +8,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 import {
-  runSync, runCardSet, runReport, runStatus, runGet, runSearch,
-  runTaskAdd, runTaskList, runTaskUpdate,
+  runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
+  runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
   runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
@@ -36,6 +36,17 @@ const TOOLS = [
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
     }, required: ['project', 'digest', 'by'] } },
 
+  { name: 'hub_section_add',
+    description: 'Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step. For those four, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT: is still the right call; use this for the rest. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string' },
+      section: { type: 'string', description: 'a key from hub sections (gates, metrics, market, ...) or the literal heading as it appears in the card' },
+      text: { type: 'string', description: 'one line; it is stamped with the date' },
+      provenance: { type: 'string', description: 'where this came from — a URL, a file, a command, a person. Recorded next to the line so a later reader can re-check it.' },
+      mode: { type: 'string', enum: ['append', 'set'], description: 'default append. `set` REPLACES the section body — right for "the one next action", wrong for anything cumulative.' },
+      by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd".' },
+    }, required: ['project', 'section', 'text', 'by'] } },
+
   { name: 'hub_report',
     description: 'Append a session report to the shared journal: what was done / broken / blocked.',
     inputSchema: { type: 'object', properties: {
@@ -58,7 +69,7 @@ const TOOLS = [
       cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
     }, required: ['cwd'] } },
 
-  { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. Use to find where something was discussed or decided.',
+  { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. START HERE whenever you know a keyword, a task id or a name but not which project owns it — searching once beats guessing project × status against hub_task_list, which is how sessions have actually wasted calls. Also the way to find where something was discussed or decided.',
     inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'plain-text substring, case-insensitive' } }, required: ['query'] } },
 
   { name: 'hub_task_add',
@@ -75,8 +86,14 @@ const TOOLS = [
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches (host/vm/service/...) — a structured link task → resource, not prose' },
     }, required: ['project', 'text', 'by'] } },
 
+  { name: 'hub_task_get',
+    description: 'ONE task by id, plus what it is blocked by and what it blocks. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.',
+    inputSchema: { type: 'object', properties: {
+      id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "planck-3"' },
+    }, required: ['id'] } },
+
   { name: 'hub_task_list',
-    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog.',
+    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog. Looking for ONE task you can name? hub_task_get by id, or hub_search by keyword — both beat listing and scanning.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, status: { type: 'string', enum: ['open', 'done', 'all'] },
       limit: { type: 'integer', description: 'page size' },
@@ -194,13 +211,14 @@ const TOOLS = [
   { name: 'hub_queue_send',
     description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
     inputSchema: { type: 'object', properties: {
-      role: { type: 'string', description: 'queue/role to deliver to, e.g. "zaika" or "owner"' },
+      role: { type: 'string', description: 'queue/role to deliver to, e.g. "dev" or "owner"' },
       text: { type: 'string' },
       from: { type: 'string', description: 'who is sending — the function you are performing, e.g. "dev-hubd" or "orchestrator". NOT which model you are, and NOT the target role. Required like every other write: the delivered block says "from <sender>" forever.' },
+      task: { type: ['integer', 'string'], description: 'the task id this message is ABOUT, if any. Stamped into the delivered block and handed back to the consumer, so a reply (a blocker, a HOLD, a result) can be reported onto the task instead of being lost with the message. An id matching no task comes back as taskKnown:false — the ref is still recorded.' },
     }, required: ['role', 'text', 'from'] } },
 
   { name: 'hub_queue_wait',
-    description: 'Block until new content lands in <role>\'s queue (this node\'s file plus any mesh-synced peer files for that role), then return it — a real long-poll, not a snapshot you have to re-poll. Returns {changed:false} if nothing arrives within timeout. Local/stdio only (not available on the shared HTTP server). Use this instead of a sleep-and-recheck loop when waiting on an agent to report back via hub_queue_send.',
+    description: 'Block until new content lands in <role>\'s queue (this node\'s file plus any mesh-synced peer files for that role), then return it — a real long-poll, not a snapshot you have to re-poll. Returns {changed:false} if nothing arrives within timeout. If a delivered block names a task (see hub_queue_send), the ids come back as `tasks` — report the outcome onto those tasks, or the message is the only place the blocker ever existed. Local/stdio only (not available on the shared HTTP server). Use this instead of a sleep-and-recheck loop when waiting on an agent to report back via hub_queue_send.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string' },
       timeout: { type: 'integer', description: 'seconds to block, default 45, max 540. The default is deliberately short: MCP clients abort a tool call on their own timeout (commonly ~60s) and hubd cannot see that limit. Raise it only if you know your client tolerates a longer call.' },
@@ -244,8 +262,9 @@ for (const name of Object.keys(OUTPUT_PLANS)) {
 
 const DISPATCH = {
   hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: (a) => runStatus(a),
+  hub_section_add: runSectionAdd,
   hub_get: runGet, hub_search: runSearch, hub_context: runContext,
-  hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
+  hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
   // queues: HUB captured synchronously here, same reasoning as hub_queue_send/wait below —
   // a plain string value, not a live reference, so a concurrent HTTP request repointing
   // HUB can't retarget an in-flight call.
@@ -267,7 +286,14 @@ const DISPATCH = {
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   // from: required like every other author (was `|| 'mcp'` — a transport name, i.e. a
   // placeholder); an omitted from is filled by the HUBD_AGENT floor in withAuthorFloor.
-  hub_queue_send: (a) => ({ file: queueSend(a.role, a.text, { from: a.from, root: HUB }) }),
+  hub_queue_send: (a) => {
+    // Validate the task ref but never refuse the send: the message is the urgent thing, a
+    // mistyped id is a warning the caller can act on immediately.
+    let taskKnown;
+    if (a.task != null && a.task !== '') { try { runTaskGet({ id: a.task }); taskKnown = true; } catch { taskKnown = false; } }
+    return { file: queueSend(a.role, a.text, { from: a.from, root: HUB, task: a.task }),
+      ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }) };
+  },
   // subscriber: resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown
   // client, and then the cursor stays shared per node exactly as before.

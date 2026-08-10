@@ -82,6 +82,14 @@ hub status          # every project, one line each
 hub get myproject   # one project in depth: card + journal + locks
 ```
 
+To write one line into one section of a card — `Gates`, `Metrics`, or a section
+you added yourself — without touching the rest:
+
+```bash
+hub section add myproject gates "kill if no paying user by 2026-09-01" --by dev-alex --src "owner call"
+hub task get 42     # one task by id, plus what blocks it and what it blocks
+```
+
 A `⚠Nd behind` next to a project means its card has fallen behind its own
 journal: the work moved, the digest didn't. Re-sync that one with a fresh
 digest. (A project that has simply gone quiet is never flagged.)
@@ -147,6 +155,14 @@ two sessions on one role split work instead of duplicating it. A role listed in
 its own cursor and sees every message. Decisions only a human can make go to an
 owner queue (list those role names in `HUB/owner-roles.json`) and `hub brief`
 rolls them up as "N buttons waiting".
+
+A reply usually concerns a specific task. Say so, and the answer lands back on
+the work instead of dying with the message:
+
+```bash
+hub queue send worker "HOLD: blocked on the owner's call" --from dev-alex --task 42
+hub queue status worker    # delivered vs pending, across every host's file at once
+```
 
 Experiments leave roles behind — a queue file is created by the first send and
 never removed, so old test roles keep showing pending work for a consumer that

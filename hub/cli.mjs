@@ -13,9 +13,9 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
-  now, parseTs, slugify, sh, cardPath, readCard, digestOf,
-  runSync, runCardSet, runReport, runStatus, runGet, runSearch,
-  runTaskAdd, runTaskList, runTaskUpdate, runTaskRetag, TASK_CATS,
+  now, parseTs, slugify, sh, cardPath, readCard, digestOf, projectAliases,
+  runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
+  runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt,
@@ -23,7 +23,7 @@ import {
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -477,6 +477,32 @@ if (cmd === 'doctor') {
     }
   }
 
+  // Near-duplicate project slugs: a mid-flight rename leaves the old slug holding its own
+  // separate backlog, so asking about one name answers about half the project. Detection only —
+  // which of the two is canonical is the owner's call, and merging is not this command's job.
+  {
+    const slugsWithWork = new Set([...projFiles.map(f => f.replace(/\.md$/, '')), ...allTasks.map(t => t.project).filter(Boolean)]);
+    const aliased = new Set(Object.keys(projectAliases()));
+    const pairs = [];
+    const list = [...slugsWithWork].sort();
+    for (const a of list) for (const b of list) {
+      if (a >= b || aliased.has(a) || aliased.has(b)) continue;
+      if (b.startsWith(a + '-') || a.startsWith(b + '-')) pairs.push([a, b]);
+    }
+    if (pairs.length) {
+      console.log('');
+      console.log('project slugs:');
+      for (const [a, b] of pairs) {
+        const na = allTasks.filter(t => t.project === a && t.status === 'open').length;
+        const nb = allTasks.filter(t => t.project === b && t.status === 'open').length;
+        console.log(`  "${a}" (${na} open) and "${b}" (${nb} open) look like one project under two names`);
+      }
+      console.log('  hint: if they are, point the old one at the canonical one in ' +
+        path.join(HUB, 'project-aliases.json') + '  e.g. {"' + pairs[0][0] + '": "' + pairs[0][1] + '"}' +
+        ' — reads then resolve both ways and new tasks land on the canonical slug (nothing is renamed on disk)');
+    }
+  }
+
   // rules source — shared rulesFile() (HUB wins, team-root fallback)
   const rulesSource = rulesFile();
   console.log('');
@@ -700,6 +726,7 @@ if (cmd === 'task') {
     console.log(r.noop === 'already-done'
       ? `Task #${id} was already closed${r.closedAt ? ' ' + r.closedAt : ''} — nothing changed`
       : `Task #${id} closed`);
+    if (r.resourceHint) console.error('  note: ' + r.resourceHint);
   } else if (sub === 'list') {
     const proj = getFlag('-p');
     const st = getFlag('--status');
@@ -713,6 +740,20 @@ if (cmd === 'task') {
       console.log(`${mark} #${t.id} [${t.project}]${dl}${ass}${res} ${t.text}`);
     }
     console.log(`(${data.count} tasks)`);
+  } else if (sub === 'get') {
+    const id = args[2];
+    if (!id || id.startsWith('-')) die('Id required: hub task get <id>');
+    let r; try { r = runTaskGet({ id }); } catch (e) { die(e.message); }
+    const t = r.task;
+    console.log(`#${t.id} [${t.project}] ${t.status}${t.importance ? ' · ' + t.importance : ''}${t.deadline ? ' · ⏰' + t.deadline : ''}${t.assignee ? ' · @' + t.assignee : ''}`);
+    console.log(t.text);
+    if (t.cat || (t.tags || []).length) console.log(`cat: ${t.cat || '—'}${(t.tags || []).length ? '   tags: #' + t.tags.join(' #') : ''}`);
+    if ((t.resources || []).length) console.log('resources: ' + t.resources.map(x => '⛬' + x).join(' '));
+    if (t.note) console.log('note: ' + t.note);
+    console.log(`created ${t.created || '?'} by ${t.by || '?'}${t.done ? ' · closed ' + t.done : ''}`);
+    for (const [label, rows] of [['blocked by', r.blockedBy], ['blocks', r.blocks]]) {
+      if (rows.length) console.log(`${label}: ` + rows.map(x => `#${x.id} (${x.status})`).join(', '));
+    }
   } else if (sub === 'retag') {
     const apply = args.includes('--apply');
     const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
@@ -722,7 +763,7 @@ if (cmd === 'task') {
       ? `Moved ${r.moved}/${r.count} off-enum categories into tags${r.failed.length ? ' (failed: #' + r.failed.join(' #') + ')' : ''}`
       : `${r.count} task(s) carry an off-enum cat. Re-run with --apply --by <you> to move them into tags (append-only, nothing is rewritten).`);
   } else {
-    die('task subcommands: add, done, list, retag');
+    die('task subcommands: add, get, done, list, retag');
   }
   done(0);
 }
@@ -844,6 +885,22 @@ if (cmd === 'graph') {
     console.log('\n⚠ dangling (target has no card — create it or it stays a note):');
     for (const d of data.dangling) console.log(`  ${d.from} —${d.rel}→ ${d.to}`);
   }
+  done(0);
+}
+
+if (cmd === 'section') {
+  // `hub section add <proj> <section> "<text>"` — one line into one section, everything else
+  // in the card untouched. Sits next to `hub sections` (which lists the vocabulary).
+  if (args[1] !== 'add') die('Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]');
+  const [, , project, section, text] = args;
+  if (!project || !section || !text) die('Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]');
+  const src = getFlag('--src');
+  let r;
+  try {
+    r = runSectionAdd({ project, section, text, by: authorOrDie('--by'),
+      provenance: typeof src === 'string' ? src : undefined, mode: args.includes('--set') ? 'set' : 'append' });
+  } catch (e) { die(e.message); }
+  console.log(`${r.project} → ## ${r.section}${r.created ? '  (section created — check the name if you expected it to exist)' : ''}`);
   done(0);
 }
 
@@ -1003,10 +1060,16 @@ else if (cmd === 'queue') {
     if (!role || !text) die('Usage: hub queue send <role> "<text>" --from <who>');
     // The sender is an author like any other write's (was `--from || 'unknown'`, the
     // one durable channel that skipped the rule) — flag, or the HUBD_AGENT floor.
+    // --task ties the message to what it is ABOUT, so the reply is not orphaned from the
+    // work. A ref that matches no task is flagged now, not discovered days later.
+    const taskRef = getFlag('--task');
+    let unknownTask = false;
+    if (typeof taskRef === 'string') { try { runTaskGet({ id: taskRef }); } catch { unknownTask = true; } }
     let qfile;
-    try { qfile = queueSend(role, text, { from: authorOrDie('--from') }); }
+    try { qfile = queueSend(role, text, { from: authorOrDie('--from'), task: typeof taskRef === 'string' ? taskRef : undefined }); }
     catch (e) { die(e.message); }
-    console.log(`→ ${path.basename(qfile)} delivered`);
+    console.log(`→ ${path.basename(qfile)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
+    if (unknownTask) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
     done(0);
   } else if (sub === 'wait') {
     const role = args[2];
@@ -1029,6 +1092,7 @@ else if (cmd === 'queue') {
       queueWait(role, { timeout }).then(result => {
         if (result.changed) {
           console.log(result.text);
+          if (result.tasks) console.log(`\n# about task(s): ${result.tasks.map(t => '#' + t).join(' ')} — report against them (DONE:/NOTE:) so the task carries the outcome`);
           done(0);
         } else {
           console.log('NO_CHANGES');
@@ -1036,6 +1100,21 @@ else if (cmd === 'queue') {
         }
       }).catch(e => die(e.message));
     }
+  } else if (sub === 'status') {
+    const role = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+    const { roles } = queueLedger({ root: resolveQueueRoot(), role });
+    if (!roles.length) { console.log(role ? `No queue files for role ${role}` : 'No queue files yet'); done(0); }
+    if (args.includes('--json')) { console.log(JSON.stringify({ roles })); done(0); }
+    for (const r of roles) {
+      const tag = (r.isButton ? ' 🔘' : '') + (r.fanout ? ' (broadcast)' : '');
+      console.log(`${r.role}${tag}: ${r.total} message(s) — ${r.delivered} delivered, ${r.pending} pending`);
+      for (const f of r.files) {
+        console.log(`    ${f.node || '(legacy, no node)'}: ${f.total} total, ${f.delivered} delivered, ${f.pending} pending` +
+          (f.cursor === null ? '   no cursor — nobody has ever consumed this file' : `   cursor ${f.cursor}/${f.bytes}B`));
+      }
+      for (const rd of r.readers) console.log(`    reader ${rd.subscriber}: ${rd.delivered} delivered`);
+    }
+    done(0);
   } else if (sub === 'gc') {
     const days = parseInt(String(getFlag('--days') || '30'), 10);
     const apply = args.includes('--apply');

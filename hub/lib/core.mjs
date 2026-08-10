@@ -289,6 +289,42 @@ export function markerFiles(dir) {
   return candidates.filter(f => fs.existsSync(path.join(dir, f)));
 }
 
+/* ── Project aliases ──
+ * A project gets renamed mid-flight and the old slug keeps its own separate backlog: two
+ * slugs of one project both lived here, each holding tasks, with one task's own text
+ * documenting the rename. Nothing was wrong with either name — asking for one of them just answered about
+ * half the project, silently.
+ *
+ * HUB/project-aliases.json maps old → canonical ({"old-name": "new-name"}). New writes land on
+ * the canonical slug; reads (task list, journal, hub_get) resolve BOTH ways, so querying either
+ * name surfaces the whole project. Nothing is renamed on disk: the old cards, events and journal
+ * lines stay exactly as they were written, which is what the append-only contract requires. */
+export function projectAliases() {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(HUB, 'project-aliases.json'), 'utf8'));
+    const out = {};
+    for (const [k, v] of Object.entries(o)) if (typeof v === 'string' && v) out[slugify(k)] = slugify(v);
+    return out;
+  } catch { return {}; }
+}
+
+/** The canonical slug for a name, following an alias chain and refusing to loop on a cycle. */
+export function canonProject(name) {
+  const al = projectAliases();
+  let cur = slugify(name || '');
+  const seen = new Set();
+  while (al[cur] && !seen.has(cur)) { seen.add(cur); cur = al[cur]; }
+  return cur;
+}
+
+/** Every slug that means this project — the canonical one plus every alias pointing at it. */
+export function projectSlugSet(name) {
+  const canon = canonProject(name);
+  const set = new Set([canon, slugify(name || '')]);
+  for (const from of Object.keys(projectAliases())) if (canonProject(from) === canon) set.add(from);
+  return set;
+}
+
 export function cardPath(name) { return path.join(PROJ, slugify(name) + '.md'); }
 export function readCard(name) {
   const p = cardPath(name);
@@ -462,7 +498,10 @@ export function journalTail(project, n = 12) {
     } catch {}
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge multiple per-host files by time
-  const filtered = project ? all.filter(e => e.project === slugify(project)) : all;
+  // Alias-aware: entries written under a project's OLD slug belong to the same project, and a
+  // reader asking about either name wants both halves of the trail.
+  const set = project ? projectSlugSet(project) : null;
+  const filtered = set ? all.filter(e => set.has(e.project)) : all;
   return filtered.slice(-n);
 }
 
@@ -1217,6 +1256,65 @@ export function runReport(a) {
   return summary;
 }
 
+/** Where else this name exists — the pointer a "no card" error owes its caller. */
+export function namespaceHint(name) {
+  const slug = slugify(name || '');
+  const hints = [];
+  try {
+    if (fs.existsSync(resourcePath(slug)))
+      hints.push(`"${slug}" IS a resource, not a project card — use hub_resource_get({slug:"${slug}"}) or hub_graph`);
+  } catch {}
+  try {
+    const near = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')).map(f => f.replace(/\.md$/, ''))
+      .filter(s => s !== slug && (s.startsWith(slug) || slug.startsWith(s)));
+    if (near.length) hints.push('did you mean: ' + near.join(', '));
+  } catch {}
+  hints.push('Otherwise hub_search("<keyword>") finds where it is discussed, and hub_sync in its folder creates the card');
+  return hints.join('. ');
+}
+
+/* ── Writing into one section of a card ──
+ * Until now a tool could write exactly two things: the digest (hub_card_set) and the four
+ * sections the report router owns (Decisions, Facts & hypotheses, Communication, Next step).
+ * Gates, Metrics, Market and every hand-written section were reachable only by editing raw
+ * markdown — which is precisely the operation that once ate curated content (the 0.1.6
+ * section-loss fix). So: one tool that appends a line to ANY section, through the same
+ * editSection used by reports, which preserves everything around it and creates the heading
+ * when it is missing.
+ *
+ * `section` takes a KEY from sections.json ('gates') or a literal heading ('Gates', and on a
+ * localised hub its translation) — an agent should not have to know which of the two it is
+ * holding. An unknown name is not an error: hand sections are legitimate, so it is created —
+ * but the result says `created: true`, because a typo silently growing a second, nearly
+ * identical section is the failure mode here.
+ *
+ * `provenance` is the beginning of the answer to "was this still true when you read it": it
+ * records where a line came from, next to the date it was written. */
+export function runSectionAdd(a = {}) {
+  const project = a.project || a.name;
+  if (!project) throw new Error('project required');
+  const raw = String(a.text ?? '').trim();
+  if (!raw) throw new Error('text required: the one line to append');
+  const by = requireAuthor(a.by ?? a.agent, 'by');
+  const cfg = sectionsConfig();
+  const want = String(a.section ?? '').trim();
+  if (!want) throw new Error('section required: a key (' + cfg.map(s => s.key).join(' | ') +
+    ') or a literal heading as it appears in the card');
+  const heading = (cfg.find(s => s.key === want.toLowerCase())
+    || cfg.find(s => s.heading.toLowerCase() === want.toLowerCase())
+    || { heading: want.replace(/^#+\s*/, '') }).heading;
+
+  const slug = slugify(project);
+  const before = readCard(project) || cardBaseFor(project);
+  const created = !new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*$', 'm').test(before);
+  const line = `- ${now()}: ${raw}` + (a.provenance ? ` · src: ${String(a.provenance).trim()}` : '');
+  const after = editSection(before, heading, line, a.mode === 'set' ? 'set' : 'append');
+  fs.mkdirSync(PROJ, { recursive: true });
+  atomicWrite(cardPath(project), after);
+  journalAppend({ ts: now(), project: slug, agent: by, kind: 'note', text: `${heading}: ${raw.slice(0, 100)}` });
+  return { ok: true, project: slug, section: heading, created, card: cardPath(project) };
+}
+
 export function runStatus(a = {}) {
   const staleDays = a.staleDays ?? 7;
   const lastJournal = lastJournalByProject();
@@ -1250,11 +1348,16 @@ export function runStatus(a = {}) {
 }
 
 export function runGet(a) {
-  const card = readCard(a.project);
-  if (!card) throw new Error('no card for: ' + a.project + '. Run hub_sync in its folder first.');
-  const slug = slugify(a.project);
+  const canon = canonProject(a.project);
+  const card = readCard(a.project) || (canon !== slugify(a.project) ? readCard(canon) : null);
+  // A miss used to dead-end at "run hub_sync", even when the name existed perfectly well in
+  // the RESOURCE namespace (a service card did) or differed from a real card by a suffix. The
+  // caller is not wrong about the name — it is looking in the wrong namespace, and only this
+  // function can see that.
+  if (!card) throw new Error('no card for: ' + a.project + '. ' + namespaceHint(a.project));
+  const set = projectSlugSet(a.project);   // a lock taken under the old slug still locks this project
   const claimsDb = loadClaims();
-  return { card, journal: journalTail(a.project, 15), claims: activeClaims(claimsDb.claims).filter(c => c.project === slug) };
+  return { card, journal: journalTail(a.project, 15), claims: activeClaims(claimsDb.claims).filter(c => set.has(slugify(c.project))) };
 }
 
 export function runSearch(a) {
@@ -1440,7 +1543,8 @@ export function runTaskAdd(a) {
     const id = `${JOURNAL_NODE}-${nextLocalSeq()}`;
     const norm = normalizeCat(a.cat, a.tags);
     const t = {
-      id, project: slugify(a.project), text: a.text,
+      // New work lands on the canonical slug, so an alias never grows a fresh backlog of its own.
+      id, project: canonProject(a.project), text: a.text,
       importance: a.importance || 'normal', deadline: a.deadline || null,
       cat: norm.cat, tags: norm.tags, assignee: a.assignee || null, status: 'open',
       created: now(), by: author,
@@ -1458,7 +1562,7 @@ export function runTaskList(a) {
   const db = loadTasks();
   const st = a.status || 'open';
   let list = db.tasks;
-  if (a.project) list = list.filter(t => t.project === slugify(a.project));
+  if (a.project) { const set = projectSlugSet(a.project); list = list.filter(t => set.has(t.project)); }
   if (st !== 'all') list = list.filter(t => t.status === st);
   // Paging is the deliberate alternative to a silent cap: the caller that wants the 269th task
   // can reach it, instead of being told "100 tasks" by a tool that had 322. `total` is always
@@ -1468,6 +1572,45 @@ export function runTaskList(a) {
   const limit = a.limit != null ? Math.max(1, parseInt(a.limit, 10) || 1) : null;
   if (offset || limit != null) list = list.slice(offset, limit != null ? offset + limit : undefined);
   return { count: list.length, total, offset, tasks: list };
+}
+
+/* One task by id — the counterpart hub_resource_get always had and tasks did not. Without it,
+ * knowing a number but not its project meant guessing project × status combinations against
+ * hub_task_list (three wasted calls, in the session that filed this). Returns the dependency
+ * edges in BOTH directions, since "what is this waiting on / what waits on it" is the question
+ * that follows every lookup of a single task. */
+/* Closing a task does not make its linked resources real, and nothing used to say so: a task
+ * closed with linked resources left the app's own resource card reading "planned"
+ * a full day later, and hub_graph kept answering with it. This does NOT cascade — only the person
+ * closing the task knows whether the thing is actually live now, and a tool guessing that would
+ * write a fact nobody checked. It names what looks stale and the one call that fixes it. */
+const RESOURCE_NOT_LIVE = new Set(['planned', 'plan', 'proposed', 'todo', 'draft', 'wip', 'in-progress', 'in progress', 'pending']);
+function staleResourceHint(t) {
+  const stale = [];
+  for (const slug of (Array.isArray(t.resources) ? t.resources : [])) {
+    const text = readResource(slug);
+    if (!text) continue;
+    const st = (parseFront(text).find(p => p.key === 'status') || {}).value;
+    if (st && RESOURCE_NOT_LIVE.has(String(st).trim().toLowerCase())) stale.push(`${slug} (${String(st).trim()})`);
+  }
+  return stale.length
+    ? `closed, but its linked resource(s) still read not-live: ${stale.join(', ')}. If this work made them real, say so: hub_resource_set({slug:"<one>", status:"live", by:"<you>"}) — nothing here guesses that for you.`
+    : null;
+}
+
+export function runTaskGet(a) {
+  if (a == null || a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
+  const all = loadTasks().tasks;
+  const t = all.find(x => String(x.id) === String(a.id));
+  if (!t) throw new Error('no task #' + a.id +
+    ' — ids are node-scoped ("planck-3") or legacy numbers. Know a keyword instead? hub_search finds the task and the project it lives in.');
+  const deps = (Array.isArray(t.depends_on) ? t.depends_on : []).map(String);
+  const brief = (x) => ({ id: x.id, project: x.project, status: x.status, text: (x.text || '').slice(0, 80) });
+  return {
+    task: t,
+    blockedBy: all.filter(x => deps.includes(String(x.id))).map(brief),
+    blocks: all.filter(x => (Array.isArray(x.depends_on) ? x.depends_on : []).map(String).includes(String(t.id))).map(brief),
+  };
 }
 
 export function runTaskUpdate(a) {
@@ -1516,7 +1659,8 @@ export function runTaskUpdate(a) {
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
     rebuildTaskCache();
     if (!a.quiet) journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
-    return { ok: true, task: { ...t, ...patch } };
+    const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
+    return { ok: true, task: { ...t, ...patch }, ...(resourceHint ? { resourceHint } : {}) };
   });
 }
 

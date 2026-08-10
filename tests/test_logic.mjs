@@ -182,7 +182,7 @@ const batch = [
   'DECISION: register 0.1.8 | mcpservers approved',   // synonym → decide
   'FACT: registry JWT expires in minutes',
   'GOTCHA: pkg ABI is FreeBSD-15-aarch64',            // synonym → fact
-  'HYPO: kolkhoz in fundraising',
+  'HYPO: acme in fundraising',
   'COMM: 0.1.8 live on mcpservers',
   'NEXT: redeploy myvm',
   'DONE: ' + seed,
@@ -197,7 +197,7 @@ ok(/## Decisions[\s\S]*ship docs in release — npm README drifted/.test(rc), 'r
 ok(/## Decisions[\s\S]*register 0\.1\.8 — mcpservers approved/.test(rc), 'report: 2nd decision present (multiplicity)');
 ok(/## Facts & hypotheses[\s\S]*fact: registry JWT expires/.test(rc), 'report: FACT → Facts & hypotheses');
 ok(/## Facts & hypotheses[\s\S]*fact: pkg ABI is FreeBSD-15-aarch64/.test(rc), 'report: GOTCHA synonym → fact');
-ok(/## Facts & hypotheses[\s\S]*hypothesis: kolkhoz in fundraising/.test(rc), 'report: HYPO → hypothesis');
+ok(/## Facts & hypotheses[\s\S]*hypothesis: acme in fundraising/.test(rc), 'report: HYPO → hypothesis');
 ok(/## Communication[\s\S]*0\.1\.8 live on mcpservers/.test(rc), 'report: COMM → ## Communication');
 const nextBody = rc.split('## Next step')[1].split(/\n## /)[0];
 ok(/redeploy myvm/.test(nextBody) && !/<the one next action/.test(nextBody), 'report: NEXT set ## Next step (replaced placeholder)');
@@ -1146,6 +1146,112 @@ ok(JSON.stringify(tiny, null, 1).length <= 2000 && tiny.tasks.length >= 1,
   `budget: an impossible budget empties the first list before gutting the last (tasks left ${tiny.tasks.length})`);
 ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a small payload is passed through untouched');
 
+// ── writing one section of a card, without touching the rest ──
+const SEC = mktmp();
+core.setHubBase(SEC);
+core.runCardSet({ project: 'demo', digest: 'the digest', by: 'dev-t' });
+const secGates = core.runSectionAdd({ project: 'demo', section: 'gates', text: 'kill if no paying user by 2026-09-01', provenance: 'owner call', by: 'dev-t' });
+core.runSectionAdd({ project: 'demo', section: 'metrics', text: '42 signups', by: 'dev-t' });
+core.runSectionAdd({ project: 'demo', section: 'metrics', text: '58 signups', by: 'dev-t' });
+const secCard = fs.readFileSync(path.join(SEC, 'projects', 'demo.md'), 'utf8');
+ok(secGates.created === false, 'section add: a scaffolded section is written, not created anew');
+ok(/## Gates\n\n- \d{4}-\d{2}-\d{2} \d{2}:\d{2}: kill if no paying user by 2026-09-01 · src: owner call/.test(secCard),
+  'section add: the line is dated and carries its provenance');
+ok((secCard.match(/signups/g) || []).length === 2, 'section add: append accumulates instead of replacing');
+ok(/## Digest\n\nthe digest/.test(secCard) && /## Market/.test(secCard),
+  'section add: the digest and every other section survive verbatim');
+const secHand = core.runSectionAdd({ project: 'demo', section: 'Runbook', text: 'restart with make deploy', by: 'dev-t' });
+ok(secHand.created === true && /## Runbook\n\n- /.test(fs.readFileSync(path.join(SEC, 'projects', 'demo.md'), 'utf8')),
+  'section add: an unknown heading is created and REPORTED as created (a typo must not pass silently)');
+core.runSectionAdd({ project: 'demo', section: 'next', text: 'ship 0.7', mode: 'set', by: 'dev-t' });
+core.runSectionAdd({ project: 'demo', section: 'next', text: 'ship 0.7.1', mode: 'set', by: 'dev-t' });
+const secNext = fs.readFileSync(path.join(SEC, 'projects', 'demo.md'), 'utf8');
+ok((secNext.match(/ship 0\.7/g) || []).length === 1 && /ship 0\.7\.1/.test(secNext),
+  'section add: mode=set replaces the section body (right for "the one next action")');
+let secErr = ''; try { core.runSectionAdd({ project: 'demo', text: 'x', by: 'dev-t' }); } catch (e) { secErr = e.message; }
+ok(/section required/.test(secErr) && /gates/.test(secErr), 'section add: a missing section names the vocabulary');
+
+// ── one task by id, and a miss that points somewhere ──
+const GT = mktmp();
+core.setHubBase(GT);
+const gtA = core.runTaskAdd({ project: 'p', text: 'the dependency', by: 'dev-t' }).task;
+const gtB = core.runTaskAdd({ project: 'p', text: 'the dependent', depends_on: [gtA.id], by: 'dev-t' }).task;
+const got = core.runTaskGet({ id: gtB.id });
+ok(got.task.id === gtB.id && got.blockedBy.length === 1 && got.blockedBy[0].id === gtA.id,
+  'task get: returns the task and what blocks it');
+ok(core.runTaskGet({ id: gtA.id }).blocks[0].id === gtB.id, 'task get: and what it blocks, the other way round');
+let gtErr = ''; try { core.runTaskGet({ id: 'no-such-9' }); } catch (e) { gtErr = e.message; }
+ok(/hub_search/.test(gtErr), 'task get: a miss points at hub_search instead of dead-ending');
+core.runResourceSet({ slug: 'api-core', type: 'service', status: 'planned', by: 'dev-t' });
+let getErr = ''; try { core.runGet({ project: 'api-core' }); } catch (e) { getErr = e.message; }
+ok(/IS a resource/.test(getErr) && /hub_resource_get/.test(getErr),
+  'hub_get: a name that exists in the RESOURCE namespace is named as such, with the tool that reads it');
+fs.writeFileSync(path.join(GT, 'projects', 'acme-io.md'), '# acme-io\n\n- slug: acme-io\n\n## Digest\n\nx\n');
+let nearErr = ''; try { core.runGet({ project: 'acme' }); } catch (e) { nearErr = e.message; }
+ok(/did you mean: acme-io/.test(nearErr), 'hub_get: a near-miss slug is suggested');
+
+// ── closing a task does not silently leave its resources reading "planned" ──
+const rhTask = core.runTaskAdd({ project: 'p', text: 'ship it', resources: ['api-core'], by: 'dev-t' }).task;
+const rhDone = core.runTaskUpdate({ id: rhTask.id, status: 'done', by: 'dev-t' });
+ok(/api-core \(planned\)/.test(rhDone.resourceHint || ''), 'close: a linked resource still marked planned is reported');
+core.runResourceSet({ slug: 'api-core', status: 'live', by: 'dev-t' });
+const rhTask2 = core.runTaskAdd({ project: 'p', text: 'ship again', resources: ['api-core'], by: 'dev-t' }).task;
+ok(!core.runTaskUpdate({ id: rhTask2.id, status: 'done', by: 'dev-t' }).resourceHint,
+  'close: a live resource produces no noise');
+
+// ── a renamed project stops holding two separate backlogs ──
+const AL = mktmp();
+core.setHubBase(AL);
+core.runTaskAdd({ project: 'acme', text: 'written under the old slug', by: 'dev-t' });
+fs.writeFileSync(path.join(AL, 'project-aliases.json'), '{"acme": "acme-io"}');
+const alNew = core.runTaskAdd({ project: 'acme', text: 'written after the alias', by: 'dev-t' }).task;
+ok(core.canonProject('acme') === 'acme-io', 'alias: the canonical slug resolves');
+ok(alNew.project === 'acme-io', 'alias: new work lands on the canonical slug, not the alias');
+ok(core.runTaskList({ project: 'acme' }).count === 2 && core.runTaskList({ project: 'acme-io' }).count === 2,
+  'alias: asking by EITHER name returns the whole project');
+core.runCardSet({ project: 'acme-io', digest: 'canonical card', by: 'dev-t' });
+ok(/acme-io/.test(core.runGet({ project: 'acme' }).card),
+  'alias: hub_get by the old name finds the canonical card');
+ok(new Set(core.runGet({ project: 'acme' }).journal.map(e => e.project)).size === 2,
+  'alias: the journal trail spans both slugs');
+fs.writeFileSync(path.join(AL, 'project-aliases.json'), '{"a": "b", "b": "a"}');
+ok(core.canonProject('a') === 'b' || core.canonProject('a') === 'a', 'alias: a cycle terminates instead of hanging');
+
+// ── a queue message can say which task it is about ──
+const QT = mktmp();
+fs.mkdirSync(path.join(QT, 'queues'), { recursive: true });
+core.setHubBase(QT);
+q.queueSend('worker', 'HOLD: waiting on the owner', { from: 'dev-t', root: QT, task: 'planck-3', node: 'n1' });
+q.queueSend('worker', 'unrelated', { from: 'dev-t', root: QT, node: 'n1' });
+const qtText = fs.readFileSync(path.join(QT, 'queues', 'worker.n1.queue.md'), 'utf8');
+ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t · task #planck-3$/m.test(qtText),
+  'queue task ref: stamped after the sender, so the header pattern every reader uses still matches');
+ok(q.peekQueueDepth('worker', { root: QT }).pending === 2,
+  'queue task ref: the existing depth reader is unaffected by the extra field');
+ok(q.parseTaskRefs(qtText).join(',') === 'planck-3', 'queue task ref: parsed back out of delivered text');
+const qtWait = await q.queueWait('worker', { timeout: 1, root: QT });
+ok(qtWait.changed && qtWait.tasks && qtWait.tasks[0] === 'planck-3',
+  'queue task ref: the consumer is told which task the message is about');
+
+// ── delivered vs pending, across hosts, in one answer ──
+const QL = mktmp();
+fs.mkdirSync(path.join(QL, 'queues'), { recursive: true });
+fs.mkdirSync(path.join(QL, '.qstate'), { recursive: true });
+core.setHubBase(QL);
+q.queueSend('w', 'one', { from: 'dev-t', root: QL, node: 'hostA' });
+// multi-byte on purpose (— is 3 bytes, · is 2): a cursor counts BYTES, so slicing the file as
+// a JS string instead of a Buffer would miscount delivered/pending on any non-ASCII message.
+q.queueSend('w', 'two — a multi-byte dash · and a bullet', { from: 'dev-t', root: QL, node: 'hostA' });
+q.queueSend('w', 'three', { from: 'dev-t', root: QL, node: 'hostB' });
+const drained = await q.queueWait('w', { timeout: 1, root: QL });   // consumes hostA + hostB
+ok(drained.changed, 'ledger: setup consumed the queue');
+q.queueSend('w', 'four, arrived after the read', { from: 'dev-t', root: QL, node: 'hostA' });
+const led = q.queueLedger({ root: QL }).roles.find(x => x.role === 'w');
+ok(led.total === 4 && led.delivered === 3 && led.pending === 1,
+  `ledger: totals are aggregated across hosts (${JSON.stringify({ t: led.total, d: led.delivered, p: led.pending })})`);
+ok(led.files.length >= 2 && led.files.every(f => f.total === f.delivered + f.pending),
+  'ledger: every per-host file reconciles on its own too');
+
 // ── machine-readable output survives a pipe ──
 // A pipe buffers 64KB and Node writes to it asynchronously, so process.exit() right after a
 // large console.log used to drop the rest: `hub task list --json` came back cut mid-token,
@@ -1169,9 +1275,7 @@ ok(pipedJson && pipedJson.tasks.length === 140,
   `pipe: a >64KB --json payload arrives whole and parses (${pipedJson ? pipedJson.tasks.length + ' tasks' : 'TRUNCATED at ' + piped.out.length + 'B'})`);
 fs.rmSync(PIPE, { recursive: true, force: true });
 
-fs.rmSync(DG, { recursive: true, force: true });
-fs.rmSync(ID, { recursive: true, force: true });
-fs.rmSync(QG, { recursive: true, force: true });
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
