@@ -171,6 +171,19 @@ Graceful degradation: no MCP → files; no hubd → files still readable as-is �
 any editor, `grep`, or a Markdown app like Obsidian. See
 [Reading your hub with any tool](docs/interop.md).
 
+## Watch it move
+
+![the hubd kanban: cards move as agents work, activity below](docs/media/kanban.gif)
+
+`hub serve` renders your folder as a read-only board: three columns and the day's
+activity under them. Cards move because **agents** move them — the page just polls
+the same files. Exactly one button, **⚙ Rules**, and it opens AGENTS.md: you manage
+the rules, not the agents.
+
+That recording is the real board on invented data — `node scripts/capture-kanban.mjs --gif`
+builds a throwaway demo hub, edits it mid-capture and lets the board notice, so nothing
+in it is staged (and nobody's actual hub gets published).
+
 ## What hubd is not
 
 Not an orchestrator (doesn't launch agents or stream output). Not vector

@@ -2278,7 +2278,24 @@ export function runTaskUpdate(a) {
     const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
     rebuildTaskCache();
-    if (!a.quiet) journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task', text: '~ task #' + t.id + ' → ' + (a.status || 'edited') });
+    /* Say WHAT changed, not just that something did. The line used to read "~ task #N → edited"
+     * for every non-status edit, so the single most useful event in a coordination log — somebody
+     * took this task — was indistinguishable from a typo fix in its text. A reader scanning the
+     * journal needs the new owner, the new priority, the new date; that is the whole reason the
+     * line exists. */
+    if (!a.quiet) {
+      const bits = [];
+      if (a.status) bits.push(a.status);
+      if (patch.assignee != null) bits.push('@' + patch.assignee);
+      if (patch.importance != null) bits.push('importance ' + patch.importance);
+      if (patch.deadline != null) bits.push(patch.deadline ? 'due ' + patch.deadline : 'no deadline');
+      if (patch.cat != null || patch.tags != null) bits.push('cat/tags');
+      if (patch.depends_on != null) bits.push('deps');
+      if (patch.resources != null) bits.push('resources');
+      if (patch.text != null) bits.push('text');
+      journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
+        text: '~ task #' + t.id + ' → ' + (bits.join(', ') || 'edited') });
+    }
     const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
     return { ok: true, task: { ...t, ...patch }, ...(resourceHint ? { resourceHint } : {}) };
   });
