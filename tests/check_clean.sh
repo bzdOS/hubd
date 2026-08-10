@@ -28,9 +28,18 @@ fails = []
 
 # 1) tracked file contents
 files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split("\n")
+# Binary files are skipped: a byte in a GIF is not a word in a language, and decoding one as text
+# lands random bytes inside the Cyrillic range — the gate reported ~200 "leaks" in docs/media/
+# kanban.gif the moment it was committed.
+# What this gate therefore CANNOT check is what an image SHOWS. That is handled upstream instead:
+# scripts/capture-kanban.mjs films a synthetic hub in a temp dir, so no recording of real data
+# exists to review. Any image added by hand needs a human to look at it.
+BINARY_EXT = (".gif", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".pdf", ".woff", ".woff2", ".zip", ".gz")
 for f in filter(None, files):
     if f in ("tests/check_clean.sh", "glama.json"):
         continue  # gate file + glama.json claim metadata legitimately name the maintainer handle
+    if f.lower().endswith(BINARY_EXT):
+        continue
     try:
         with open(f, encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh, 1):
