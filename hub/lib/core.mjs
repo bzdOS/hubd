@@ -450,6 +450,108 @@ export function loadTasks() {
   try { return JSON.parse(fs.readFileSync(TASKS, 'utf8')); } catch { return { seq: 0, tasks: [] }; }
 }
 
+/* ── Usage: how long, how many tokens, how much ──
+ * The hub knows WHO did WHAT. It does not know what that cost, and the PMF question for a solo
+ * operator running a fleet is "what does each project cost me per week". So this exists — with one
+ * hard line through the middle of it:
+ *
+ *   MEASURED is what the hub can observe in its own logs: a task's open-to-close span, and events
+ *   per project. It is derived, never stored, and cannot be wrong about itself.
+ *
+ *   SUPPLIED is seconds, tokens and money — none of which the hub can see. Only the client knows
+ *   them, so they arrive by explicit call and are labelled as reported, not observed.
+ *
+ * The split is the feature. A cost number that quietly mixes a measured span with a guessed rate
+ * is worse than no number, because it will be quoted later as if someone had counted. Per-host
+ * append-only (usage.<node>.jsonl), same shape as the journal and the task log, so several
+ * machines can report into one hub without conflicting — and it IS mesh-synced, because
+ * "what did the fleet cost" is a fleet-wide question. */
+export function usageFile() { return path.join(HUB, `usage.${JOURNAL_NODE}.jsonl`); }
+export function usageFiles() {
+  try { return fs.readdirSync(HUB).filter(f => /^usage\..+\.jsonl$/.test(f)).sort().map(f => path.join(HUB, f)); }
+  catch { return []; }
+}
+
+// An ABSENT value must stay absent: Number(null) is 0, and a 0 that means "not reported" is the
+// exact lie this log exists to avoid — an empty entry would have recorded a $0 session.
+// `true` appears because the CLI's flag parser returns it for a bare flag with no value.
+const num = (v) => {
+  if (v === null || v === undefined || v === '' || v === true) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+export function runUsageAdd(a = {}) {
+  const agent = requireAuthor(a.agent ?? a.by, 'agent');
+  const rec = {
+    ts: now(), node: JOURNAL_NODE, agent,
+    project: a.project ? canonProject(a.project) : null,
+    task: (a.task ?? null) === null ? null : String(a.task),
+    seconds: num(a.seconds), tokensIn: num(a.tokensIn), tokensOut: num(a.tokensOut),
+    costUsd: num(a.costUsd), model: a.model ? String(a.model) : null,
+  };
+  if (rec.seconds === null && rec.tokensIn === null && rec.tokensOut === null && rec.costUsd === null) {
+    throw new Error('nothing to record: pass at least one of seconds, tokensIn, tokensOut, costUsd — this log holds what only YOU can see, so an empty entry says nothing');
+  }
+  fs.appendFileSync(usageFile(), JSON.stringify(rec) + '\n');
+  return { ok: true, recorded: rec };
+}
+
+export function runUsage(a = {}) {
+  const days = a.days ?? 7;
+  const cutoff = Date.now() - days * 86400000;
+  const proj = a.project ? canonProject(a.project) : null;
+
+  const supplied = { calls: 0, seconds: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, byProject: {}, byAgent: {}, models: {} };
+  for (const f of usageFiles()) {
+    try {
+      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+        if (!l.trim()) continue;
+        let e; try { e = JSON.parse(l); } catch { continue; }
+        if (!e.ts || parseTs(e.ts).getTime() < cutoff) continue;
+        if (proj && e.project !== proj) continue;
+        if (a.agent && e.agent !== a.agent) continue;
+        supplied.calls++;
+        for (const k of ['seconds', 'tokensIn', 'tokensOut', 'costUsd']) supplied[k] += Number(e[k]) || 0;
+        const pk = e.project || 'unassigned', ak = e.agent || 'unknown';
+        supplied.byProject[pk] = supplied.byProject[pk] || { seconds: 0, tokens: 0, costUsd: 0 };
+        supplied.byProject[pk].seconds += Number(e.seconds) || 0;
+        supplied.byProject[pk].tokens += (Number(e.tokensIn) || 0) + (Number(e.tokensOut) || 0);
+        supplied.byProject[pk].costUsd += Number(e.costUsd) || 0;
+        supplied.byAgent[ak] = supplied.byAgent[ak] || { seconds: 0, tokens: 0, costUsd: 0 };
+        supplied.byAgent[ak].seconds += Number(e.seconds) || 0;
+        supplied.byAgent[ak].tokens += (Number(e.tokensIn) || 0) + (Number(e.tokensOut) || 0);
+        supplied.byAgent[ak].costUsd += Number(e.costUsd) || 0;
+        if (e.model) supplied.models[e.model] = (supplied.models[e.model] || 0) + 1;
+      }
+    } catch {}
+  }
+  supplied.costUsd = Math.round(supplied.costUsd * 100) / 100;
+
+  // Measured: the hub's own arithmetic over its own logs. A closed task's span is real; nothing
+  // here is inferred from a rate card.
+  const closed = loadTasks().tasks.filter(t => t.status === 'done' && t.done && t.created &&
+    parseTs(t.done).getTime() >= cutoff && (!proj || t.project === proj));
+  const spans = closed.map(t => (parseTs(t.done).getTime() - parseTs(t.created).getTime()) / 86400000)
+    .filter(d => d >= 0).sort((x, y) => x - y);
+  const median = spans.length ? Math.round(spans[Math.floor(spans.length / 2)] * 10) / 10 : null;
+  const events = {};
+  for (const e of journalSince(days * 24)) {
+    if (!e.project || (proj && e.project !== proj)) continue;
+    events[e.project] = (events[e.project] || 0) + 1;
+  }
+
+  return {
+    windowDays: days, project: proj,
+    supplied,
+    measured: { tasksClosed: closed.length, medianDaysToClose: median, journalEventsByProject: events },
+    note: supplied.calls
+      ? 'seconds/tokens/cost are SUPPLIED by callers (hub_usage_add) — the hub cannot observe them. tasksClosed and journal events are MEASURED from its own logs.'
+      : 'nothing supplied in this window: the hub cannot see time, tokens or money — a client has to report them with hub_usage_add. The measured half below is the hub\'s own arithmetic.',
+    generated: now(),
+  };
+}
+
 /* ── Claims ── */
 export function loadClaims() {
   try { return JSON.parse(fs.readFileSync(CLAIMS, 'utf8')); } catch { return { claims: [] }; }
@@ -472,6 +574,18 @@ export function journalFiles() {
       .sort()
       .map(f => path.join(HUB, f));
   } catch { return []; }
+}
+
+/* The life braid: entries that never leave this machine (docs/narrative-layer.md). A separate
+ * file, gitignored, never mesh-synced — and NOT a separate reader: journalFiles() picks it up, so
+ * an agent writing the weekly chapter sees it, which is the one thing it is for. Every entry
+ * carries private:true, so anything that copies text into a synced file can tell what it is
+ * holding. */
+export function journalAppendPrivate(entry) {
+  const target = path.join(HUB, 'journal.life.jsonl');
+  ensureGitignored('journal.life.jsonl');
+  withLock(target, () => { fs.appendFileSync(target, JSON.stringify({ ...entry, private: true }) + '\n'); });
+  return target;
 }
 
 export function journalAppend(entry) {
@@ -619,11 +733,16 @@ export function modeClass(mode) {
   return 'other';
 }
 
-function projectCards() {
+// Reserved cards (operator) live in projects/ so that every card tool reaches them for free, but
+// they are NOT projects: counting one as a project would have it audited for gates it cannot have
+// and listed in a status table it does not belong in. Recall asks for them on purpose.
+function projectCards({ includeReserved = false } = {}) {
   const out = [];
   try {
     for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
-      try { out.push({ slug: f.replace(/\.md$/, ''), text: fs.readFileSync(path.join(PROJ, f), 'utf8') }); } catch {}
+      const slug = f.replace(/\.md$/, '');
+      if (!includeReserved && RESERVED_CARDS.has(slug)) continue;
+      try { out.push({ slug, text: fs.readFileSync(path.join(PROJ, f), 'utf8') }); } catch {}
     }
   } catch {}
   return out;
@@ -1545,6 +1664,13 @@ export function runReport(a) {
       'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: — or, if you are just saying you started, hub claim instead. ' +
       '(rules.json → strict.rejectNoteOnlyReport; NOTE: <text> still works for a real aside.)');
   }
+  /* A private report is local by definition, and every structured prefix writes into a card that
+   * IS mesh-synced — so accepting both would quietly publish the thing the caller asked to keep on
+   * this machine. Refuse the combination instead of silently dropping half of it. */
+  if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length)) {
+    throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT: write into the project card, and cards are mesh-synced — ' +
+      'that would publish what you asked to keep local. Send the private part as its own report, and the shareable part as a normal one.');
+  }
   const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false };
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
     let text = readCard(project) || cardBaseFor(project);
@@ -1578,7 +1704,9 @@ export function runReport(a) {
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   if (b.note.length) {
-    journalAppend({ ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: b.note.join(' · ') });
+    const entry = { ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: b.note.join(' · ') };
+    if (a.private) { journalAppendPrivate(entry); summary.private = true; }
+    else journalAppend(entry);
     summary.note = true;
   }
   return summary;
@@ -1647,7 +1775,7 @@ export function runStatus(a = {}) {
   const staleDays = a.staleDays ?? 7;
   const lastJournal = lastJournalByProject();
   const db = loadTasks();
-  const files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md'));
+  const files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md') && !RESERVED_CARDS.has(f.replace(/\.md$/, '')));
   const projects = files.map(f => {
     const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
     const digest = (digestOf(c) || '').slice(0, 300);
@@ -1710,6 +1838,170 @@ export function runSearch(a) {
     } catch {}
   }
   return { query: a.query, hits: hits.slice(0, 40), total: hits.length };
+}
+
+/* ── Scope layers: what belongs to a project, to the person, and to nobody but this machine ──
+ * Everything the hub stores has so far belonged to a PROJECT. Two kinds of thing do not, and both
+ * were being forced into a project card or left out entirely:
+ *
+ * THE OPERATOR. Facts and preferences about the human — rhythm, what framing works, what they will
+ * not be asked about — belong to no project and change slower than any of them. That is a card
+ * like any other (slug `operator`), so section writes, recall and search reach it for free; it is
+ * simply not counted as a project, because it is not one.
+ *
+ * THE PRIVATE RECORD. Some entries must never leave the machine they were written on. The design
+ * already named this the life braid (docs/narrative-layer.md): journal.life.jsonl, local, gitignored,
+ * never mesh-synced. `private: true` on a report routes there and stamps the entry, so a later
+ * reader can see what it is holding — an agent may read it to write the weekly chapter and must
+ * never quote it into a synced file. The flag is the only way in: nothing is classified by guess.
+ *
+ * THE RULES. AGENTS.md is the constitution, and until now it was readable only by an agent that
+ * happened to know the path and had file access. Reading it is plainly right; appending is the part
+ * that needs a shape, so an amendment goes at the END, under one heading, dated and attributed —
+ * never rewriting a line somebody else wrote. */
+export const RESERVED_CARDS = new Set(['operator']);
+
+const OPERATOR_SCAFFOLD = [
+  '## Rhythm',
+  '',
+  '<when the work actually happens; strong days and dead days>',
+  '',
+  '## Interface',
+  '',
+  '<how to talk to this human: framing that works, batching, one question or several>',
+  '',
+  '## Boundaries',
+  '',
+  '<what is never collected or structured. Agents READ this section and never edit it.>',
+  '',
+].join('\n');
+
+export function runOperatorGet() {
+  const card = readCard('operator');
+  if (card) return { exists: true, card, path: cardPath('operator') };
+  return { exists: false, card: null, path: cardPath('operator'),
+    hint: 'no operator card yet. Create it with hub_card_set({project:"operator", digest:"<who this is in the system>", by:"..."}) — ' +
+      'then fill Rhythm / Interface / Boundaries with hub_section_add. Boundaries is the owner\'s section: agents read it, never edit it.',
+    scaffold: OPERATOR_SCAFFOLD };
+}
+
+/** The constitution, and the one shape an amendment may take. `teamRoot` is passed IN by the
+ *  caller (the CLI and the server both resolve it) — core has no business walking directories. */
+export function rulesFilePath(teamRoot) {
+  const candidates = [path.join(HUB, 'AGENTS.md')];
+  if (teamRoot && teamRoot !== HUB) candidates.push(path.join(teamRoot, 'AGENTS.md'));
+  for (const p of candidates) { try { if (fs.existsSync(p)) return p; } catch {} }
+  return null;
+}
+
+export function runRules(a = {}) {
+  const file = rulesFilePath(a.teamRoot) || path.join(HUB, 'AGENTS.md');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch {}
+  if (!a.append) {
+    return { file, exists: !!text, text: text || null,
+      ...(text ? {} : { hint: 'no AGENTS.md in this hub — run hub init, or write the team rules there. hubd mechanics live in the generated HUBD.md; AGENTS.md is for the rules YOU set.' }) };
+  }
+  const by = requireAuthor(a.by, 'by');
+  const line = String(a.append).trim();
+  if (!line) throw new Error('append: nothing to add');
+  const HEAD = '## Amendments';
+  // Appended, never edited in place: an amendment that rewrites an existing rule destroys the
+  // record of what the rule USED to say, which is exactly what an incident needs to quote.
+  const body = `- ${now()} (${by}): ${line}`;
+  const next = text.includes(HEAD)
+    ? editSection(text, 'Amendments', body, 'append')
+    : (text.replace(/\s*$/, '') + `\n\n${HEAD}\n\n${body}\n`);
+  atomicWrite(file, next);
+  journalAppend({ ts: now(), project: 'general', agent: by, kind: 'decision', text: 'rules amended: ' + line.slice(0, 120) });
+  return { ok: true, file, appended: body };
+}
+
+/* ── Recall: what do we know about X, and was it still true when we learned it ──
+ * hub_search is exact and flat: every line that contains the substring, in file order, a decision
+ * from June next to a passing note from yesterday. hub_get is the opposite failure — everything
+ * about one project when the question spanned three. Neither answers "what do we know about X",
+ * which is the question a returning session actually has.
+ *
+ * Ranking is deterministic and dependency-free on purpose (no embeddings, no index to rebuild, no
+ * model in the loop): a hit scores on WHERE it lives (a decision outranks a digest, a digest
+ * outranks a passing note), how many query terms it carries, and how recent it is. Anyone can
+ * read the scoring and predict the order, which matters more here than cleverness.
+ *
+ * And every hit carries its own date plus a staleness verdict, because the failure mode of recall
+ * is not missing a fact — it is handing over a two-month-old fact with the same confidence as
+ * this morning's. A stale hit says so, in the words a reader needs: it was true THEN, check it. */
+const RECALL_WEIGHT = { decision: 5, digest: 4, section: 3, task: 2, journal: 1 };
+
+export function runRecall(a = {}) {
+  const raw = String(a.query || '').trim();
+  if (!raw) throw new Error('query required: a word or phrase to recall');
+  const terms = [...new Set(raw.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
+  if (!terms.length) throw new Error('query too short');
+  const staleDays = a.staleDays ?? 30;
+  const limit = a.limit ?? 20;
+  const nowMs = Date.now();
+  const hits = [];
+
+  const score = (kind, text, ts) => {
+    const low = String(text).toLowerCase();
+    const matched = terms.filter(t => low.includes(t));
+    if (!matched.length) return null;
+    // A whole-phrase hit is worth more than the same words scattered; recency decays slowly
+    // (half a point per month) so an old DECISION still outranks a fresh passing note.
+    const phrase = low.includes(raw.toLowerCase()) ? 3 : 0;
+    const ageDays = ts ? Math.max(0, (nowMs - parseTs(ts).getTime()) / 86400000) : null;
+    const recency = ageDays === null ? 0 : Math.max(0, 1.5 - (ageDays / 30) * 0.5);
+    // Term coverage outweighs the field weight on purpose: a note matching BOTH words of a
+    // two-word question answers it better than a decision matching one. With the field weight
+    // leading (spread 1..5), "queue offset" surfaced decisions containing only "queue" and buried
+    // the lines actually about offsets — the ranking was measuring prestige, not relevance.
+    return { s: RECALL_WEIGHT[kind] + matched.length * 3 + phrase + recency, matched, ageDays };
+  };
+  const push = (kind, where, project, text, ts) => {
+    const r = score(kind, text, ts);
+    if (!r) return;
+    hits.push({ kind, where, project, text: String(text).trim().slice(0, 300), asOf: ts || null,
+      ageDays: r.ageDays === null ? null : Math.round(r.ageDays),
+      stale: r.ageDays !== null && r.ageDays >= staleDays,
+      score: Math.round(r.s * 100) / 100, matched: r.matched });
+  };
+
+  for (const c of projectCards({ includeReserved: true })) {
+    const touched = (c.text.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/) || [])[1] || null;
+    const dg = digestOf(c.text);
+    if (dg) push('digest', `${c.slug} card / Digest`, c.slug, dg, touched);
+    for (const s of sectionsConfig()) {
+      const body = sectionBody(c.text, s.heading);
+      if (isPlaceholder(body)) continue;
+      for (const line of body.split('\n')) {
+        if (!line.trim()) continue;
+        // A dated line carries its OWN date (that is what section writes stamp), which beats the
+        // card's last-touched time: one line can be a year older than the card holding it.
+        const own = (line.match(/(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)/) || [])[1] || touched;
+        push(s.key === 'decisions' ? 'decision' : 'section', `${c.slug} card / ${s.heading}`, c.slug, line, own);
+      }
+    }
+  }
+  for (const e of journalTail(null, 4000)) {
+    push(e.kind === 'decision' ? 'decision' : 'journal',
+      `journal ${e.ts} [${e.project || '?'}/${e.agent || '?'}]`, e.project || null, e.text || '', e.ts);
+  }
+  for (const t of loadTasks().tasks) {
+    push('task', `task #${t.id} (${t.status})`, t.project, t.text || '', t.done || t.created);
+  }
+
+  hits.sort((x, y) => y.score - x.score);
+  const top = hits.slice(0, limit);
+  const staleCount = top.filter(h => h.stale).length;
+  return {
+    query: raw, terms, total: hits.length, hits: top,
+    stale: staleCount,
+    hint: staleCount
+      ? `${staleCount} of ${top.length} hit(s) are older than ${staleDays}d — each says what it was true as of. Verify before acting on one, or re-state it as a fresh FACT.`
+      : undefined,
+    generated: now(),
+  };
 }
 
 /* ── Bootstrap: cwd → project (memory series #164) ──
@@ -2047,7 +2339,7 @@ export function runBrief(a = {}) {
   const staleDigests = [];
   const lastJournal = lastJournalByProject();
   try {
-    for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
+    for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md') && !RESERVED_CARDS.has(f.replace(/\.md$/, '')))) {
       const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
       const m = c.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);   // card-set cards go stale too
       if (m) {
@@ -2207,6 +2499,92 @@ export function runTrajectory(a = {}) {
     criticalPath,
     cycles: cyclic,
     weighting: 'task-count (unweighted; weighted critical path pending honest durations from logd #193)',
+    generated: now(),
+  };
+}
+
+/* ── The one next thing, and the shape of the day ──
+ * hub_brief answers "what is going on" and hub_inbox answers "what needs a decision". Neither
+ * answers the question an agent actually opens a session with — "what do I do now" — and a list
+ * is not an answer to it: picking is work, and a session that has to pick often picks the easy
+ * one. So: exactly one task, and the reason it won, which is also the part a human can argue with.
+ *
+ * The order is the same one hub_brief sorts by (overdue, then importance, then age) with one
+ * addition that matters more than any of them: a task whose dependencies are still open is not
+ * eligible, no matter how loud it is. */
+function eligibleOpen(tasks, { project, assignee } = {}) {
+  const open = tasks.filter(t => t.status === 'open');
+  const openIds = new Set(open.map(t => String(t.id)));
+  const blocked = (t) => (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).some(d => openIds.has(d));
+  let list = open.filter(t => !blocked(t));
+  if (project) { const set = projectSlugSet(project); list = list.filter(t => set.has(t.project)); }
+  if (assignee) list = list.filter(t => t.assignee === assignee);
+  return { list, blocked: open.filter(blocked), openIds };
+}
+
+const IMPORTANCE_RANK = { high: 3, med: 2, normal: 1 };
+function byUrgency(today3) {
+  return (x, y) => {
+    const xu = x.deadline && x.deadline <= today3 ? 1 : 0;
+    const yu = y.deadline && y.deadline <= today3 ? 1 : 0;
+    if (xu !== yu) return yu - xu;
+    const xi = IMPORTANCE_RANK[x.importance] || 1, yi = IMPORTANCE_RANK[y.importance] || 1;
+    if (xi !== yi) return yi - xi;
+    return String(x.created || '') < String(y.created || '') ? -1 : 1;
+  };
+}
+
+export function runNext(a = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const today3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const { list, blocked } = eligibleOpen(loadTasks().tasks, a);
+  if (!list.length) {
+    return { task: null, why: blocked.length
+      ? `nothing is ready: all ${blocked.length} open task(s) here wait on something still open (hub plan shows the chain)`
+      : 'nothing open here', blockedCount: blocked.length };
+  }
+  const sorted = [...list].sort(byUrgency(today3));
+  const t = sorted[0];
+  const reasons = [];
+  if (t.deadline && t.deadline < today) reasons.push(`overdue since ${t.deadline}`);
+  else if (t.deadline && t.deadline <= today3) reasons.push(`due ${t.deadline}`);
+  if (t.importance === 'high') reasons.push('importance high');
+  if (!reasons.length) reasons.push('oldest of the equally urgent');
+  if (t.owner_kind === 'human' || (t.assignee && new Set(ownerRoles()).has(t.assignee)))
+    reasons.push('NOTE: this one is the owner\'s to press, not an agent\'s — prepare it, do not decide it');
+  return {
+    task: t,
+    why: reasons.join(' · '),
+    runnerUp: sorted[1] ? { id: sorted[1].id, text: (sorted[1].text || '').slice(0, 80) } : null,
+    eligible: list.length, blockedCount: blocked.length,
+  };
+}
+
+/* The day split by WHO CAN ACT, which is the split that decides whether anything moves: agent
+ * work, the owner's buttons, and what is waiting on something else. A single mixed list hides
+ * the fact that half of it cannot be started by the reader holding it. */
+export function runAgenda(a = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const today3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const { list, blocked } = eligibleOpen(loadTasks().tasks, a);
+  const sorted = [...list].sort(byUrgency(today3));
+  const short = (t) => ({ id: t.id, project: t.project, importance: t.importance, deadline: t.deadline || null,
+    assignee: t.assignee || null, text: (t.text || '').slice(0, 100),
+    overdue: !!(t.deadline && t.deadline < today) });
+  // A task is the owner's either because it says so (owner_kind) or because it is assigned to a
+  // role the instance already DECLARED as a human owner. Most real tasks carry no owner_kind, so
+  // without the second test every owner decision lands in the "agent work, ready now" column —
+  // a list whose whole purpose is that its reader can start everything in it.
+  const owners = new Set(ownerRoles());
+  const isOwner = (t) => t.owner_kind === 'human' || (t.assignee && owners.has(t.assignee));
+  return {
+    overdue: sorted.filter(t => t.deadline && t.deadline < today).map(short),
+    dueSoon: sorted.filter(t => t.deadline && t.deadline >= today && t.deadline <= today3).map(short),
+    agentReady: sorted.filter(t => !isOwner(t)).map(short),
+    ownerButtons: sorted.filter(isOwner).map(short),
+    blocked: blocked.map(t => ({ ...short(t), waitingOn: (t.depends_on || []).map(String) })),
+    counts: { eligible: list.length, blocked: blocked.length,
+      agentReady: sorted.filter(t => !isOwner(t)).length, ownerButtons: sorted.filter(isOwner).length },
     generated: now(),
   };
 }

@@ -133,6 +133,41 @@ it is kept as a **tag**, not silently accepted as a category — tags are the op
 vocabulary, use them freely (`--tag ci --tag release`). `hub task retag` shows which
 existing tasks carry an off-enum category and moves them into tags on `--apply`.
 
+## What do I do now, and what do we know about X
+
+- **`hub now`** / `hub_next` — ONE task, and why it won. A task whose dependencies are still open
+  is never eligible, however loud it is. If the winner is the owner's to press, it says so:
+  prepare it, don't decide it.
+- **`hub agenda`** / `hub_agenda` — the day split by WHO CAN ACT: agent work ready now, owner
+  buttons, blocked (and on what), overdue. A mixed list hides that half of it isn't yours to start.
+- **`hub recall "<question>"`** / `hub_recall` — ranked across cards, sections, decisions, journal
+  and tasks, where `hub_search` is flat and exact. Every hit carries the date it was true **as of**
+  and a stale flag. Treat a stale hit as a lead, not a fact: re-check it, then re-state it as a
+  fresh `FACT:` if it still holds.
+
+## Scope: project, person, machine
+
+Not everything belongs to a project.
+
+- **`hub_operator`** — the operator card: the human's rhythm, the framing that works, and
+  **Boundaries** — what is never collected. Agents READ Boundaries and never edit it. It is a card
+  (so section writes and recall reach it) but not a project.
+- **`private: true`** on a report routes prose to the **local-only** life braid
+  (`journal.life.jsonl` — gitignored, never mesh-synced) and stamps the entry. Read it to write a
+  weekly chapter; never quote it verbatim into a synced file. Prose only — a structured prefix
+  writes into a card, and cards are synced, so that combination is refused rather than published.
+- **`hub_rules`** — read AGENTS.md, or append an amendment. It is appended under one dated,
+  attributed heading, never rewriting a line already there: an audit has to be able to quote what
+  the rule used to say.
+
+## What the work costs
+
+The hub knows WHO did WHAT. It cannot see time, tokens or money — so `hub_usage_add` is how those
+arrive (`seconds`, `tokensIn`, `tokensOut`, `costUsd`, `model`), and `hub usage` reports them as
+**SUPPLIED**, separately from what it **MEASURED** itself (closed-task spans, journal events).
+Keep the halves apart when you quote them: a cost that mixes an observed span with a guessed rate
+gets repeated later as if somebody had counted.
+
 ## Rules that are checks, and rules that are wishes
 
 A rule written as prose gets broken; a rule that is a check does not. `HUB/rules.json` is where

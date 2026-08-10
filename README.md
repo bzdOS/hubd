@@ -45,6 +45,10 @@ hub doctor           # check hub base, team root, locks, queues, ghost queues
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
 hub queue gc         # list queues nobody ever consumed (--apply archives them)
+hub now              # the ONE task to do next, and why it won
+hub agenda           # the day split by who can act: agent work vs owner buttons
+hub recall "<q>"     # ranked memory, every hit dated and flagged if stale
+hub usage --days 7   # what the work cost: supplied vs measured, never mixed
 hub audit            # what the cards declare vs what happened (--apply files incidents)
 hub lint             # which of your rules are checks, not just prose
 hub serve            # read-only kanban on localhost

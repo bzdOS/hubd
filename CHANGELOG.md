@@ -4,6 +4,50 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.0 — 2026-08-10
+
+The memory-and-scope release: what to do now, what we know about X, what it
+cost, and which of those belongs to a project at all.
+
+- **`hub_next` / `hub now`** — ONE task and the reason it won, not a list.
+  Picking from a list is work, and a session made to pick tends to pick the easy
+  one. A task whose dependencies are still open is never eligible, however loud
+  it is; a winner that is the owner's to press says so.
+- **`hub_agenda` / `hub agenda`** — the day split by WHO CAN ACT: agent work
+  ready now, owner buttons, blocked (and on what), overdue. A task counts as the
+  owner's if it says `owner_kind: human` OR is assigned to a role already
+  declared in `HUB/owner-roles.json` — without that second test, most real
+  owner decisions landed in a column whose entire promise is that its reader can
+  start everything in it.
+- **`hub_recall` / `hub recall`** — ranked memory across cards, sections,
+  decisions, journal and tasks, where `hub_search` is flat and exact and
+  `hub_get` is one project's everything. Scoring is deterministic and readable —
+  term coverage first, then where the line lives (a decision outranks a passing
+  note), then recency; no embeddings, no index, no model in the loop. Term
+  coverage leads on purpose: with the field weight first, "queue offset"
+  surfaced decisions containing only "queue" and buried the lines actually about
+  offsets — the ranking was measuring prestige, not relevance. Every hit carries
+  the date it was true **as of** plus a stale flag, because recall's real failure
+  mode is handing over a two-month-old fact with this morning's confidence.
+- **`hub_usage_add` / `hub_usage`** — what the work cost, with a hard line down
+  the middle: **SUPPLIED** (seconds, tokens, money — none of which the hub can
+  observe, so a client reports them) versus **MEASURED** (closed-task spans,
+  journal events — the hub's own arithmetic). The split is the feature: a number
+  that mixes an observed span with a guessed rate gets quoted later as if
+  somebody had counted. An entry with no numbers is refused — an absent value
+  must not become a recorded zero.
+- **Scope layers** — not everything belongs to a project. `hub_operator` reads
+  the operator card (the human's rhythm, the framing that works, and
+  **Boundaries** — what is never collected; agents read that section and never
+  edit it): a card, so section writes and recall reach it, but excluded from
+  every project view because it is not one. `private: true` on a report routes
+  prose to the local-only life braid (`journal.life.jsonl`, gitignored, never
+  mesh-synced) and stamps the entry; mixing it with a structured prefix is
+  refused rather than quietly published, since cards are synced. `hub_rules`
+  reads AGENTS.md and appends an amendment under one dated, attributed heading —
+  never rewriting a line, because an audit has to be able to quote what a rule
+  used to say.
+
 ## 0.8.0 — 2026-08-10
 
 Rules stop being prose. A rule written down gets broken; a rule that is a check
