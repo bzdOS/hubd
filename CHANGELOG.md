@@ -4,6 +4,42 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.8.0 — 2026-08-10
+
+Rules stop being prose. A rule written down gets broken; a rule that is a check
+does not — and the two had never been distinguishable from inside the hub.
+
+- **`HUB/rules.json`** — one file where an instance declares which projects are
+  money bets (`money`), which checks it actually enforces (`strict`, opt-in and
+  empty by default), and the rules an incident may quote (`laws`, each with the
+  date it was written).
+- **`hub lint` / `hub_lint`** — every rule that CAN be checked, checked: a money
+  bet whose gate names a criterion but no date (nothing can ever declare it
+  missed), and a human-owned communicative task with no prep it depends on (the
+  owner would have to both prepare the thing and decide it). Each finding says
+  whether this instance enforces it, so "we have a rule about that" and "the
+  rule bites" stay different facts. The gate check covers only DECLARED money
+  bets and SAYS SO when none are declared — run over every card it produced 11
+  findings where the rule covers a handful, and a check that cries about things
+  outside its own rule stops being read.
+- **`hub audit` / `hub_audit`** — declarations against behaviour, frozen from a
+  role that had been run by hand for weeks: a gate date that passed with no
+  decision recorded since (the verdict is what was missing, so a later DECIDE
+  clears it) · a project whose share of the journal contradicts the `MODE:` its
+  own card declares, in both directions · owner buttons nobody pressed · a card
+  that stopped following its own journal · tasks with no project. Read-only by
+  default; `--apply` files one incident task per finding and writes ONE report.
+  Three refusals are deliberate: it is **not a dashboard** (the output is work
+  somebody owns), it **quotes you, not itself** (each incident carries your rule
+  and the date you wrote it — an engine's opinion carries no weight next to your
+  own past decision), and a **weekly run cannot pile up** (findings are keyed and
+  a key already open is never filed again). Close rates are printed as numbers
+  and never filed: a rate is a thermometer, not a violation.
+- **`strict.rejectNoteOnlyReport`** — refuses a report made of nothing but
+  unprefixed prose, naming the alternative (`hub claim` for "I'm on it"). An
+  explicit `NOTE:` still lands, because the refusal message promises that. Off
+  unless asked: an upgrade must never start refusing writes uninvited.
+
 ## 0.7.0 — 2026-08-10
 
 Section-level card writes, plus the seven tooling gaps a real session filed
