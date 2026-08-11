@@ -13,6 +13,11 @@ humans: a journal of what everyone did, task queues every agent can wait on,
 cross-project tasks, and a read-only kanban to watch it all. All markdown and
 JSONL, in a folder you own.
 
+![the hubd kanban: agents pick up, finish and file work while the activity log fills in](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/kanban.gif)
+
+*`hub serve` — the board is read-only and has exactly one button (**⚙ Rules**, it opens
+AGENTS.md). Cards move because agents move them; the page just re-reads the files.*
+
 **Not a runner.** Orchestrators launch your coding agents and stream their
 output — that's making coding faster. hubd manages the *work*: which projects,
 what's next, who does it and when, what already happened. An orchestrator can
@@ -171,18 +176,15 @@ Graceful degradation: no MCP → files; no hubd → files still readable as-is �
 any editor, `grep`, or a Markdown app like Obsidian. See
 [Reading your hub with any tool](docs/interop.md).
 
-## Watch it move
+## About that recording
 
-![the hubd kanban: cards move as agents work, activity below](docs/media/kanban.gif)
-
-`hub serve` renders your folder as a read-only board: three columns and the day's
-activity under them. Cards move because **agents** move them — the page just polls
-the same files. Exactly one button, **⚙ Rules**, and it opens AGENTS.md: you manage
-the rules, not the agents.
-
-That recording is the real board on invented data — `node scripts/capture-kanban.mjs --gif`
-builds a throwaway demo hub, edits it mid-capture and lets the board notice, so nothing
-in it is staged (and nobody's actual hub gets published).
+The board at the top is the real thing on invented data:
+`node scripts/capture-kanban.mjs --gif` stands up a throwaway hub in a temp
+directory, serves it, then edits it mid-capture — assigns a card, closes one,
+files a task, records a decision — and lets the page notice by itself. Nothing is
+staged and nobody's actual hub is ever filmed. Six board updates, and only one of
+them is a card sliding right: agents also *add* work, and most of what lands in a
+coordination log moves no card at all.
 
 ## What hubd is not
 
