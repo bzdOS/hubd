@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO, 'hub', 'cli.mjs');
@@ -32,6 +33,7 @@ const PORT = Number(process.env.BOARD_PORT || 7788);
 const CDP_PORT = Number(process.env.CDP_PORT || 9222);
 const W = Number(process.env.WIDTH || 1280), H = Number(process.env.HEIGHT || 720);
 const WANT_GIF = process.argv.includes('--gif');
+const FPS = Number(process.env.FPS || 10);
 
 const CHROME = [
   process.env.CHROME_PATH,
@@ -71,30 +73,33 @@ hub('task', 'done', 'demo-8', '--by', 'qa-atlas');
 hub('task', 'done', 'demo-9', '--by', 'sre-relay');
 
 // The journal is written directly so the timeline reads like a worked day rather than one minute
-// of scripting, and it stops before "now" so the live edits below land on top of it.
-const day = new Date(Date.now() - 3600 * 1000).toISOString().slice(0, 10);
+// of scripting. Timestamps are minutes BEFORE NOW, not clock times on a date: filmed in the
+// morning, a hard-coded "20:15" is in the future, sorts above the live edits, and hides the very
+// thing the recording is about (it did exactly that once).
+const MIN = 60 * 1000;
+const stamp = (agoMin) => new Date(Date.now() - agoMin * MIN).toISOString().slice(0, 16).replace('T', ' ');
 const JOURNAL = [
-  ['09:12', 'atlas', 'dev-atlas', 'sync', 'synced with digest (3 new commits, +412/-96)'],
-  ['09:41', 'relay', 'dev-relay', 'sync', 'synced with digest (1 new commit, +58/-12)'],
-  ['10:27', 'atlas', 'product-atlas', 'task', '+ task #demo-1: Rewrite the onboarding funnel copy'],
-  ['11:05', 'relay', 'dev-relay', 'note', 'ingest backpressure holds at 12k msg/s, testing 20k next'],
-  ['11:48', 'atlas', 'dev-atlas', 'fact', 'search p95 dropped from 840ms to 210ms after the index rewrite'],
-  ['12:20', 'pinboard', 'dev-pinboard', 'blocked', 'export endpoint still has one internal caller - waiting on a reply'],
-  ['13:35', 'relay', 'sre-relay', 'claim', 'locked relay/ci for 240m'],
-  ['14:10', 'atlas', 'dev-atlas', 'decision', 'ranking v2 ships behind a flag - two weeks of data beats one argument'],
-  ['15:19', 'pinboard', 'dev-pinboard', 'task', '+ task #demo-3: Drop the legacy export endpoint'],
-  ['16:04', 'atlas', 'qa-atlas', 'fact', 'the login test was racing the session cookie, not the server'],
-  ['16:07', 'atlas', 'qa-atlas', 'task', '~ task #demo-8 -> done'],
-  ['16:40', 'relay', 'sre-relay', 'done', 'release 2.4.1 cut and verified on all three nodes'],
-  ['17:12', 'atlas', 'product-atlas', 'comm', 'onboarding rewrite brief sent to the copy queue'],
-  ['17:55', 'relay', 'dev-relay', 'fact', 'new runner image cuts CI wall-clock from 9m to 4m'],
-  ['18:30', 'atlas', 'dev-atlas', 'note', 'ranking flag wired, waiting on the 10% rollout decision'],
-  ['19:08', 'atlas', 'product-atlas', 'task', '+ task #demo-4: Audit third-party scripts on the landing page'],
-  ['20:02', 'relay', 'sre-relay', 'note', 'three nodes green, queue depth flat overnight'],
-  ['20:15', 'atlas', 'dev-atlas', 'next', 'turn the ranking flag on for 10% of traffic'],
+  [660, 'atlas', 'dev-atlas', 'sync', 'synced with digest (3 new commits, +412/-96)'],
+  [630, 'relay', 'dev-relay', 'sync', 'synced with digest (1 new commit, +58/-12)'],
+  [585, 'atlas', 'product-atlas', 'task', '+ task #demo-1: Rewrite the onboarding funnel copy'],
+  [540, 'relay', 'dev-relay', 'note', 'ingest backpressure holds at 12k msg/s, testing 20k next'],
+  [498, 'atlas', 'dev-atlas', 'fact', 'search p95 dropped from 840ms to 210ms after the index rewrite'],
+  [455, 'pinboard', 'dev-pinboard', 'blocked', 'export endpoint still has one internal caller - waiting on a reply'],
+  [410, 'relay', 'sre-relay', 'claim', 'locked relay/ci for 240m'],
+  [366, 'atlas', 'dev-atlas', 'decision', 'ranking v2 ships behind a flag - two weeks of data beats one argument'],
+  [320, 'pinboard', 'dev-pinboard', 'task', '+ task #demo-3: Drop the legacy export endpoint'],
+  [276, 'atlas', 'qa-atlas', 'fact', 'the login test was racing the session cookie, not the server'],
+  [272, 'atlas', 'qa-atlas', 'task', '~ task #demo-8 -> done'],
+  [228, 'relay', 'sre-relay', 'done', 'release 2.4.1 cut and verified on all three nodes'],
+  [184, 'atlas', 'product-atlas', 'comm', 'onboarding rewrite brief sent to the copy queue'],
+  [140, 'relay', 'dev-relay', 'fact', 'new runner image cuts CI wall-clock from 9m to 4m'],
+  [96, 'atlas', 'dev-atlas', 'note', 'ranking flag wired, waiting on the 10% rollout decision'],
+  [64, 'atlas', 'product-atlas', 'task', '+ task #demo-4: Audit third-party scripts on the landing page'],
+  [42, 'relay', 'sre-relay', 'note', 'three nodes green, queue depth flat overnight'],
+  [22, 'atlas', 'dev-atlas', 'next', 'turn the ranking flag on for 10% of traffic'],
 ];
 fs.writeFileSync(path.join(HUB, 'journal.demo.jsonl'),
-  JOURNAL.map(([hm, project, agent, kind, text]) => JSON.stringify({ ts: `${day} ${hm}`, project, agent, kind, text })).join('\n') + '\n');
+  JOURNAL.map(([ago, project, agent, kind, text]) => JSON.stringify({ ts: stamp(ago), project, agent, kind, text })).join('\n') + '\n');
 
 /* ── serve it, drive Chrome, shoot ── */
 const server = spawn(process.execPath, [CLI, 'serve', '-p', String(PORT)], { env: ENV, stdio: 'ignore' });
@@ -123,44 +128,71 @@ ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pending.has(m.
 const cdp = (method, params = {}) => new Promise(res => { const n = ++seq; pending.set(n, res); ws.send(JSON.stringify({ id: n, method, params })); });
 
 await cdp('Page.enable');
-await cdp('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+// deviceScaleFactor 2 and downscale later: GIF text is the whole content here, and 1x capture
+// scaled to the same width comes out mushy.
+await cdp('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 2, mobile: false });
 await cdp('Page.navigate', { url: `http://localhost:${PORT}` });
 await sleep(2500);
 
+/* A STORYBOARD, not a timer.
+ *
+ * The first version shot on a fixed cadence while waiting for the board's 3s poll, and 26 of its
+ * 37 frames came out byte-identical to the frame before: seven of eight seconds were a frozen
+ * picture with two teleports in the middle. So capture is now driven by what is on screen —
+ * frames are only taken during a deliberate hold or a scroll, waiting happens with the shutter
+ * closed, and an identical frame is never written twice unless a hold asks for it.
+ */
 let n = 0;
-const shot = async () => {
-  const r = await cdp('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(path.join(FRAMES, `f${String(n++).padStart(3, '0')}.png`), Buffer.from(r.data, 'base64'));
+let lastHash = null;
+const write = (buf) => fs.writeFileSync(path.join(FRAMES, `f${String(n++).padStart(3, '0')}.png`), buf);
+const grab = async () => Buffer.from((await cdp('Page.captureScreenshot', { format: 'png' })).data, 'base64');
+const hash = (b) => crypto.createHash('sha1').update(b).digest('hex');
+const shotUnique = async () => {                    // for motion: skip a frame that did not change
+  const b = await grab(); const h = hash(b);
+  if (h === lastHash) return false;
+  lastHash = h; write(b); return true;
+};
+const hold = async (ms) => {                        // for beats: same image, held on purpose
+  const b = await grab(); lastHash = hash(b);
+  for (let i = 0; i < Math.max(1, Math.round(ms / (1000 / FPS))); i++) write(b);
 };
 const scrollTo = (y) => cdp('Runtime.evaluate', { expression: `window.scrollTo(0,${y})` });
 const edit = (call) => execFileSync(process.execPath, ['-e',
   `import(${JSON.stringify(path.join(REPO, 'hub/lib/core.mjs'))}).then(m=>m.${call})`], { env: ENV, stdio: 'ignore' });
+// One board update = one edit + the poll that notices it. Wait with the shutter CLOSED, then
+// capture the new state; a cut is what the product actually does, and holding either side of it
+// gives the eye time to see WHICH card moved.
+const step = async (call) => { edit(call); await sleep(3400); await hold(560); };
 
-for (let i = 0; i < 5; i++) { await shot(); await sleep(120); }                 // the board, still
-edit(`runTaskUpdate({id:'demo-1',assignee:'dev-atlas',by:'product-atlas'})`);    // QUEUED -> IN PROGRESS
-for (let i = 0; i < 10; i++) { await shot(); await sleep(420); }                 // the 3s poll lands in here
-edit(`runTaskUpdate({id:'demo-6',status:'done',by:'dev-relay'})`);               // IN PROGRESS -> DONE TODAY
-for (let i = 0; i < 10; i++) { await shot(); await sleep(420); }
+await hold(700);                                                  // the board, before anything
+await step(`runTaskUpdate({id:'demo-1',assignee:'dev-atlas',by:'product-atlas'})`);   // QUEUED -> IN PROGRESS
+await step(`runTaskUpdate({id:'demo-6',status:'done',by:'dev-relay'})`);              // IN PROGRESS -> DONE
+await step(`runTaskUpdate({id:'demo-2',assignee:'sre-relay',by:'dev-relay'})`);       // another one picked up
+await step(`runTaskUpdate({id:'demo-5',status:'done',by:'dev-atlas'})`);              // and another finished
+await hold(320);
+const stillFrame = n - 1;   // the board with every move landed — the one frame worth publishing alone
+
+// Smooth scroll: many small steps, so the timeline glides instead of jumping in fourteen lurches.
 const maxY = (await cdp('Runtime.evaluate', {
   expression: 'document.documentElement.scrollHeight - window.innerHeight', returnByValue: true })).result.value || 600;
-for (let y = 0; y <= maxY; y += Math.max(40, Math.round(maxY / 14))) { await scrollTo(y); await sleep(90); await shot(); }
-for (let i = 0; i < 3; i++) { await shot(); await sleep(120); }
-await scrollTo(0); await sleep(200);
-for (let i = 0; i < 3; i++) { await shot(); await sleep(120); }
+// Two thirds of the way down is enough to read "this is a day's log"; the rest is more of the
+// same, and every scrolled row is a full-frame change a GIF pays for in bytes.
+const stopY = Math.round(maxY * 0.66);
+for (let y = 0; y <= stopY; y += Math.max(8, Math.round(stopY / 30))) { await scrollTo(y); await sleep(30); await shotUnique(); }
+await hold(700);
 
 ws.close(); bye();
 
 const media = path.join(REPO, 'docs', 'media');
 const gif = path.join(media, 'kanban.gif');
-const vf = `fps=5,scale=${W}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse=dither=bayer:bayer_scale=3`;
+const vf = `fps=${FPS},scale=1120:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=48[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle`;
 if (WANT_GIF) {
   fs.mkdirSync(media, { recursive: true });
-  execFileSync('ffmpeg', ['-y', '-framerate', '5', '-i', path.join(FRAMES, 'f%03d.png'), '-vf', vf, gif], { stdio: 'ignore' });
-  // The still fallback is taken AFTER both moves have landed: one frame that shows three full
-  // columns and the two live activity lines, rather than a board mid-transition.
-  const still = fs.existsSync(path.join(FRAMES, 'f022.png')) ? 'f022.png' : `f${String(Math.min(12, n - 1)).padStart(3, '0')}.png`;
-  fs.copyFileSync(path.join(FRAMES, still), path.join(media, 'kanban.png'));
+  execFileSync('ffmpeg', ['-y', '-framerate', String(FPS), '-i', path.join(FRAMES, 'f%03d.png'), '-vf', vf, gif], { stdio: 'ignore' });
+  // The still fallback is the frame captured after the LAST move landed (index recorded during the
+  // storyboard, not guessed): three full columns plus the live activity lines, never mid-transition.
+  fs.copyFileSync(path.join(FRAMES, `f${String(stillFrame).padStart(3, '0')}.png`), path.join(media, 'kanban.png'));
   console.log(`${n} frames -> ${gif} (${Math.round(fs.statSync(gif).size / 1024)}KB) + kanban.png`);
 } else {
-  console.log(`${n} frames in ${FRAMES}\nassemble with:\n  ffmpeg -y -framerate 5 -i ${path.join(FRAMES, 'f%03d.png')} -vf "${vf}" ${gif}`);
+  console.log(`${n} frames in ${FRAMES}\nassemble with:\n  ffmpeg -y -framerate ${FPS} -i ${path.join(FRAMES, 'f%03d.png')} -vf "${vf}" ${gif}`);
 }
