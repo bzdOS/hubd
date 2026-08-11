@@ -55,11 +55,17 @@ hub('init', HUB);
 hub('card', 'atlas', '-m', 'Public web app. Search rewrite shipped; onboarding funnel next.', '--by', 'product-atlas');
 hub('card', 'relay', '-m', 'Message relay service. Backpressure fixed, 3 nodes live.', '--by', 'dev-relay');
 hub('card', 'pinboard', '-m', 'Internal bookmarks tool. Feature-frozen, maintenance only.', '--by', 'dev-pinboard');
+// Enough in QUEUED that the board still looks like a backlog at the END: with four cards leaving
+// it over the recording, a thin queue drains to nothing and the board reads as winding down
+// rather than working.
 const TASKS = [
   ['Rewrite the onboarding funnel copy', 'atlas', 'high', null],
   ['Add rate-limit headers to the public API', 'relay', null, null],
   ['Drop the legacy export endpoint', 'pinboard', null, null],
   ['Audit third-party scripts on the landing page', 'atlas', null, null],
+  ['Split the settings page into tabs', 'atlas', null, null],
+  ['Retry policy for webhook delivery', 'relay', 'med', null],
+  ['Prune bookmarks nobody opened in a year', 'pinboard', null, null],
   ['Ship search result ranking v2', 'atlas', 'high', 'dev-atlas'],
   ['Backpressure on the ingest queue', 'relay', 'med', 'dev-relay'],
   ['Migrate CI to the new runner image', 'relay', null, 'sre-relay'],
@@ -69,8 +75,8 @@ const TASKS = [
 for (const [text, proj, imp, who] of TASKS) {
   hub('task', 'add', text, '-p', proj, ...(imp ? ['-i', imp] : []), ...(who ? ['--assignee', who] : []), '--by', 'product-' + proj);
 }
-hub('task', 'done', 'demo-8', '--by', 'qa-atlas');
-hub('task', 'done', 'demo-9', '--by', 'sre-relay');
+hub('task', 'done', 'demo-11', '--by', 'qa-atlas');   // the two already in DONE TODAY when filming starts
+hub('task', 'done', 'demo-12', '--by', 'sre-relay');
 
 // The journal is written directly so the timeline reads like a worked day rather than one minute
 // of scripting. Timestamps are minutes BEFORE NOW, not clock times on a date: filmed in the
@@ -162,13 +168,22 @@ const edit = (call) => execFileSync(process.execPath, ['-e',
 // One board update = one edit + the poll that notices it. Wait with the shutter CLOSED, then
 // capture the new state; a cut is what the product actually does, and holding either side of it
 // gives the eye time to see WHICH card moved.
-const step = async (call) => { edit(call); await sleep(3400); await hold(560); };
+// 440ms is about a glance: long enough to see WHICH card moved, short enough that six beats do not
+// turn into a slideshow. (Holds are deliberate stills; the first cut of this GIF was 70% frozen by
+// accident, which is a different sin from pacing.)
+const step = async (call) => { edit(call); await sleep(3400); await hold(440); };
 
-await hold(700);                                                  // the board, before anything
+/* Six beats, and deliberately not six of the same kind. A board where work only LEAVES reads as
+ * a project winding down, so one beat files a new task (a card appears in QUEUED) and one files a
+ * decision (a line appears in ACTIVITY with no card moving at all) — which is what a coordination
+ * log mostly is. */
+await hold(560);                                                  // the board, before anything
 await step(`runTaskUpdate({id:'demo-1',assignee:'dev-atlas',by:'product-atlas'})`);   // QUEUED -> IN PROGRESS
-await step(`runTaskUpdate({id:'demo-6',status:'done',by:'dev-relay'})`);              // IN PROGRESS -> DONE
+await step(`runTaskUpdate({id:'demo-9',status:'done',by:'dev-relay'})`);              // IN PROGRESS -> DONE
+await step(`runTaskAdd({project:'relay',text:'Rotate the signing key before it expires',importance:'high',by:'sre-relay'})`);   // work ARRIVES
+await step(`runReport({project:'atlas',by:'dev-atlas',text:'DECIDE: hold the 10% rollout until Monday | weekend traffic is not the sample we want'})`);
 await step(`runTaskUpdate({id:'demo-2',assignee:'sre-relay',by:'dev-relay'})`);       // another one picked up
-await step(`runTaskUpdate({id:'demo-5',status:'done',by:'dev-atlas'})`);              // and another finished
+await step(`runTaskUpdate({id:'demo-8',status:'done',by:'dev-atlas'})`);              // and another finished
 await hold(320);
 const stillFrame = n - 1;   // the board with every move landed — the one frame worth publishing alone
 
@@ -178,8 +193,12 @@ const maxY = (await cdp('Runtime.evaluate', {
 // Two thirds of the way down is enough to read "this is a day's log"; the rest is more of the
 // same, and every scrolled row is a full-frame change a GIF pays for in bytes.
 const stopY = Math.round(maxY * 0.66);
-for (let y = 0; y <= stopY; y += Math.max(8, Math.round(stopY / 30))) { await scrollTo(y); await sleep(30); await shotUnique(); }
-await hold(700);
+for (let y = 0; y <= stopY; y += Math.max(8, Math.round(stopY / 26))) { await scrollTo(y); await sleep(30); await shotUnique(); }
+await hold(440);
+// Back to the top before the last hold: a GIF loops, and ending scrolled-down means every loop
+// begins with a jump cut. Landing where the first frame started makes the seam invisible.
+await scrollTo(0);
+await hold(640);
 
 ws.close(); bye();
 
