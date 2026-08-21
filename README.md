@@ -235,6 +235,49 @@ plus mood/check-in journal kinds, once the file-first version proves itself
 ([design](docs/narrative-layer.md), templates in `hubd-company/`). The file
 format is the stable contract; everything else is negotiable.
 
+## Where this was used, and what it actually prevented
+
+The case hubd was built against, and the one worth describing because it is the
+awkward shape real work has:
+
+**Bringing up a from-scratch EL2 hypervisor on a Banana Pi M64** — a bare-metal
+type-1 hypervisor running FreeBSD 15.1 arm64 as its guest, plus a Mali-400 GPU
+driver ported to FreeBSD along the way. Three separate repositories came out of
+it: **[bzdk](https://github.com/bzdOS/bzdk)** (the hypervisor),
+**[lima-freebsd](https://github.com/bzdOS/lima-freebsd)** (the GPU driver,
+extracted so it is useful without the rest), and
+**[bsdos](https://github.com/bzdOS/bsdos)** (the operating system this is all
+for).
+
+**The build machine and the board were never the same machine.** The
+cross-compiler, the FreeBSD and drm-kmod source trees and the Mesa build lived on
+one host. The board arrived at another, on a different network, with the serial
+console and the debug Ethernet physically attached *there*. So the work was
+split: compile in one place, flash and observe in another. Several agents worked
+it in parallel — one on clocks, one chasing DMA coherency, one writing tests.
+
+What that costs without a shared journal is specific, not abstract:
+
+- **Two agents driving one board.** The serial port takes one reader; two make a
+  healthy channel look dead. "Who has the board" has to be a fact somebody wrote
+  down, not an assumption.
+- **Re-deriving the same finding.** A hardware bug diagnosed on Tuesday gets
+  re-diagnosed on Thursday by someone who never saw the first conclusion. Several
+  of the ten upstream patches that came out of this project took a full day to
+  find; finding one twice is a day thrown away.
+- **Claims with no number behind them.** "The fix works" is not portable between
+  machines. "512 MiB of reads, zero errors, previously died after 27 MiB" is.
+  hubd's reports are where those numbers went, which is why the release notes
+  could be written from records instead of memory.
+- **Stale conclusions outliving their evidence.** Half a day of this project was
+  spent finding documents that confidently stated things the code had since
+  disproved. An append-only journal does not stop that, but it does let you see
+  when a claim was made and what was true then.
+
+None of that needs a server, and none of it left the machines involved: the data
+is markdown and JSONL in a folder, synced through a private git remote over SSH.
+That is the whole reason it was built this way.
+
 ## License
 
 MIT.
