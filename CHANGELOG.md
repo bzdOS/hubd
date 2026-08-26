@@ -4,6 +4,30 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.1 — 2026-08-26
+
+- **`mesh-sync.sh` ships with the package** — "your data is a folder, sync it
+  like one" was advice with no tool attached; every node was running a copy of
+  the same script by hand. `sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"`
+  commits, pulls and pushes a hub between peers over ssh, with no GitHub in the
+  path. Its four safety properties are each a scar and are documented as such in
+  the file: it REFUSES to sync when a task event log lost or changed a line (a
+  migration that rewrote history instead of appending would otherwise propagate
+  to every peer), injects a git identity on the pull as well as the commit (a
+  node with no global git user reported a merge conflict that did not exist),
+  aborts a conflicted merge rather than leaving conflict markers inside hub data,
+  and treats a failed push as a retry because the commit is already local. Exit
+  codes 2 / 3 / 4 say which of those happened.
+- **`hub audit` stopped generating findings out of its own bookkeeping** — filing
+  an incident writes a journal line for that project, which made the project's
+  card look days behind its own journal on the next run: an incident produced by
+  the act of filing an incident. A weekly pass would have grown its own backlog
+  through a route the keyed dedup does not cover. The freshness signal now
+  ignores the kinds the tracker writes about its own records (`task`, and the
+  audit's own summary, now filed as `audit`), because a card is behind when WORK
+  it does not reflect has happened — not when the tracker took notes. Caught by a
+  test asserting a second pass files nothing; a third pass is now asserted too.
+
 ## 0.9.0 — 2026-08-10
 
 The memory-and-scope release: what to do now, what we know about X, what it
