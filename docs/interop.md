@@ -58,3 +58,71 @@ of truth. You should never need a particular program to read your own work.
 > formal spec — tools differ slightly in how they resolve a link. hubd uses the
 > most portable rule (resolve by file name / slug), so Obsidian, Logseq and Foam
 > all agree.
+
+## Transport: how a queue crosses machines
+
+The folder is the interface; moving it between nodes is a separate, replaceable
+concern. Two transports are in production use, and they are not alternatives —
+they run concurrently on the same `queues/` directory:
+
+| Transport | Mechanism | Configured by |
+|---|---|---|
+| `scripts/mesh-sync.sh` | git over ssh; each node commits its own files and merges peers | cron/systemd on each node; "the server is any machine you can ssh into" |
+| [mrgd](https://github.com/bzdOS/mrgd)'s hubd bridge | each role becomes a Matrix room, blocks are ingested and materialised as room events | `MATRIX_HS_HUBD_QUEUES_DIR`, `MATRIX_HS_HUBD_NODE` on the homeserver — unset means the bridge is off |
+
+Per-host filenames (`<role>.<node>.queue.md`) are what let both work at once: a
+node only ever appends to its own file, so two transports touching the same
+directory cannot produce a conflicting write. The room side is
+[mrgd](https://github.com/bzdOS/mrgd), whose public repository carries the code,
+the protocol (`docs/WIRE.md`) and the design reasoning; its deployment records
+and the bridge's own document are kept private, so there is deliberately no file
+link here to follow. Its summary of the arrangement is "the room is the
+transport, the file is the interface, unchanged, on both ends", which is exactly
+the split this document describes.
+
+Why this is worth stating rather than leaving implicit: on 2026-08-27 three agents
+on two machines used these queues to debug a to-device delivery bug **in mrgd
+itself**, while mrgd was one of the two transports carrying the conversation. The
+coordination survived because the git path is genuinely independent of the Matrix
+path — not because anyone had planned for that. A single transport would have put
+the conversation inside the outage.
+
+Two practical consequences, both learned the hard way that day:
+
+- **Do not report a transport outage over that transport.** Keep the other route
+  tested in both directions before you need it. Direct ssh between nodes is the
+  simplest one, and it is already a prerequisite of `mesh-sync.sh`.
+- **Silence in a queue does not mean "nothing to report."** It can equally mean
+  delivery has stalled, or that the counterpart is blocked waiting on you. Depth
+  (`hub_brief`'s per-role queue count) answers "how much is pending", not "is
+  replication converging" — so a quiet queue currently cannot be distinguished
+  from a stopped one without checking the transport directly.
+
+### Determining what is actually enabled
+
+Configuration lives in the environment of the running processes, so neither this
+document nor a peer project's README is authoritative about a given deployment:
+
+```sh
+# is the Matrix bridge on for this homeserver?
+# pgrep -x matches the executable NAME, so it cannot match this command line
+# itself the way `pgrep -f <pattern>` can -- and it returns one pid per process,
+# so loop rather than interpolating (a bare $(pgrep) with two matches produces
+# an invalid path and a misleading "No such file or directory").
+for pid in $(pgrep -x matrix-hs); do
+  echo "pid $pid:"
+  tr '\0' '\n' < "/proc/$pid/environ" | grep HUBD || echo "  (no HUBD_* set -- bridge off)"
+done
+
+# is git mesh-sync actually committing?
+git -C ~/.hubd log --oneline -5 -- queues/
+```
+
+Both commands answer about *one node*. `hub_brief` in 0.9.1+ reports this
+centrally via `transportHealth()`, which deliberately reports a transport with no
+observable artifact as UNKNOWN rather than healthy — the two are not the same
+claim, and treating them as one is how a stalled transport reads as a quiet one.
+
+Note that `mesh-sync`'s commits say `mesh-sync: <node>` regardless of which
+transport put the content in the directory, so that log shows *that* sync ran —
+not which path delivered a particular message.

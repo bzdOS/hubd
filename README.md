@@ -140,7 +140,12 @@ is a folder you own. They are two separate things — and that is the whole poin
   until something arrives, then goes back to waiting. No polling you, no
   prodding them. A queue has one live consumer by default — run a single waiting
   session per role. Roles listed in `<team>/subscriber-roles.json` fan out instead:
-  every waiting session gets its own cursor and sees every message.
+  every waiting session gets its own cursor and sees every message. Crossing
+  machines is a separate, replaceable concern: `scripts/mesh-sync.sh` moves the
+  folder over git+ssh, and [mrgd](https://github.com/bzdOS/mrgd) can carry the
+  same queues as Matrix room traffic — concurrently, on the same directory. See
+  [docs/interop.md → Transport](docs/interop.md#transport-how-a-queue-crosses-machines),
+  including how to check which of the two is actually enabled on a given node.
 - **Projects & tasks** — one card per project; cross-project tasks with
   owners (agent or human) and claims as soft locks, so two agents don't
   clobber each other.
