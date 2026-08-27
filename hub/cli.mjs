@@ -23,7 +23,7 @@ import {
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
-import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes } from './lib/secrets.mjs';
+import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -898,7 +898,7 @@ if (cmd === 'secret') {
       // stdin only. A value in argv is visible in `ps` to every user on the box
       // and lands in the typist's shell history; there is no flag for it on
       // purpose.
-      const value = fs.readFileSync(0, 'utf8');
+      const value = fs.readFileSync(0);   // Buffer: a binary secret must survive
       if (!value.length) die('nothing on stdin — pipe the value in, e.g. `printf %s "$V" | hub secret set NAME`');
       const { file, bytes } = setSecret(name, value, { teamRoot });
       console.log(`stored ${name} (${bytes} bytes, 0600) at ${file}`);
@@ -906,7 +906,7 @@ if (cmd === 'secret') {
       done(0);
     } else if (sub === 'get') {
       if (!name) die('Usage: hub secret get <name>');
-      process.stdout.write(getSecret(name, { teamRoot }));
+      process.stdout.write(getSecret(name, { teamRoot }));   // Buffer, written raw
       done(0);
     } else if (sub === 'path') {
       if (!name) die('Usage: hub secret path <name>');
@@ -920,12 +920,40 @@ if (cmd === 'secret') {
       const bad = auditModes({ teamRoot });
       for (const b of bad) console.log(`  ! ${b.path} is ${b.mode}, want ${b.want}`);
       done(bad.length ? 1 : 0);
+    } else if (sub === 'backup') {
+      const names = name ? [name] : listSecrets({ teamRoot }).map(r => r.name).filter(n => n !== 'backup-passphrase');
+      if (!names.length) die('nothing to back up');
+      for (const n of names) {
+        const { file, bytes } = backupSecret(n, { teamRoot });
+        console.log(`  ${n} -> ${file} (${bytes} bytes, AES-256)`);
+      }
+      console.log(`\nThese ride the hub's replication, so they survive losing this disk.`);
+      console.log(`They do NOT survive losing this machine unless the passphrase is also`);
+      console.log(`kept somewhere else — it lives only in ${secretsRoot()}, outside the hub`);
+      console.log(`on purpose. A backup whose key exists in exactly one place is a backup`);
+      console.log(`of nothing.`);
+      done(0);
+    } else if (sub === 'restore') {
+      if (!name) die('Usage: hub secret restore <name>');
+      const { file, bytes } = restoreSecret(name, { teamRoot });
+      console.log(`restored ${name} (${bytes} bytes) to ${file}`);
+      done(0);
+    } else if (sub === 'verify') {
+      const rows = verifyBackups({ teamRoot });
+      console.log(`encrypted backups in ${backupDir(teamRoot)}:`);
+      if (!rows.length) console.log('  (none)');
+      let bad = 0;
+      for (const r of rows) {
+        console.log(`  ${r.name}: ${r.status}`);
+        if (/FAIL|DIFFERS/.test(r.status)) bad++;
+      }
+      done(bad ? 1 : 0);
     } else if (sub === 'rm') {
       if (!name) die('Usage: hub secret rm <name>');
       console.log(removeSecret(name, { teamRoot }) ? `removed ${name}` : `no secret named ${name}`);
       done(0);
     } else {
-      die('secret subcommands: set <name> (stdin), get <name>, path <name>, list, rm <name>');
+      die('secret subcommands: set <name> (stdin), get <name>, path <name>, list, backup [name], restore <name>, verify, rm <name>');
     }
   } catch (e) { die(e.message); }
 }
