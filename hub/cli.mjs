@@ -1242,7 +1242,11 @@ else if (cmd === 'queue') {
     done(0);
   } else if (sub === 'wait') {
     const role = args[2];
-    if (!role) die('Usage: hub queue wait <role|*> [--timeout <N>]');
+    // A flag must not be consumed as the role. `hub queue wait --timeout 5`
+    // otherwise waits on a queue literally named "--timeout" -- which exists as
+    // soon as it is asked for, so it blocks forever and looks like a quiet queue
+    // rather than a mistake.
+    if (!role || role.startsWith('-')) die('Usage: hub queue wait <role|*> [--timeout <N>]');
     const timeoutRaw = getFlag('--timeout');
     const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
     if (role === '*') {
@@ -1269,6 +1273,36 @@ else if (cmd === 'queue') {
         }
       }).catch(e => die(e.message));
     }
+  } else if (sub === 'monitor') {
+    // `wait` answers "is there something right now, within N seconds"; a
+    // supervisor needs "wake me when there is", which is a different question.
+    // Looping `wait` from a shell script is how that was done before, and it
+    // belonged here instead: the caller of a monitor is usually a process
+    // supervisor or an agent runtime that treats EXIT as the signal, so a
+    // timeout must not look like an event. This exits 0 only when there is real
+    // content, and keeps waiting otherwise.
+    const role = args[2];
+    if (!role || role.startsWith('-')) die('Usage: hub queue monitor <role|*> [--timeout <N>] [--once]');
+    const timeoutRaw = getFlag('--timeout');
+    const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
+    const once = args.includes('--once');
+    const waiter = role === '*'
+      ? () => queueWaitAll({ timeout })
+      : () => queueWait(role, { timeout });
+    const render = (result) => {
+      if (role === '*') {
+        for (const e of result.events) console.log(`## from queue ${e.role}${e.node ? '.' + e.node : ''}\n${e.text}`);
+      } else {
+        console.log(result.text);
+        if (result.tasks) console.log(`\n# about task(s): ${result.tasks.map(t => '#' + t).join(' ')} — report against them (DONE:/NOTE:) so the task carries the outcome`);
+      }
+    };
+    const loop = () => waiter().then(result => {
+      if (result.changed) { render(result); done(0); return; }
+      if (once) { console.log('NO_CHANGES'); done(2); return; }
+      loop();
+    }).catch(e => die(e.message));
+    loop();
   } else if (sub === 'status') {
     const role = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
     const { roles } = queueLedger({ root: resolveQueueRoot(), role });
@@ -1306,7 +1340,7 @@ else if (cmd === 'queue') {
     }
     done(0);
   } else {
-    die('queue subcommands: send, wait, gc');
+    die('queue subcommands: send, wait, monitor, gc');
   }
 }
 
@@ -1352,6 +1386,7 @@ else if (!cmd) {
     '  install-hook [path]              git post-commit hook',
     '  queue send <role> "<text>" --from <who>',
     '  queue wait <role> [--timeout <N>]',
+    '  queue monitor <role> [--timeout <N>] [--once]   block until real content, then exit 0',
     '  serve [-p 7777]                  read-only kanban dashboard',
   ].join('\n'));
   done(0);
