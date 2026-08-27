@@ -22,6 +22,7 @@
  * valid because each file only ever grows by clean append from one writer.
  */
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -432,6 +433,65 @@ export function peekQueueDepth(role, { root } = {}) {
  * @param {{ root?: string }} options
  * @returns {Array<{ role: string, pending: number, oldestWaiting: string|null, lastSeen: string|null }>}
  */
+/**
+ * How recently each transport last moved this hub's queues.
+ *
+ * The queue *depth* answers "how much is pending". It cannot answer "is
+ * replication converging", and the two look identical from the outside: a quiet
+ * queue and a stopped transport both read as silence. On 2026-08-27 three agents
+ * on two machines spent real time on exactly that ambiguity — one of them read
+ * silence as "nothing to report" three separate times, and once it was not
+ * silence at all but a stalled counterpart.
+ *
+ * Two transports run concurrently on the same directory (see
+ * docs/interop.md -> Transport), and each leaves an observable artefact:
+ *
+ *   git mesh-sync   the last commit touching queues/ in the hub repo
+ *   mrgd's bridge   the mtime of <hub>/.mxstate/<file>.offset, which the bridge
+ *                   rewrites every time it ingests that queue
+ *
+ * Neither is authoritative about the other, so both are reported, and a
+ * transport that leaves no artefact is reported as unknown rather than as
+ * healthy. Pure filesystem/git reads — no network, no assumption that either
+ * transport is configured.
+ */
+export function transportHealth({ root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const out = { git: { lastSync: null, ageSec: null }, bridge: { lastIngest: null, ageSec: null, queues: 0 } };
+  const now = Date.now();
+
+  // git mesh-sync: the newest commit that touched queues/.
+  try {
+    // Bounded on purpose: this runs inside a hub_brief request, and a git lock
+    // held by a concurrent mesh-sync would otherwise hang the call forever.
+    // A missed reading degrades to "unknown", which is the honest answer anyway.
+    const iso = execFileSync('git', ['-C', r, 'log', '-1', '--format=%cI', '--', 'queues/'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 }).trim();
+    if (iso) {
+      out.git.lastSync = iso;
+      out.git.ageSec = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+    }
+  } catch {}
+
+  // mrgd's hubd bridge: newest .mxstate offset mtime.
+  try {
+    const mx = path.join(r, '.mxstate');
+    const files = fs.readdirSync(mx).filter(f => f.endsWith('.offset'));
+    out.bridge.queues = files.length;
+    let newest = 0;
+    for (const f of files) {
+      const m = fs.statSync(path.join(mx, f)).mtimeMs;
+      if (m > newest) newest = m;
+    }
+    if (newest) {
+      out.bridge.lastIngest = new Date(newest).toISOString();
+      out.bridge.ageSec = Math.max(0, Math.round((now - newest) / 1000));
+    }
+  } catch {}
+
+  return out;
+}
+
 export function queueSummaryForBrief({ root } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');

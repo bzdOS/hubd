@@ -16,7 +16,7 @@ import {
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
   runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, transportHealth } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -334,7 +334,11 @@ const DISPATCH = {
   // HUB can't retarget an in-flight call.
   hub_brief: (a) => {
     const queues = queueSummaryForBrief({ root: HUB });
-    return { ...runBrief(a), queues, buttons: buttonsSummary(queues) };
+    // Queue DEPTH says how much is pending; it cannot say whether replication is
+    // converging, and a quiet queue reads exactly like a stopped transport. Both
+    // transports leave an observable artefact, so report both ages here — see
+    // transportHealth() and docs/interop.md -> Transport.
+    return { ...runBrief(a), queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: HUB }) };
   },
   // queues are read HERE and handed in: lib/queue.mjs imports core, so core cannot read them
   // itself without closing an import cycle (see runAudit).
