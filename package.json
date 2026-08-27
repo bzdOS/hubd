@@ -2,7 +2,7 @@
   "name": "@bzdos/hubd",
   "version": "0.9.1",
   "mcpName": "io.github.bzdOS/hubd",
-  "description": "Files-first project hub for mixed teams of AI agents and humans — shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
+  "description": "Files-first project hub for mixed teams of AI agents and humans \u2014 shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bzdOS/hubd.git"
@@ -42,5 +42,9 @@
     "files-first",
     "zero-dependencies",
     "stdio"
-  ]
+  ],
+  "scripts": {
+    "deploy": "bash scripts/deploy-local.sh",
+    "test": "bash tests/smoke_mcp.sh"
+  }
 }
