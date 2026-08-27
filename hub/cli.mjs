@@ -1246,9 +1246,10 @@ else if (cmd === 'queue') {
     // otherwise waits on a queue literally named "--timeout" -- which exists as
     // soon as it is asked for, so it blocks forever and looks like a quiet queue
     // rather than a mistake.
-    if (!role || role.startsWith('-')) die('Usage: hub queue wait <role|*> [--timeout <N>]');
+    if (!role || role.startsWith('-')) die('Usage: hub queue wait <role|*> [--timeout <N>] [--as <subscriber>]');
     const timeoutRaw = getFlag('--timeout');
     const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
+    const subscriber = getFlag('--as') || undefined;
     if (role === '*') {
       // Subscribe to every role's queue at once — a supervisory tap, own
       // offset namespace, never steals a message from a role's own consumer.
@@ -1262,7 +1263,16 @@ else if (cmd === 'queue') {
         }
       }).catch(e => die(e.message));
     } else {
-      queueWait(role, { timeout }).then(result => {
+      // --as gives this caller its own cursor namespace, but only for a role
+      // declared in subscriber-roles.json: fan-out has to be a property of the
+      // ROLE, or any long-lived caller would silently turn a work queue into a
+      // broadcast and two workers would both do the same task. Without it the
+      // cursor stays shared per node, which is what a competing-worker queue
+      // needs. This flag existed in the library from the start and had no way in
+      // from the command line -- so the environment notice that says "declare the
+      // role and every waiter gets its own cursor" could not actually be acted on
+      // by anyone using the CLI, which is every supervisor and every monitor.
+      queueWait(role, { timeout, subscriber }).then(result => {
         if (result.changed) {
           console.log(result.text);
           if (result.tasks) console.log(`\n# about task(s): ${result.tasks.map(t => '#' + t).join(' ')} — report against them (DONE:/NOTE:) so the task carries the outcome`);
@@ -1282,13 +1292,14 @@ else if (cmd === 'queue') {
     // timeout must not look like an event. This exits 0 only when there is real
     // content, and keeps waiting otherwise.
     const role = args[2];
-    if (!role || role.startsWith('-')) die('Usage: hub queue monitor <role|*> [--timeout <N>] [--once]');
+    if (!role || role.startsWith('-')) die('Usage: hub queue monitor <role|*> [--timeout <N>] [--once] [--as <subscriber>]');
     const timeoutRaw = getFlag('--timeout');
     const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
     const once = args.includes('--once');
+    const subscriber = getFlag('--as') || undefined;
     const waiter = role === '*'
       ? () => queueWaitAll({ timeout })
-      : () => queueWait(role, { timeout });
+      : () => queueWait(role, { timeout, subscriber });
     const render = (result) => {
       if (role === '*') {
         for (const e of result.events) console.log(`## from queue ${e.role}${e.node ? '.' + e.node : ''}\n${e.text}`);
@@ -1385,8 +1396,8 @@ else if (!cmd) {
     '  gc                               remove stale locks and old backups',
     '  install-hook [path]              git post-commit hook',
     '  queue send <role> "<text>" --from <who>',
-    '  queue wait <role> [--timeout <N>]',
-    '  queue monitor <role> [--timeout <N>] [--once]   block until real content, then exit 0',
+    '  queue wait <role> [--timeout <N>] [--as <subscriber>]',
+    '  queue monitor <role> [--timeout <N>] [--once] [--as <sub>]  block until real content, then exit 0',
     '  serve [-p 7777]                  read-only kanban dashboard',
   ].join('\n'));
   done(0);
