@@ -217,7 +217,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
  * @param {{ timeout?: number, root?: string }} options
  * @returns {Promise<{ changed: true, text: string } | { changed: false }>}
  */
-export async function queueWait(role, { timeout = 540, root, subscriber } = {}) {
+export async function queueWait(role, { timeout = 540, root, subscriber, fromNow = false } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   // A subscriber gets its OWN cursor namespace, the same trick queueWaitAll already
@@ -244,6 +244,29 @@ export async function queueWait(role, { timeout = 540, root, subscriber } = {}) 
   // names have no dots, so a single optional [^.]+ segment is exact per role.
   const esc = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const fileRe = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  // A cursor that does not exist yet reads as offset 0, so a NEW subscriber
+  // namespace replays the whole queue on its first wait. For a human joining a
+  // broadcast that is right — the history is the point. For a supervisor whose
+  // only job is to notice the NEXT message it is wrong twice over: it fires
+  // immediately with a payload of already-handled traffic, and it does so every
+  // time the subscriber name changes. Observed for real: declaring a role
+  // fan-out and starting a monitor delivered 74 KB of the day's own backlog as
+  // if it had just arrived.
+  //
+  // fromNow seeds any missing cursor at each file's current end, so the first
+  // wait blocks on what happens next. Deliberately only seeds MISSING cursors:
+  // an existing one is never rewound or skipped forward, or a restarted monitor
+  // would silently drop whatever landed while it was down.
+  if (fromNow) {
+    fs.mkdirSync(stateDir, { recursive: true });
+    for (const f of (() => { try { return fs.readdirSync(qdir).filter(x => fileRe.test(x)); } catch { return []; } })()) {
+      const off = path.join(stateDir, `${f}.offset`);
+      if (!fs.existsSync(off)) {
+        let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
+        fs.writeFileSync(off, String(size), 'utf8');
+      }
+    }
+  }
   const waiterFile = path.join(stateDir, `${role}.waiter`);
 
   const sourceFiles = () => {
