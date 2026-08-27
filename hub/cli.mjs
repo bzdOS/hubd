@@ -23,6 +23,7 @@ import {
   loadClaims, activeClaims, journalAppend,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
+import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -887,6 +888,48 @@ if (cmd === 'resource' || cmd === 'res') {
   done(0);
 }
 
+if (cmd === 'secret') {
+  const sub = args[1];
+  const teamRoot = (() => { try { return resolveQueueRoot(); } catch { return null; } })();
+  const name = args[2];
+  try {
+    if (sub === 'set') {
+      if (!name) die('Usage: hub secret set <name>   (value is read from stdin)');
+      // stdin only. A value in argv is visible in `ps` to every user on the box
+      // and lands in the typist's shell history; there is no flag for it on
+      // purpose.
+      const value = fs.readFileSync(0, 'utf8');
+      if (!value.length) die('nothing on stdin — pipe the value in, e.g. `printf %s "$V" | hub secret set NAME`');
+      const { file, bytes } = setSecret(name, value, { teamRoot });
+      console.log(`stored ${name} (${bytes} bytes, 0600) at ${file}`);
+      console.log('NOT encrypted at rest: this is a 0600 file outside the replicated hub, nothing more.');
+      done(0);
+    } else if (sub === 'get') {
+      if (!name) die('Usage: hub secret get <name>');
+      process.stdout.write(getSecret(name, { teamRoot }));
+      done(0);
+    } else if (sub === 'path') {
+      if (!name) die('Usage: hub secret path <name>');
+      console.log(secretPath(name, { teamRoot }));
+      done(0);
+    } else if (sub === 'list' || sub === undefined) {
+      const rows = listSecrets({ teamRoot });
+      console.log(`secrets in ${secretsRoot()} (outside the hub, never replicated):`);
+      if (!rows.length) console.log('  (none)');
+      for (const r of rows) console.log(`  ${r.name}  ${r.bytes} bytes  ${r.mode}  ${r.modified}`);
+      const bad = auditModes({ teamRoot });
+      for (const b of bad) console.log(`  ! ${b.path} is ${b.mode}, want ${b.want}`);
+      done(bad.length ? 1 : 0);
+    } else if (sub === 'rm') {
+      if (!name) die('Usage: hub secret rm <name>');
+      console.log(removeSecret(name, { teamRoot }) ? `removed ${name}` : `no secret named ${name}`);
+      done(0);
+    } else {
+      die('secret subcommands: set <name> (stdin), get <name>, path <name>, list, rm <name>');
+    }
+  } catch (e) { die(e.message); }
+}
+
 if (cmd === 'graph') {
   const pf = getFlag('-p') || getFlag('--project');
   const data = runGraph({
@@ -1398,6 +1441,7 @@ else if (!cmd) {
     '  gc                               remove stale locks and old backups',
     '  install-hook [path]              git post-commit hook',
     '  queue send <role> "<text>" --from <who>',
+    '  secret set|get|path|list|rm <name>   values kept outside the replicated hub',
     '  queue wait <role> [--timeout <N>] [--as <subscriber>]',
     '  queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]',
     '                                   block until real content, then exit 0',
