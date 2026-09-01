@@ -1,6 +1,6 @@
 {
   "name": "@bzdos/hubd",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "mcpName": "io.github.bzdOS/hubd",
   "description": "Files-first project hub for mixed teams of AI agents and humans \u2014 shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
   "repository": {
