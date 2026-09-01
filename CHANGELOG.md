@@ -4,6 +4,38 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.2 — 2026-09-02
+
+- **A replayed task event stopped multiplying into new tasks.** The fold's
+  collision guard compared the remap against the RAW id, so once a key had been
+  remapped — its id was already taken by another node — every later `add` for
+  that same key mismatched again and minted yet another task. One duplicated
+  line in an append-only log therefore multiplied without limit. Worse, it
+  silently broke the invariant `set`/`del` are keyed on: eleven tasks ended up
+  sharing one origin, so closing "the" task reached exactly one of them and the
+  other ten stayed open, unreachable by any id anyone had. A key that already
+  has a home now keeps it, and a replayed add overwrites its own task — which is
+  what re-reading an append-only log should do.
+
+  Found by taking a task out of a work queue and noticing the backlog disagreed
+  with itself. On the hub this was found in: **1507 tasks fold to 427**, 977 open
+  become 153, and the count of tasks sharing an origin goes from 104 groups to
+  zero. Nothing is deleted and no log is rewritten — the events were always
+  right; only the view built from them was wrong, which is the whole reason the
+  logs are the truth and `tasks.json` is a cache.
+
+- **A `set` event now says how it is keyed.** Fixing the above surfaced that the
+  writer and the reader had drifted apart: `runTaskUpdate` records a set under
+  the task's ORIGIN `(node, id)`, while the reader (rightly, for older events)
+  treats a set's id as a FINAL id and prefers a live task holding that number.
+  Those two are byte-identical on disk and mean different tasks — a node updating
+  its own remapped task emits exactly what "update the visible #169" used to
+  emit — so an update could land on another node's task that merely happens to
+  hold that number. New writes carry `keyed: "origin"` and are resolved through
+  the remap; unmarked events keep the heuristic they were written under. The
+  ambiguity was in the data, so it is removed from the data going forward rather
+  than guessed at on every read.
+
 ## 0.9.1 — 2026-08-26
 
 - **`mesh-sync.sh` ships with the package** — "your data is a folder, sync it

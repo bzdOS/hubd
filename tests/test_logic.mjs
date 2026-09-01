@@ -1476,6 +1476,47 @@ core.runRules({ append: 'and a second one', by: 'cto-t' });
 ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) || []).length === 1,
   'rules: a second amendment joins the same heading instead of starting another');
 
+// ── a replayed add for a key that was ALREADY remapped must not mint a new task ──
+// The guard compared the remap against the RAW id, so once a key had been remapped (its id was
+// taken by someone else), every later add for that same key mismatched again and minted another
+// task. One duplicated line in an event log multiplied without limit and broke the origin
+// invariant set/del rely on: in the live base 1034 of 1507 tasks were copies born this way, and
+// closing one of eleven siblings left the other ten unreachable forever.
+const RP = mktmp();
+core.setHubBase(RP);
+const dupAdd = JSON.stringify({ ts: '2026-07-07 09:20', node: 'planck', ev: 'add', id: 7,
+  t: { id: 7, project: 'p', text: 'replayed', status: 'open' } });
+fs.writeFileSync(path.join(RP, 'tasks.aaa.events.jsonl'),   // takes id 7 first, from another node
+  JSON.stringify({ ts: '2026-07-07 09:00', node: 'aaa', ev: 'add', id: 7, t: { id: 7, project: 'p', text: 'the incumbent', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(RP, 'tasks.planck.events.jsonl'), (dupAdd + '\n').repeat(6));
+const rp = core.foldTasks();
+const replayed = rp.tasks.filter(t => t.text === 'replayed');
+ok(replayed.length === 1, `fold: six replays of one add produce ONE task, not six (got ${replayed.length})`);
+ok(rp.tasks.length === 2, `fold: and the incumbent it collided with is untouched (got ${rp.tasks.length} tasks)`);
+ok(replayed[0].id !== 7 && replayed[0]._origin.node === 'planck' && replayed[0]._origin.id === 7,
+  'fold: the remapped task still records the origin it was added under');
+const originKeys = rp.tasks.map(t => `${t._origin.node}::${t._origin.id}`);
+ok(new Set(originKeys).size === originKeys.length,
+  'fold: no two tasks share an origin — the invariant set/del key on');
+/* Two conventions live in these logs, and the same bytes mean different tasks under each — which
+ * is why new writes mark themselves. An origin-keyed set (what runTaskUpdate emits now) names the
+ * (node,id) the task was ADDED under; an unmarked legacy set carries a FINAL id, where a live task
+ * with that id is the target. planck updating its own remapped task and "update the visible #7"
+ * would otherwise be indistinguishable. */
+fs.appendFileSync(path.join(RP, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-07-08 10:00', node: 'planck', ev: 'set', id: 7, keyed: 'origin', patch: { status: 'done' } }) + '\n');
+const replayFold = core.foldTasks().tasks;
+ok(replayFold.filter(t => t.text === 'replayed' && t.status === 'done').length === 1,
+  'fold: an origin-keyed set closes the task it was addressed to, with no sibling left open');
+ok(replayFold.find(t => t.text === 'the incumbent').status === 'open',
+  'fold: and it does NOT touch the other node\'s task that happens to hold that number');
+fs.appendFileSync(path.join(RP, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-07-08 11:00', node: 'planck', ev: 'set', id: 7, patch: { text: 'legacy-write' } }) + '\n');
+ok(core.foldTasks().tasks.find(t => t.id === 7).text === 'legacy-write',
+  'fold: an UNMARKED set still means the visible id, so old events keep the meaning they were written with');
+fs.rmSync(RP, { recursive: true, force: true });
+core.setHubBase(T0);
+
 // ── the journal says WHAT changed on a task, not merely that something did ──
 // "~ task #N → edited" made the most useful event in a coordination log (somebody took this
 // task) indistinguishable from a typo fix in its text. Found while filming the kanban: the live

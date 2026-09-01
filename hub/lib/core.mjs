@@ -401,8 +401,18 @@ export function foldTasks() {
   for (const e of evs) {
     const key = `${e._node}::${e.id}`;
     if (e.ev === 'add') {
-      let fid = e.id;
-      if ((tasks.has(fid) || seen.has(fid)) && remap.get(key) !== fid) fid = maxNum + 1; // id taken (even if since-deleted) → remap later add
+      /* A key that already has a home KEEPS it. The guard used to compare the remap against the
+       * RAW id — so once a key had been remapped (its id was taken by someone else), every later
+       * add for that same key mismatched again and minted yet another task. One duplicated line in
+       * an event log therefore multiplied without limit, and worse, silently broke the invariant
+       * three lines below that set/del depend on: eleven tasks ended up sharing one origin, so a
+       * close keyed to that origin reached exactly one of them and the other ten were unreachable
+       * forever. Live base: 1034 of 1507 tasks were copies born this way.
+       * Re-applying an add for a known key now overwrites its own task, which is what a replayed
+       * event should do — the logs are append-only and may legitimately be re-read forever. */
+      const prior = remap.get(key);
+      let fid = prior !== undefined ? prior : e.id;
+      if (prior === undefined && (tasks.has(fid) || seen.has(fid))) fid = maxNum + 1; // id taken (even if since-deleted) → remap this key once
       // _origin = the (node,id) this task was ADDED under. Invariant: remap[origin.node::
       // origin.id] === fid. Lets the write-path key set/del to origin so an UNCHANGED reducer
       // resolves them to THIS canonical task from any node — even a node that historically
@@ -423,7 +433,14 @@ export function foldTasks() {
       // The remap fallback stays for ids that name nothing live — a node's own
       // since-remapped or since-deleted add — otherwise a `set` after a `del` would
       // land on whatever task reused that id.
-      const fid = tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id);
+      // Two conventions live in these logs. An event marked keyed:'origin' names the (node,id)
+      // the task was ADDED under, so the remap is authoritative for it. An unmarked event is
+      // legacy and carries a FINAL id, where a live task with that id is the target and the
+      // remap is only a fallback for ids naming nothing live (a since-remapped or since-deleted
+      // add) — without that fallback a `set` after a `del` would land on whatever reused the id.
+      const fid = e.keyed === 'origin'
+        ? (remap.get(key) ?? e.id)
+        : (tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id));
       if (e.ev === 'set') { const t = tasks.get(fid); if (t) Object.assign(t, e.patch || {}); }
       else tasks.delete(fid);
     }
@@ -2293,7 +2310,12 @@ export function runTaskUpdate(a) {
     // collided on the finalId (else `set` mis-hits the writer's own remapped task). _origin
     // is supplied by the fold; fall back to writer/finalId for pre-migration caches.
     const origin = t._origin || { node: JOURNAL_NODE, id: t.id };
-    fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, patch }) + '\n');
+    // `keyed: 'origin'` is not decoration: an origin-keyed set and a legacy final-id-keyed set
+    // are otherwise BYTE-IDENTICAL while meaning different tasks (planck updating its own
+    // remapped task emits exactly what "update the visible #169" used to emit). The reader
+    // cannot guess, so new writes say which convention they use and old ones keep the
+    // best-effort heuristic they were written under.
+    fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, keyed: 'origin', patch }) + '\n');
     rebuildTaskCache();
     /* Say WHAT changed, not just that something did. The line used to read "~ task #N → edited"
      * for every non-status edit, so the single most useful event in a coordination log — somebody
