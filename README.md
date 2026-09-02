@@ -127,6 +127,12 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **Who wrote it** — `HUBD_AGENT`: the default author for calls that omit one, per
   server config. Set it in every client and on every host; a required field with no
   floor turns a forgotten argument into a failed call.
+- **Is the mesh actually syncing?** `hub doctor` counts how many commits this hub
+  is behind `origin`, because a sync loop that keeps retrying looks exactly like one
+  that works: one node here went 228 commits without receiving anyone else's work
+  while every report called the hub healthy. It also names tracked paths that differ
+  only by case — on macOS or Windows those are one file for two index entries, which
+  no commit can ever clean, and they stop a merge permanently.
 - **Several machines?** Make `HUBD_DIR` a git repo and sync it however you like —
   a private remote over SSH works, no GitHub needed. Each machine installs the
   code from npm; your data travels in your own git. Two separate tracks: code from
