@@ -19,7 +19,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalCounts, logDuplication,
+  journalTail, journalSince, journalCounts, logDuplication, versionSkew,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
@@ -275,6 +275,22 @@ deviations, test output); the cto appends "## Acceptance".*
 
 const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n';
 
+/* Until 0.9.4 there was no way to ask hubd its own version, and the omission had a price: the
+ * global `hub` on the machine that develops hubd sat nine releases behind for weeks, and reading
+ * `npm ls -g` was the only way to find out. Answered BEFORE ensureProtocol() below, so asking a
+ * possibly-wrong install what it is never writes anything.
+ *
+ * The path is printed with the number because "which version" and "which copy" are one question:
+ * a stale global install and a live source checkout are both called `hub`, and they answer
+ * differently. Whichever one printed this line is the one your shell has been running. */
+if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+  console.log('hubd ' + VERSION);
+  console.log('  running:  ' + __filename);
+  console.log('  node:     ' + process.version);
+  console.log('  hub base: ' + HUB);
+  done(0);
+}
+
 // Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when
 // already current (a stat + version compare); rewrites only after a hubd version change.
 try { ensureProtocol(); } catch {}
@@ -403,6 +419,32 @@ if (cmd === 'doctor') {
       console.log('            ' + g.kind + '/' + g.node + ': ' + g.lines + ' lines, ' + g.distinct + ' distinct' +
         (g.files.length > 1 ? ' (' + g.files.length + ' files)' : ''));
     console.log('            cause: merge=union in the hub git repo keeps both sides of a hunk and never dedups');
+  }
+
+  // Which hubd wrote into this hub. Nothing anywhere could answer that until 0.9.4 stamped it on
+  // the journal line, so the block is deliberately explicit that it starts empty rather than
+  // printing a reassuring nothing.
+  const skew = versionSkew();
+  if (!skew.stamped) {
+    console.log('  writers:  no version stamps yet - recorded from 0.9.4 on, as each node upgrades');
+  } else {
+    console.log('  writers:  ' + skew.nodes.filter(g => g.last).map(g => g.node + ' ' + g.last).join(' - ') +
+      (skew.nodes.some(g => !g.last) ? ' - unstamped: ' + skew.nodes.filter(g => !g.last).map(g => g.node).join(', ') : ''));
+    for (const n of skew.ahead) {
+      warnings++;
+      console.log('            WARNING ' + n.node + ' wrote with ' + n.v + ' but this install is ' + VERSION +
+        ' - THIS copy is the stale one');
+    }
+    for (const n of skew.behind) {
+      warnings++;
+      console.log('            WARNING ' + n.node + ' last wrote with ' + n.v + ' (' + n.at + '), installed here is ' +
+        VERSION + ' - upgrade that node');
+    }
+    for (const n of skew.concurrent) {
+      warnings++;
+      console.log('            WARNING ' + n.node + ': ' + n.versions.join(' and ') +
+        ' both writing recently - two installs on one node');
+    }
   }
 
   // team root
@@ -1451,7 +1493,8 @@ else if (!cmd) {
     'Usage: hub <command>',
     '',
     '  init [path]                      scaffold a team folder (AGENTS.md, INBOX.md, queues/)',
-    '  doctor                           check hub base, team root, locks and queues',
+    '  version | --version | -v         installed hubd version, and which copy is answering',
+    '  doctor                           check hub base, team root, locks, queues and writer versions',
     '  upgrade                          refresh HUBD.md (the agent protocol) to the installed version',
     '  status                           project table',
     '  brief [-h <hours>]               morning brief',
