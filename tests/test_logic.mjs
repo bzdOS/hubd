@@ -1717,7 +1717,73 @@ fs.utimesSync(fvEvents, past, past);
 ok(core.loadTasks().tasks.length === 1 && JSON.parse(fs.readFileSync(path.join(FV, 'tasks.json'), 'utf8')).foldVersion === core.VERSION,
   'loadTasks: a cache stamped with the running version is served as-is');
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV]) fs.rmSync(d, { recursive: true, force: true });
+// ── which hubd wrote which line ───────────────────────────────────────────────
+/* The global `hub` on the machine that develops hubd sat nine releases behind for weeks. Nothing
+ * could have said so: the lines it wrote were indistinguishable from current ones, and the tool
+ * had no way to state its own version — `npm ls -g` was the only route. So the log carries the
+ * writer now, and it is the only place that can: presence/ is node-local and never mesh-synced,
+ * so it can only ever describe the machine already asking. */
+const WV = mktmp();
+core.setHubBase(WV);
+core.journalAppend({ ts: '2026-09-01 10:00', project: 'p', agent: 'dev-t', kind: 'note', text: 'fresh write' });
+const wvLine = JSON.parse(fs.readFileSync(path.join(WV, 'journal.' + core.JOURNAL_NODE + '.jsonl'), 'utf8').trim());
+ok(wvLine.v === core.VERSION,
+  `journalAppend: stamps the writing version onto the entry (got ${JSON.stringify(wvLine.v)})`);
+core.journalAppend({ ts: '2026-09-01 10:01', project: 'p', agent: 'dev-t', kind: 'note', text: 'relayed', v: '0.4.8' });
+const wvRelay = fs.readFileSync(path.join(WV, 'journal.' + core.JOURNAL_NODE + '.jsonl'), 'utf8').trim().split('\n');
+ok(JSON.parse(wvRelay[1]).v === '0.4.8',
+  'journalAppend: an entry that already names a version keeps it — a relayed line describes its origin');
+
+const wvl = (ts, v, text) => JSON.stringify({ ts, project: 'p', agent: 'dev-t', kind: 'note', text, ...(v ? { v } : {}) });
+fs.writeFileSync(path.join(WV, 'journal.planck.jsonl'),
+  wvl('2026-08-01 09:00', '0.9.1', 'old') + '\n' + wvl('2026-08-02 09:00', '0.9.2', 'newer') + '\n');
+fs.writeFileSync(path.join(WV, 'journal.attic.jsonl'),
+  wvl('2026-07-01 09:00', null, 'from before stamps existed') + '\n');
+const wvNodes = core.writerVersions();
+const wvPlanck = wvNodes.find(g => g.node === 'planck');
+ok(wvPlanck && wvPlanck.last === '0.9.2' && wvPlanck.lastAt === '2026-08-02 09:00',
+  `writerVersions: a node's version is the one on its NEWEST stamped entry (got ${wvPlanck && wvPlanck.last})`);
+const wvAttic = wvNodes.find(g => g.node === 'attic');
+ok(wvAttic && wvAttic.last === null && wvAttic.unstamped === 1,
+  'writerVersions: pre-0.9.4 entries count as unstamped, never guessed from the line next to them');
+
+/* 0.9.10 is NEWER than 0.9.2 and sorts before it as text — the whole check inverts on a
+ * two-digit patch, which is four releases away. */
+ok(core.cmpVersion('0.9.10', '0.9.2') > 0 && core.cmpVersion('0.9.2', '0.9.10') < 0 && core.cmpVersion('1.0', '1.0.0') === 0,
+  'cmpVersion: compares numerically, so 0.9.10 outranks 0.9.2');
+
+const wvSkew = core.versionSkew();
+ok(wvSkew.installed === core.VERSION && wvSkew.behind.some(n => n.node === 'planck' && n.v === '0.9.2'),
+  'versionSkew: names a node whose newest write came from an older hubd than this install');
+fs.writeFileSync(path.join(WV, 'journal.future.jsonl'), wvl('2026-08-05 09:00', '99.0.0', 'from ahead') + '\n');
+ok(core.versionSkew().ahead.some(n => n.node === 'future'),
+  'versionSkew: a node writing with a NEWER hubd means this copy is the stale one');
+
+/* Interleaving, not mere co-presence: an upgrade partitions old lines from new ones, two installs
+ * on one machine keep taking turns. Only the second is worth a warning. */
+fs.writeFileSync(path.join(WV, 'journal.clean.jsonl'),
+  wvl('2026-08-01 09:00', '0.4.8', 'a') + '\n' + wvl('2026-08-02 09:00', '0.4.8', 'b') + '\n' +
+  wvl('2026-08-03 09:00', '0.9.4', 'c') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd') + '\n');
+fs.writeFileSync(path.join(WV, 'journal.twoinstalls.jsonl'),
+  wvl('2026-08-01 09:00', '0.4.8', 'a') + '\n' + wvl('2026-08-02 09:00', '0.9.4', 'b') + '\n' +
+  wvl('2026-08-03 09:00', '0.4.8', 'c') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd') + '\n');
+const wvCon = core.versionSkew().concurrent;
+ok(!wvCon.some(n => n.node === 'clean'),
+  'writerVersions: a clean upgrade cutover is not reported as two installs');
+ok(wvCon.some(n => n.node === 'twoinstalls' && n.versions.join(',') === '0.4.8,0.9.4'),
+  'writerVersions: an older version still appearing after a newer one is two installs on one node');
+
+const wvDoc = run('doctor', { HUBD_DIR: WV, HUBD_TEAM_DIR: WV });
+ok(/writers: +.*planck 0\.9\.2/.test(wvDoc.out),
+  'doctor: prints which hubd wrote into each node log');
+ok(/THIS copy is the stale one/.test(wvDoc.out) && /two installs on one node/.test(wvDoc.out),
+  'doctor: warns on both directions of skew and on two installs sharing a node');
+const wvEmpty = mktmp();
+ok(/no version stamps yet/.test(run('doctor', { HUBD_DIR: wvEmpty, HUBD_TEAM_DIR: wvEmpty }).out),
+  'doctor: says the record is empty rather than printing a reassuring nothing');
+fs.rmSync(wvEmpty, { recursive: true, force: true });
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

@@ -66,7 +66,8 @@ included in the npm package; it comes from the repo.
 ```bash
 npm i -g @bzdos/hubd   # installs both binaries: hubd (MCP server) + hub (CLI)
 hub init             # scaffold a team folder: AGENTS.md, INBOX.md, queues/
-hub doctor           # check hub base, team root, locks, queues, ghost queues
+hub version          # which hubd, and which copy of it is answering
+hub doctor           # hub base, team root, locks, queues, ghost queues, writer versions
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
 hub queue gc         # list queues nobody ever consumed (--apply archives them)
@@ -131,6 +132,13 @@ is a folder you own. They are two separate things — and that is the whole poin
   code from npm; your data travels in your own git. Two separate tracks: code from
   the package, data in your folder. Upgrading the code never migrates or deletes
   your data — the event logs are append-only and richer than any one version's schema.
+- **Which version is actually running** — `hub version` prints the number *and the path
+  of the copy that printed it*, because on a real machine those are one question: a stale
+  global install and a live source checkout are both called `hub`. From 0.9.4 each journal
+  line also carries the version that appended it, so `hub doctor` reports the whole mesh —
+  which node is behind, whether **this** copy is the stale one, and whether two installs
+  are writing into the same node. This exists because the machine that develops hubd ran a
+  CLI nine releases old for weeks and nothing anywhere could have said so.
 - **What an upgrade needs from you** — sometimes a new version wants something outside
   the code: a variable in a client's config, a role declared in the hub, a protocol
   section worth re-reading. hubd works that out and tells the agents itself:

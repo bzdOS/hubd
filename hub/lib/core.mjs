@@ -481,6 +481,98 @@ export function journalCounts() {
   return { files: files.length, lines, entries, malformed, duplicate: lines - distinct };
 }
 
+// Numeric compare, not string: '0.9.10' is NEWER than '0.9.2' and sorts before it as text.
+export function cmpVersion(a, b) {
+  const pa = String(a ?? '').split('.'), pb = String(b ?? '').split('.');
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (parseInt(pa[i], 10) || 0) - (parseInt(pb[i], 10) || 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/* Which hubd wrote which line.
+ *
+ * The incident: the global `hub` on the machine that DEVELOPS hubd sat nine releases behind for
+ * weeks, and nothing could have said so. The lines it wrote were indistinguishable from current
+ * ones, and the tool had no way to state its own version at all — finding out took `npm ls -g`.
+ * That is this project's own thesis pointed back at it: not a crash, an answer, given confidently
+ * by code too old to know what it was answering.
+ *
+ * So journalAppend stamps `v`. A node's append-only log now carries the version that appended to
+ * it, and every node in the mesh already reads every other node's log — which makes the log the
+ * only place a version can be observed across the fleet. (presence/ cannot: it is node-local and
+ * never synced, so it can only ever describe the machine already asking.) Same rule as HUBD.md
+ * and tasks.json, one level down: a written artifact names the code that produced it.
+ *
+ * It necessarily starts blank. Entries written before 0.9.4 have no stamp and are counted as
+ * `unstamped` rather than attributed to a guess — a version this cannot know is reported as
+ * unknown, never inferred from the line next to it. */
+/* Two hubd installs writing into ONE node's log — the shape this machine was actually in, with a
+ * nine-releases-old global `hub` on PATH and a current source checkout behind the MCP server,
+ * both appending to journal.macbook-pro.jsonl.
+ *
+ * The test is INTERLEAVING, not "more than one version present". An ordinary upgrade also puts two
+ * versions in a log, but it partitions them: every old line, then every new one. Two installs
+ * running side by side keep taking turns, so an older version goes on appearing after the newer
+ * one first showed up. Only that is reported.
+ *
+ * Bounded to the last 50 stamped entries because the claim is about the present. Interleaving that
+ * stopped months ago is history, and a warning that can never be cleared is one a reader learns to
+ * skip — which would cost more than this check is worth. */
+function concurrentWriters(seq) {
+  const recent = seq.slice(-50);
+  if (!recent.length) return [];
+  const newest = [...new Set(recent.map(x => x.v))].sort(cmpVersion).pop();
+  const from = recent.findIndex(x => x.v === newest);
+  const older = new Set(recent.slice(from + 1).filter(x => cmpVersion(x.v, newest) < 0).map(x => x.v));
+  return older.size ? [...older, newest].sort(cmpVersion) : [];
+}
+
+export function writerVersions() {
+  const byNode = new Map();
+  for (const { e, node } of readLogEntries(journalFiles(), journalNodeOf)) {
+    if (node === 'life') continue;               // the private braid is this machine's, not a node
+    const key = node || 'legacy';
+    let g = byNode.get(key);
+    if (!g) byNode.set(key, g = { node: key, versions: {}, unstamped: 0, last: null, lastAt: null, _seq: [] });
+    const v = typeof e.v === 'string' && e.v ? e.v : null;
+    if (!v) { g.unstamped++; continue; }
+    g.versions[v] = (g.versions[v] || 0) + 1;
+    const ms = parseTs(e.ts).getTime();
+    g._seq.push({ v, ms: Number.isFinite(ms) ? ms : 0 });
+  }
+  const out = [];
+  for (const g of byNode.values()) {
+    g._seq.sort((a, b) => a.ms - b.ms);
+    const last = g._seq.length ? g._seq[g._seq.length - 1] : null;
+    out.push({
+      node: g.node, versions: g.versions, unstamped: g.unstamped,
+      last: last ? last.v : null,
+      lastAt: last ? new Date(last.ms).toISOString().slice(0, 16).replace('T', ' ') : null,
+      concurrent: concurrentWriters(g._seq),
+    });
+  }
+  return out.sort((a, b) => (a.node < b.node ? -1 : a.node > b.node ? 1 : 0));
+}
+
+/** Nodes whose newest stamped journal entry came from a hubd other than the one installed here.
+ *  `ahead` matters more than `behind`: it means THIS copy is the stale one, and a stale reader is
+ *  exactly the reader that cannot be relied on to notice anything else. */
+export function versionSkew() {
+  const nodes = writerVersions();
+  const stamped = nodes.filter(g => g.last);
+  const pick = (g) => ({ node: g.node, v: g.last, at: g.lastAt });
+  return {
+    installed: VERSION,
+    nodes,
+    stamped: stamped.length,
+    behind: stamped.filter(g => cmpVersion(g.last, VERSION) < 0).map(pick),
+    ahead: stamped.filter(g => cmpVersion(g.last, VERSION) > 0).map(pick),
+    concurrent: nodes.filter(g => g.concurrent.length > 1).map(g => ({ node: g.node, versions: g.concurrent })),
+  };
+}
+
 function readTaskEvents() {
   const evs = [];
   for (const { e, node, idx } of readLogEntries(taskEventFiles(), taskEventNodeOf)) {
@@ -767,7 +859,10 @@ export function journalAppend(entry) {
         fs.renameSync(JOURNAL, archive);   // unique name — never overwrite an existing month-archive (was silent data loss)
       }
     } catch {}
-    fs.appendFileSync(JOURNAL, JSON.stringify(entry) + '\n');
+    // Stamp the writer's version (writerVersions() explains why the log is the only place this
+    // can live). An entry that already carries one keeps it: a forwarded or replayed line
+    // describes the hubd that ORIGINALLY wrote it, not the one passing it along.
+    fs.appendFileSync(JOURNAL, JSON.stringify(entry && entry.v ? entry : { ...entry, v: VERSION }) + '\n');
   });
 }
 
