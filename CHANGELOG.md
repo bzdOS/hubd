@@ -6,6 +6,18 @@ a version here never migrates or deletes data.
 
 ## 0.9.2 — 2026-09-02
 
+- **The owner exists in `hub presence`.** Agents heartbeat because the protocol
+  tells them to; nobody tells the human anything, so the one person in the fleet
+  was the only member of it with no liveness at all — a board could show buttons
+  waiting twelve days with no way to tell "away" from "here and not answering",
+  which are the two states that decide whether to wait or route around them.
+  Nothing new is asked of the human: a write authored by a declared owner role
+  (`owner-roles.json`) IS the evidence a person acted, recorded from the choke
+  point every write already passes, plus the two paths that skip it — a queue
+  reply, which never journals, and a report of pure `FACT:`/`COMM:` lines, which
+  writes only the card. Owner TTL is four hours, because a person who answered an
+  hour ago is still around in a way a polling loop is not.
+
 - **A replayed task event stopped multiplying into new tasks.** The fold's
   collision guard compared the remap against the RAW id, so once a key had been
   remapped — its id was already taken by another node — every later `add` for
