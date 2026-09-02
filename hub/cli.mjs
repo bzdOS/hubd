@@ -19,8 +19,8 @@ import {
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalFiles,
-  loadClaims, activeClaims, journalAppend,
+  journalTail, journalSince, journalCounts, logDuplication,
+  loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
@@ -366,7 +366,10 @@ if (cmd === 'doctor') {
   // hub base
   const projFiles = (() => { try { return fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch { return []; } })();
   const resFiles = (() => { try { return fs.readdirSync(RESOURCES).filter(f => f.endsWith('.md')); } catch { return []; } })();
-  const allTasks = (() => { try { const db = JSON.parse(fs.readFileSync(path.join(HUB, 'tasks.json'), 'utf8')); return db.tasks || []; } catch { return []; } })();
+  // Through loadTasks(), never the raw cache file: doctor is where a human checks the hub against
+  // their own expectations, and reading tasks.json directly meant reporting whatever the last
+  // writer left there — on one hub, 977 open tasks from a fold that 0.9.2 had already fixed.
+  const allTasks = (() => { try { return loadTasks().tasks || []; } catch { return []; } })();
   const openTasks = allTasks.filter(t => t.status === 'open').length;
   const todayStr = new Date().toISOString().slice(0, 10);
   const overdueTasks = allTasks.filter(t => t.status === 'open' && t.deadline && t.deadline < todayStr).length;
@@ -374,16 +377,10 @@ if (cmd === 'doctor') {
   const active = activeClaims(claimsDb.claims);
   const expired = claimsDb.claims.filter(c => !active.includes(c)).length;
 
-  const jfiles = journalFiles();
-  let totalJournalEntries = 0, malformedLines = 0;
-  for (const f of jfiles) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean)) {
-        try { JSON.parse(l); totalJournalEntries++; }
-        catch { malformedLines++; warnings++; }
-      }
-    } catch {}
-  }
+  // Entries a reader actually sees, not lines on disk — a mesh merge can duplicate lines without
+  // anything erroring, and this count used to report the inflated one. Both are printed.
+  const jc = journalCounts();
+  if (jc.malformed) warnings++;
 
   console.log('hub base:');
   console.log('  path:     ' + HUB);
@@ -391,8 +388,22 @@ if (cmd === 'doctor') {
   console.log('  resources:' + resFiles.length);
   console.log('  tasks:    ' + openTasks + ' open' + (overdueTasks ? ', ' + overdueTasks + ' overdue' : ''));
   console.log('  claims:   ' + active.length + ' active, ' + expired + ' expired');
-  console.log('  journal:  ' + jfiles.length + ' file(s), ' + totalJournalEntries + ' entries' +
-    (malformedLines ? ', ' + malformedLines + ' malformed  WARNING' : ''));
+  console.log('  journal:  ' + jc.files + ' file(s), ' + jc.entries + ' entries' +
+    (jc.malformed ? ', ' + jc.malformed + ' malformed  WARNING' : ''));
+
+  // Duplicated log lines are invisible by construction: git reports a clean merge, the file stays
+  // valid JSONL, and append-only was never broken. Readers drop the repeats, so say so out loud
+  // rather than quietly serving a corrected number over files that keep growing.
+  const dupGroups = logDuplication();
+  if (dupGroups.length) {
+    const dupTotal = dupGroups.reduce((n, g) => n + g.duplicate, 0);
+    console.log('  logs:     ' + dupTotal + ' duplicate line(s) in ' + dupGroups.length +
+      ' node log(s) - dropped on read, still on disk');
+    for (const g of dupGroups.slice(0, 6))
+      console.log('            ' + g.kind + '/' + g.node + ': ' + g.lines + ' lines, ' + g.distinct + ' distinct' +
+        (g.files.length > 1 ? ' (' + g.files.length + ' files)' : ''));
+    console.log('            cause: merge=union in the hub git repo keeps both sides of a hunk and never dedups');
+  }
 
   // team root
   const { root: teamRoot, via: teamVia } = resolveQueueRootInfo();

@@ -370,20 +370,125 @@ export function taskEventFiles() {
   } catch { return []; }
 }
 
-function readTaskEvents() {
-  const evs = [];
-  for (const f of taskEventFiles()) {
-    const node = (path.basename(f).match(/^tasks\.(.+)\.events\.jsonl$/) || [])[1] || 'node';
+/* ── Repeated lines in an append-only log ──
+ * A synced hub is a git repo, and the natural .gitattributes for append-only logs is
+ * `merge=union`: keep both sides of a conflicting hunk instead of stopping to ask. For two
+ * machines appending DIFFERENT lines that is exactly right, and it is why a mesh set up that way
+ * never produces a sync conflict. What union does NOT do is deduplicate. A line present on both
+ * sides survives twice — and the next merge sees the doubled file as one side of the next union,
+ * so it compounds. On the hub this was found in, the journal held 27464 lines for 1919 distinct
+ * entries, one task log held 5359 events for 519, and single lines appeared up to 33 times.
+ *
+ * Nothing detects that on its own. Git reports a clean merge, the file is still valid JSONL, every
+ * line in it is a line somebody really did write, and append-only was never violated — the log
+ * only grew, exactly as promised. Only the COUNTS are wrong, everywhere at once and all agreeing
+ * with each other, which reads like corroboration. It is also what fed the 0.9.2 fold bug: union
+ * made the replays, the fold minted a task per replay, and 427 tasks read as 1507.
+ *
+ * The fix belongs in the READER. Not the writer, and not the sync script: shrinking a log on disk
+ * would trip the append-only guard in scripts/mesh-sync.sh on every other node, and the events
+ * were never wrong — only the view built from them was. Byte-identical lines are indistinguishable
+ * to every reader by construction, so keeping the first is lossless in the only sense available
+ * here. The cost is real and small, and stating it is the point: two genuinely separate events
+ * that serialize identically (same node, same minute, same text) now count once.
+ *
+ * Dedup is scoped per node log FAMILY — a node's live log plus the month archives journalAppend
+ * rotates out — and never across nodes. A journal entry carries no node field, so the file name is
+ * the only place that distinction lives; two nodes that happen to write the same line keep both.
+ * `hub doctor` reports the inflation via logDuplication(), because serving a corrected number
+ * while the files quietly keep the duplicates would be the same lie one level down. */
+function* readLogEntries(files, nodeOf) {
+  const seen = new Map();                       // node family -> raw lines already yielded
+  for (const f of files) {
+    const node = nodeOf(path.basename(f));
+    let dup = seen.get(node);
+    if (!dup) seen.set(node, dup = new Set());
+    let raw;
+    try { raw = fs.readFileSync(f, 'utf8'); } catch { continue; }
     let idx = 0;
+    for (const l of raw.split('\n')) {
+      const line = l.trim();
+      if (!line || dup.has(line)) continue;
+      dup.add(line);
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      yield { e, node, idx: idx++ };
+    }
+  }
+}
+
+/* journal.<node>.jsonl, and the month archives rotated out of it as
+ * journal.<node>-<YYYY-MM>[.<n>].jsonl — all one node. */
+const journalNodeOf = (base) => {
+  const m = base.match(/^journal\.(.+)\.jsonl$/);
+  if (!m) return '';                                    // legacy single-file journal.jsonl
+  return m[1].replace(/-\d{4}-\d{2}(\.\d+)?$/, '');
+};
+const taskEventNodeOf = (base) => (base.match(/^tasks\.(.+)\.events\.jsonl$/) || [])[1] || 'node';
+
+/** Raw vs distinct line counts per node log family — exactly what readLogEntries drops, so the
+ *  dedup is visible instead of merely applied. Empty when the logs are clean. */
+export function logDuplication() {
+  const groups = [];
+  for (const [kind, files, nodeOf] of [['tasks', taskEventFiles(), taskEventNodeOf],
+                                       ['journal', journalFiles(), journalNodeOf]]) {
+    const byNode = new Map();
+    for (const f of files) {
+      const node = nodeOf(path.basename(f));
+      let g = byNode.get(node);
+      if (!g) byNode.set(node, g = { kind, node, files: [], lines: 0, seen: new Set() });
+      g.files.push(path.basename(f));
+      try {
+        for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+          const line = l.trim();
+          if (!line) continue;
+          g.lines++; g.seen.add(line);
+        }
+      } catch {}
+    }
+    for (const g of byNode.values()) {
+      if (g.lines <= g.seen.size) continue;
+      groups.push({ kind: g.kind, node: g.node, files: g.files, lines: g.lines, distinct: g.seen.size, duplicate: g.lines - g.seen.size });
+    }
+  }
+  return groups.sort((a, b) => b.duplicate - a.duplicate);
+}
+
+/** What `hub doctor` says about the journal: raw lines on disk vs entries a reader actually sees.
+ *  The two diverge when a mesh merge duplicated lines, so reporting only one of them would hide
+ *  either the bloat or the correction. Counts distinct-per-node, exactly as readLogEntries does. */
+export function journalCounts() {
+  const files = journalFiles();
+  const seen = new Map();
+  let lines = 0, entries = 0, malformed = 0;
+  for (const f of files) {
+    const node = journalNodeOf(path.basename(f));
+    let dup = seen.get(node);
+    if (!dup) seen.set(node, dup = new Set());
     try {
       for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-        if (!l.trim()) continue;
-        // _node = the ORIGIN node (what the remap key is built from); _file = the log this line
-        // actually lives in. They differ only when a node addressed another node's origin, which
-        // is the one thing that tells an origin-keyed write from a legacy final-id one.
-        try { const e = JSON.parse(l); e._node = e.node || node; e._file = node; e._idx = idx++; evs.push(e); } catch {}
+        const line = l.trim();
+        if (!line) continue;
+        lines++;
+        if (dup.has(line)) continue;
+        dup.add(line);
+        try { JSON.parse(line); entries++; } catch { malformed++; }
       }
     } catch {}
+  }
+  let distinct = 0;
+  for (const s of seen.values()) distinct += s.size;
+  return { files: files.length, lines, entries, malformed, duplicate: lines - distinct };
+}
+
+function readTaskEvents() {
+  const evs = [];
+  for (const { e, node, idx } of readLogEntries(taskEventFiles(), taskEventNodeOf)) {
+    // _node = the ORIGIN node (what the remap key is built from); _file = the log this line
+    // actually lives in. They differ only when a node addressed another node's origin, which
+    // is the one thing that tells an origin-keyed write from a legacy final-id one.
+    e._node = e.node || node; e._file = node; e._idx = idx;
+    evs.push(e);
   }
   evs.sort((a, b) => {
     const ta = String(a.ts || ''), tb = String(b.ts || '');
@@ -467,19 +572,30 @@ function newestEventMtime() {
 
 export function rebuildTaskCache() {
   const db = foldTasks();
-  atomicWrite(TASKS, db);
+  atomicWrite(TASKS, { ...db, foldVersion: VERSION });
   return db;
 }
 
 // Read tasks. If event logs exist they are the truth: rebuild the tasks.json
 // cache whenever it is missing or older than the newest event file (e.g. a
 // mesh pull just brought new events). No events yet → legacy single-file read.
+/* And whenever the cache was folded by a DIFFERENT version of the code. The mtime check can only
+ * see new events, and the case it therefore misses is the one that matters most: a fix to the fold
+ * itself leaves every event byte-identical and every mtime untouched, so a cache built by the
+ * buggy fold outlives the upgrade and keeps being served as fact. 0.9.2 fixed a fold that had
+ * invented 1080 phantom tasks, and on the hub it was found in `hub doctor` still reported "977
+ * open" afterwards — the corrected fold said 154. Same class as HUBD.md and sections.json: a
+ * generated artifact carries the version that generated it, and a mismatch means regenerate. */
 export function loadTasks() {
   if (taskEventFiles().length) {
     let cacheMtime = 0;
     try { cacheMtime = fs.statSync(TASKS).mtimeMs; } catch {}
     if (cacheMtime < newestEventMtime()) return rebuildTaskCache();
-    try { return JSON.parse(fs.readFileSync(TASKS, 'utf8')); } catch { return rebuildTaskCache(); }
+    try {
+      const db = JSON.parse(fs.readFileSync(TASKS, 'utf8'));
+      if (db.foldVersion !== VERSION) return rebuildTaskCache();
+      return db;
+    } catch { return rebuildTaskCache(); }
   }
   try { return JSON.parse(fs.readFileSync(TASKS, 'utf8')); } catch { return { seq: 0, tasks: [] }; }
 }
@@ -657,13 +773,7 @@ export function journalAppend(entry) {
 
 export function journalTail(project, n = 12) {
   const all = [];
-  for (const f of journalFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean)) {
-        try { all.push(JSON.parse(l)); } catch {}
-      }
-    } catch {}
-  }
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) all.push(e);
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge multiple per-host files by time
   // Alias-aware: entries written under a project's OLD slug belong to the same project, and a
   // reader asking about either name wants both halves of the trail.
@@ -690,18 +800,10 @@ const BOOKKEEPING_KINDS = new Set(['task', 'audit']);
 
 export function lastJournalByProject() {
   const out = {};
-  for (const f of journalFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-        if (!l.trim()) continue;
-        try {
-          const e = JSON.parse(l);
-          if (!e.project || !e.ts || BOOKKEEPING_KINDS.has(e.kind)) continue;
-          const cur = out[e.project];
-          if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) out[e.project] = e.ts;
-        } catch {}
-      }
-    } catch {}
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+    if (!e.project || !e.ts || BOOKKEEPING_KINDS.has(e.kind)) continue;
+    const cur = out[e.project];
+    if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) out[e.project] = e.ts;
   }
   return out;
 }
@@ -716,15 +818,8 @@ export function digestLag(cardTouchedAt, lastJournalAt, staleDays) {
 export function journalSince(hours) {
   const cutoff = Date.now() - hours * 3600000;
   const all = [];
-  for (const f of journalFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean)) {
-        try {
-          const e = JSON.parse(l);
-          if (parseTs(e.ts).getTime() >= cutoff) all.push(e);
-        } catch {}
-      }
-    } catch {}
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+    if (parseTs(e.ts).getTime() >= cutoff) all.push(e);
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge per-host files by time
   return all.reverse(); // newest first
@@ -1893,16 +1988,9 @@ export function runSearch(a) {
       if (line.toLowerCase().includes(q)) hits.push({ where: f + ':' + (i + 1), line: line.trim().slice(0, 200) });
     });
   }
-  for (const f of journalFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean)) {
-        try {
-          const e = JSON.parse(l);
-          if ((e.text || '').toLowerCase().includes(q))
-            hits.push({ where: 'journal ' + e.ts + ' [' + e.project + '/' + e.agent + ']', line: e.text.slice(0, 200) });
-        } catch {}
-      }
-    } catch {}
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+    if ((e.text || '').toLowerCase().includes(q))
+      hits.push({ where: 'journal ' + e.ts + ' [' + e.project + '/' + e.agent + ']', line: e.text.slice(0, 200) });
   }
   return { query: a.query, hits: hits.slice(0, 40), total: hits.length };
 }
@@ -2820,13 +2908,7 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
     .map(mapTask);
 
   const allJournal = [];
-  for (const f of journalFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean)) {
-        try { allJournal.push(JSON.parse(l)); } catch {}
-      }
-    } catch {}
-  }
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) allJournal.push(e);
   const inbox = allJournal
     .sort((a, b) => b.ts > a.ts ? 1 : -1)
     .slice(0, 30)
