@@ -212,7 +212,7 @@ public endpoints from a git checkout of the *first* public release, nine
 versions behind, missing the very file the protocol is generated from — so
 that box could not have told an agent what the current rules were even if
 asked. Three instances of one root cause is not bad luck; it is a delivery
-model that was never decided.
+model that was never decided. There turned out to be a fourth, below.
 
 The fix was a hard line, and it's written into the data folder's
 `.gitignore` as a tombstone:
@@ -225,6 +225,28 @@ hub/
 The synced folder now carries **data only**. Code travels one way: npm
 publish, then install per node. Data travels another: the git mesh. The
 month of confusion came from letting the two flows share a channel.
+
+That fix separated the channels. It did not make the version *observable*, and
+a fourth instance was waiting on the least likely machine. Right after
+publishing the release that fixed the duplicated logs, I checked the `hub` on
+my own `PATH` — the laptop hubd is developed on. It was **0.4.8**. Nine
+releases behind, for weeks, while every tool call in every session went to the
+source checkout and worked perfectly.
+
+Two things had to be true at once for that to hide. The MCP server pointed at
+the checkout, so nothing an agent did ever touched the stale copy. And there
+was no way to ask: no `hub version`, no `--version`, no `-v`. Finding out took
+`npm ls -g`. A tool built on the claim that systems fail by answering
+confidently and wrong had, for nine releases, no answer at all to *what are
+you*.
+
+So `hub version` now prints the number and the path of the copy that printed
+it, because on a real machine those are one question. And every journal line
+carries the version that appended it — the log is the only artifact the whole
+mesh reads, so it is the only place a version can be seen from another
+machine. `hub doctor` now says which node is behind, whether *this* copy is
+the stale one, and whether two installs are writing into the same log. That
+last check is the shape this scar has had all four times.
 
 ### 7. The thousand tasks nobody created
 

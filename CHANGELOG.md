@@ -4,6 +4,53 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.4 — 2026-09-02
+
+- **`hub version` — the tool could not say what version it was.** No `version`
+  command, no `--version`, no `-v`; the only way to find out was `npm ls -g`. That
+  omission had a price. On the machine that develops hubd, the global `hub` on
+  `PATH` sat **nine releases behind** for weeks — 0.4.8 against a 0.9.3 source
+  checkout — while the MCP server ran from the checkout and everything appeared to
+  work. It is this project's own thesis pointed back at it: not a crash, an answer,
+  given confidently by code too old to know what it was answering.
+
+  `hub version` prints the number **and the path of the copy that printed it**,
+  because on a real machine those are one question — a stale global install and a
+  live checkout are both called `hub`, and they answer differently. It is handled
+  before any other work, so asking a possibly-wrong install what it is never writes
+  anything.
+
+- **Every journal line now carries the hubd that appended it.** `journalAppend`
+  stamps `v`. The log is the only place a version can be observed across the mesh:
+  `presence/` is node-local and never synced, so it can only ever describe the
+  machine already asking, while every node reads every other node's journal. Same
+  rule as `HUBD.md` and `tasks.json` one level down — a written artifact names the
+  code that produced it. An entry that already carries a `v` keeps it, so a relayed
+  line still describes its origin.
+
+- **`hub doctor` reports writer versions, in both directions.** Which node wrote
+  with which hubd; which nodes are **behind** this install; and — the case that
+  matters more — whether a node wrote with something **newer**, meaning *this* copy
+  is the stale one. A stale reader is exactly the reader that cannot be relied on to
+  notice anything else.
+
+  It also names two installs writing into one node's log, which is the shape the
+  0.4.8 incident actually had. The test is *interleaving*, not "more than one version
+  present": an ordinary upgrade also puts two versions in a log but partitions them
+  (every old line, then every new one), whereas two installs running side by side
+  keep taking turns. Bounded to a node's last 50 stamped entries, because the claim
+  is about the present and a warning that can never be cleared is one a reader learns
+  to skip.
+
+  The record necessarily starts empty, and doctor says so — `no version stamps yet`
+  — rather than printing a reassuring nothing. Pre-0.9.4 entries count as
+  `unstamped`; a version hubd cannot know is reported as unknown, never inferred from
+  the line next to it.
+
+- Version comparison is numeric, not lexical: `0.9.10` is newer than `0.9.2` and
+  sorts before it as text. Four releases away, that would have inverted every check
+  above.
+
 ## 0.9.3 — 2026-09-02
 
 - **A mesh merge could duplicate lines in an append-only log, and every count
