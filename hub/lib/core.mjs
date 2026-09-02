@@ -378,7 +378,10 @@ function readTaskEvents() {
     try {
       for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
         if (!l.trim()) continue;
-        try { const e = JSON.parse(l); e._node = e.node || node; e._idx = idx++; evs.push(e); } catch {}
+        // _node = the ORIGIN node (what the remap key is built from); _file = the log this line
+        // actually lives in. They differ only when a node addressed another node's origin, which
+        // is the one thing that tells an origin-keyed write from a legacy final-id one.
+        try { const e = JSON.parse(l); e._node = e.node || node; e._file = node; e._idx = idx++; evs.push(e); } catch {}
       }
     } catch {}
   }
@@ -438,7 +441,15 @@ export function foldTasks() {
       // legacy and carries a FINAL id, where a live task with that id is the target and the
       // remap is only a fallback for ids naming nothing live (a since-remapped or since-deleted
       // add) — without that fallback a `set` after a `del` would land on whatever reused the id.
-      const fid = e.keyed === 'origin'
+      // An event whose `node` is not the file it lives in was written by a node deliberately
+      // addressing ANOTHER node's origin — only the origin-keyed writer does that, so it is
+      // origin-keyed whether or not it carries the marker. That matters for real history: the
+      // writer has recorded sets by origin since 0.4.8 without saying so, and reading those as
+      // final-id events would misroute every one of them (85 in this hub). When node and file
+      // agree, the two conventions are indistinguishable and coincide unless that node's own add
+      // was remapped — which is the incident the live-id rule exists for, so it wins there.
+      const originKeyed = e.keyed === 'origin' || (!!e.node && e.node !== e._file);
+      const fid = originKeyed
         ? (remap.get(key) ?? e.id)
         : (tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id));
       if (e.ev === 'set') { const t = tasks.get(fid); if (t) Object.assign(t, e.patch || {}); }

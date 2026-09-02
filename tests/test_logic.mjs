@@ -1513,7 +1513,19 @@ ok(replayFold.find(t => t.text === 'the incumbent').status === 'open',
 fs.appendFileSync(path.join(RP, 'tasks.planck.events.jsonl'),
   JSON.stringify({ ts: '2026-07-08 11:00', node: 'planck', ev: 'set', id: 7, patch: { text: 'legacy-write' } }) + '\n');
 ok(core.foldTasks().tasks.find(t => t.id === 7).text === 'legacy-write',
-  'fold: an UNMARKED set still means the visible id, so old events keep the meaning they were written with');
+  'fold: an UNMARKED same-node set still means the visible id, so old events keep the meaning they were written with');
+/* An unmarked event whose node is NOT the file it lives in was written by a node deliberately
+ * addressing another node's origin — only the origin-keyed writer does that. The writer has been
+ * recording sets that way since 0.4.8 without a marker, and reading them as final-id events
+ * misroutes every one (85 in the hub this was found in — including closes that landed on other
+ * people's tasks and silently marked them done). */
+fs.writeFileSync(path.join(RP, 'tasks.other.events.jsonl'),
+  JSON.stringify({ ts: '2026-07-09 10:00', node: 'planck', ev: 'set', id: 7, patch: { text: 'cross-node origin write' } }) + '\n');
+const crossFold = core.foldTasks().tasks;
+ok(crossFold.find(t => t._origin.node === 'planck').text === 'cross-node origin write',
+  'fold: an unmarked CROSS-node set is origin-keyed — only that writer addresses a foreign origin');
+ok(crossFold.find(t => t.id === 7).text === 'legacy-write',
+  'fold: and it leaves the task merely holding that number alone');
 fs.rmSync(RP, { recursive: true, force: true });
 core.setHubBase(T0);
 
