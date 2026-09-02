@@ -4,6 +4,53 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.6 — 2026-09-02
+
+0.9.5 could *report* the deadlock it found. This stops it happening again, and
+gives the one file that can genuinely conflict a way to be resolved.
+
+- **hubd no longer creates a second spelling of a queue file that already
+  exists.** Both places a queue file comes into being — `queueSend`, and the
+  `queueWait` that touches its own node's file so a fresh waiter has something to
+  track — now go through `resolveQueueFile`, which writes to an existing
+  case-variant instead of adding a rival one. Whichever spelling arrived first
+  wins. That is arbitrary and harmless: readers match
+  `<role>.<anything>.queue.md`, cursors are keyed by file name, and one file per
+  role and node is the entire invariant.
+
+  Note where this does work. On a case-insensitive filesystem the OS already
+  collapses the two names, so nothing there can create the pair; the nodes that
+  create it are the case-sensitive ones, which never feel the damage — it lands on
+  whichever peer runs macOS or Windows. That asymmetry is why it went unnoticed
+  for 228 commits, and why the check has to live on the write path rather than
+  where it hurts.
+
+  It also means an integration test cannot tell a working guard from a missing one
+  on the machine these tests usually run on: delete the guard and every
+  filesystem-level assertion still passes. So the decision is a pure function over
+  a list of names (`pickExistingVariant`) and is tested as one.
+
+- **`hub card resolve` — the one shared file in a hub that can conflict.**
+  Everything else is per-node and append-only, so it cannot. A project card is a
+  single mutable file that any node rewrites, and two nodes appending to the same
+  section is a same-hunk change: three conflicts in one hour on one card.
+
+  Bullet-list hunks are unioned, because two nodes appending facts have not
+  disagreed about anything — both bullets are true and the conflict is an artefact
+  of where they landed. Identical bullets collapse to one, the same reasoning as
+  the log dedup. Prose hunks are left exactly as they are and named by section: if
+  both sides rewrote a digest, one of them meant to replace the other, and picking
+  would be inventing a decision nobody made. The command exits non-zero while
+  anything is left, so a script cannot mistake a partial resolution for a finished
+  one. A malformed hunk — no separator, no terminator — is never touched.
+
+- **`hub doctor` reports cards that still hold conflict markers.** `<<<<<<<` in a
+  card is not a broken file to a reader: it is content. `readCard` returns it,
+  `digestOf` slices it, `hub_context` hands it to an agent, and the agent reads two
+  contradictory versions of the project's state as though both were true. The mesh
+  script aborts rather than leaving markers, deliberately — but an abort is not the
+  only way a merge can end.
+
 ## 0.9.5 — 2026-09-02
 
 Found by using 0.9.4's writer-version report on a live mesh, an hour after

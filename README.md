@@ -132,7 +132,13 @@ is a folder you own. They are two separate things — and that is the whole poin
   that works: one node here went 228 commits without receiving anyone else's work
   while every report called the hub healthy. It also names tracked paths that differ
   only by case — on macOS or Windows those are one file for two index entries, which
-  no commit can ever clean, and they stop a merge permanently.
+  no commit can ever clean, and they stop a merge permanently. Since 0.9.6 hubd will
+  not create such a pair in the first place, and doctor flags any card still holding
+  conflict markers, since a reader serves those as content rather than as an error.
+- **When a card does conflict** — the only shared file that can, being the one
+  mutable one — `hub card resolve` unions the bullet-list hunks (two nodes appending
+  facts have not disagreed) and leaves prose hunks for you, named by section. It
+  exits non-zero while anything is left.
 - **Several machines?** Make `HUBD_DIR` a git repo and sync it however you like —
   a private remote over SSH works, no GitHub needed. Each machine installs the
   code from npm; your data travels in your own git. Two separate tracks: code from
