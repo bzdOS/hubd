@@ -2,6 +2,20 @@
 
 **The project tracker for teams of humans and AI agents — in plain files.**
 
+A tool for agents rarely fails by crashing. It fails by *answering* —
+confidently, and wrong. A list that ended early without saying so. A count that
+turns out to be mostly duplicates. A task close that lands on somebody else's
+id. A person would stop at "wait, fifteen hundred tasks? I didn't create
+fifteen hundred tasks." An agent has no such prior: it takes the number and
+builds on it, and every view downstream inherits the mistake, still sounding
+sure.
+
+hubd is built against that failure mode, and it shows in the boring parts. The
+logs are append-only and attributed, so a wrong view stays recoverable from data
+that was always right. Every truncation announces itself. Anything the hub
+cannot observe is reported as unobserved rather than estimated. Much of this
+codebase is not features — it is refusals to sound certain.
+
 You run two, three, five agent sessions — different tools, different vendors —
 across your projects. Each one is brilliant, and each one has no idea the
 others exist. You are the coordination layer: copy-pasting context,
@@ -175,8 +189,11 @@ is a folder you own. They are two separate things — and that is the whole poin
 ## Principles (violating these = not this product)
 
 Files first. Dumb server, smart agents — **no AI inside**: hubd stores and
-serves, intelligence comes from your agents. Human-readable everything. Zero
-dependencies. Read-only for the human; write access flows through rules.
+serves, intelligence comes from your agents. **Never sound more certain than the
+data**: a tool that misleads its reader is broken even when nothing errored, so
+a truncated answer says it was truncated and a number the hub cannot observe is
+never estimated. Human-readable everything. Zero dependencies. Read-only for
+the human; write access flows through rules.
 Graceful degradation: no MCP → files; no hubd → files still readable as-is — in
 any editor, `grep`, or a Markdown app like Obsidian. See
 [Reading your hub with any tool](docs/interop.md).
@@ -206,8 +223,10 @@ models from different vendors, coordinating through nothing but the files
 above. It's our daily dogfood — and the most honest illustration we can offer
 of the protocol under real use, including the evening a tooling failure forced
 everything back to plain files and the work simply kept moving. One team's
-story, lightly anonymized and self-reported, not a benchmark:
-[the case study](docs/case-study.md).
+story, lightly anonymized and self-reported, not a benchmark: twelve weeks of
+it in [field notes](docs/field-notes.md) — every mechanism that broke, and the
+bug that had every dashboard confidently agreeing on a number that was 72%
+invented — and one evening hour by hour in [the case study](docs/case-study.md).
 
 The human's main job was editing the rules.
 
