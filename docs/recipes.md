@@ -243,7 +243,17 @@ queue file names and `planck` in new ones took one node out of its own mesh for
 conflict that did not exist. Since 0.9.5 `hub doctor` counts the divergence from
 `origin` and names any colliding pair — including pairs that exist only in the
 remote's tree, which is the case that blocks you. The fix is always the same:
-remove one of the two paths from the mesh.
+remove one of the two paths from the mesh. Since 0.9.6 hubd will not create such
+a pair itself; a pair older than that still has to be retired by hand.
+
+**The one file that can conflict.** Journals, task events and queues are per-host
+and append-only, so a pull cannot conflict on them. Project cards are the
+exception: one mutable file that any node rewrites, so two nodes appending to the
+same section is a same-hunk change. The sync script aborts rather than leaving
+markers in your data, so the workflow is `git merge`, then `hub card resolve`,
+then commit. It unions the bullet-list hunks and leaves prose ones for you — and
+`hub doctor` shouts if a card is still carrying markers, because a reader hands
+those to an agent as content, not as an error.
 
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.

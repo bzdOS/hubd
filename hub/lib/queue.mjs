@@ -122,6 +122,49 @@ function nodeName() {
   return JOURNAL_NODE;
 }
 
+/* The queue file to write, given a role and a node — and never a SECOND spelling of one that
+ * already exists.
+ *
+ * The rename above was safe for readers and still cost a node its whole mesh. Two spellings of
+ * one host ("Planck" from the raw hostname, "planck" through JOURNAL_NODE) became two tracked
+ * paths, and on a case-insensitive filesystem two paths differing only by case are one file for
+ * two index entries: git can satisfy only one, `git add -A` stages nothing for the other, and
+ * every merge that must write it refuses. One machine sat 228 commits outside its own mesh while
+ * its sync retried every 60 seconds.
+ *
+ * Note where the guard actually does work: on a case-insensitive filesystem the OS already
+ * collapses the two names, so nothing there can create the pair. The nodes that CREATE it are the
+ * case-sensitive ones, which never feel the damage — it lands on whichever peer runs macOS or
+ * Windows. That asymmetry is why this went unnoticed for 228 commits, and why the check has to
+ * live on the write path rather than in the place that suffers.
+ *
+ * So creating the second spelling is the thing to prevent, and prevention belongs at the two
+ * places a queue file comes into existence — here. If a case-variant already exists, write to it.
+ * Whichever spelling arrived first wins, which is arbitrary but harmless: readers match
+ * <role>.<anything>.queue.md, cursors are keyed by file name, and one file per role and node is
+ * the whole invariant. `hub doctor` still reports any pair that predates this.
+ *
+ * The decision is a pure function over a list of names, deliberately. On the filesystem this test
+ * suite mostly runs on, the OS collapses the two names, so an integration test cannot tell a
+ * working guard from a missing one — removing the guard leaves every filesystem-level assertion
+ * passing. Only the case-sensitive nodes exercise the branch that matters, and they are the ones
+ * not running the tests. So the branch is separated out and tested on its own. */
+export function pickExistingVariant(names, want) {
+  const lower = want.toLowerCase();
+  for (const f of names) if (f !== want && f.toLowerCase() === lower) return f;
+  return null;
+}
+
+export function resolveQueueFile(qdir, role, node) {
+  const want = `${role}.${node}.queue.md`;
+  const exact = path.join(qdir, want);
+  if (fs.existsSync(exact)) return exact;
+  let names = [];
+  try { names = fs.readdirSync(qdir); } catch {}
+  const found = pickExistingVariant(names, want);
+  return found ? path.join(qdir, found) : exact;
+}
+
 /**
  * Deliver everything past `f`'s cursor and advance it — atomically w.r.t. other
  * waiters on the SAME cursor. Without the lock, two competing workers polling one
@@ -187,7 +230,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   const qdir = path.join(r, 'queues');
   fs.mkdirSync(qdir, { recursive: true });
   const nd = node || nodeName();
-  const qfile = path.join(qdir, `${role}.${nd}.queue.md`);
+  const qfile = resolveQueueFile(qdir, role, nd);
 
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
   // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
@@ -239,8 +282,10 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
   fs.mkdirSync(qdir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
 
-  // Ensure this node's own file exists (so a fresh waiter has a file to track).
-  const ownFile = path.join(qdir, `${role}.${nodeName()}.queue.md`);
+  // Ensure this node's own file exists (so a fresh waiter has a file to track). Through
+  // resolveQueueFile, so a waiter never creates a second spelling of a file already here — the
+  // other half of the deadlock, and the easier half to miss, since waiting looks read-only.
+  const ownFile = resolveQueueFile(qdir, role, nodeName());
   if (!fs.existsSync(ownFile)) fs.writeFileSync(ownFile, '', 'utf8');
 
   // Match <role>.queue.md (legacy) and <role>.<node>.queue.md (per-host). Node

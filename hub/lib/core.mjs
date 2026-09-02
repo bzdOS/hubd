@@ -331,6 +331,87 @@ export function readCard(name) {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
+export const CONFLICT_RE = /^<<<<<<< |^=======$|^>>>>>>> /m;
+
+/* Files left holding git conflict markers.
+ *
+ * Every OTHER shared file in a hub is per-node and append-only, so it cannot conflict. Project
+ * cards can: they are one mutable file that any node rewrites, and two nodes appending to the same
+ * section is a same-hunk change. The mesh script aborts on conflict rather than leaving markers,
+ * deliberately — but an abort is not the only way a merge ends, and a card that keeps its markers
+ * is worse than one that fails to merge. `<<<<<<<` in a card is not a broken file to a reader: it
+ * is CONTENT. readCard returns it, digestOf slices it, hub_context hands it to an agent, and the
+ * agent reads two contradictory versions of the project's state as though both were true.
+ *
+ * So this is checked out loud. Cheap — cards and resources only, the small files. */
+export function conflictedFiles() {
+  const out = [];
+  for (const dir of [PROJ, RESOURCES]) {
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(f => f.endsWith('.md')); } catch { continue; }
+    for (const f of names) {
+      try {
+        if (CONFLICT_RE.test(fs.readFileSync(path.join(dir, f), 'utf8'))) out.push(path.join(dir, f));
+      } catch {}
+    }
+  }
+  return out.sort();
+}
+
+/* Resolve a conflicted card the way a human resolving one actually reasons.
+ *
+ * A card's accumulating sections are bullet lists — Facts, Next step, decisions — and two nodes
+ * appending to one of them have not disagreed about anything. Both bullets are true; the conflict
+ * is an artefact of them landing in the same hunk. Union is the correct resolution, and it is what
+ * was done by hand three times in one hour before this existed.
+ *
+ * Prose is the opposite. A one-line digest, a heading, a paragraph: if both sides rewrote it, one
+ * of them meant to replace the other, and picking for them would be inventing a decision nobody
+ * made. Those hunks are left exactly as they are and named, so the file still fails the check and
+ * a person still has to look.
+ *
+ * Identical bullets on both sides collapse to one. That is the only lossy step, and it is the same
+ * reasoning as the log dedup: two byte-identical lines are indistinguishable to every reader. */
+export function resolveCardConflicts(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  let resolved = 0;
+  const unresolved = [];
+  const isBullet = (l) => /^\s*[-*+] \S/.test(l) || /^\s*$/.test(l);
+  let heading = '(top of file)';
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^## /.test(l)) heading = l.replace(/^##\s*/, '').trim();
+    if (!/^<<<<<<< /.test(l)) { out.push(l); continue; }
+    // Collect ours / theirs. A malformed hunk (no separator or no terminator) is left untouched:
+    // guessing at the shape of a half-written conflict is how a resolver corrupts a file.
+    let mid = -1, end = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (mid === -1 && lines[j] === '=======') mid = j;
+      else if (/^>>>>>>> /.test(lines[j])) { end = j; break; }
+    }
+    if (mid === -1 || end === -1) { out.push(l); continue; }
+    const ours = lines.slice(i + 1, mid);
+    const theirs = lines.slice(mid + 1, end);
+    if (ours.every(isBullet) && theirs.every(isBullet) && (ours.some(x => x.trim()) || theirs.some(x => x.trim()))) {
+      const seen = new Set(ours.map(x => x.trim()).filter(Boolean));
+      out.push(...ours);
+      for (const t of theirs) {
+        const k = t.trim();
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        out.push(t);
+      }
+      resolved++;
+    } else {
+      unresolved.push({ section: heading, ours: ours.length, theirs: theirs.length });
+      out.push(...lines.slice(i, end + 1));
+    }
+    i = end;
+  }
+  return { text: out.join('\n'), resolved, unresolved };
+}
+
 /* The "## Digest" body ends at the NEXT "## " heading — never at a literal "## Facts".
  * Cutting on that one name only worked for cards whose following section happens to be
  * Facts. On a hub that localises its sections (HUB/sections.json) or on any card_set card

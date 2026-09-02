@@ -1846,7 +1846,102 @@ ok(/one of each pair must leave the mesh/.test(collDoc.out),
   'doctor: and that no local commit can fix it, because the obvious remedies do not work');
 fs.rmSync(MSUP, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS]) fs.rmSync(d, { recursive: true, force: true });
+// ── never create a SECOND spelling of a queue file that already exists ───────
+/* Two spellings of one host ("Planck" from a raw hostname, "planck" through JOURNAL_NODE) became
+ * two tracked paths, and on a case-insensitive filesystem two paths differing only by case are one
+ * file for two index entries. git can satisfy one; `git add -A` stages nothing for the other; every
+ * merge that must write it refuses. One node sat 228 commits outside its own mesh while its sync
+ * retried every 60 seconds. Readers were always fine — that was the part checked at the time. */
+const QCOL = mktmp();
+fs.mkdirSync(path.join(QCOL, 'queues'), { recursive: true });
+const qcolDir = path.join(QCOL, 'queues');
+fs.writeFileSync(path.join(qcolDir, 'hv.Planck.queue.md'), '\n## 2026-09-01 10:00 · from orchestrator\nlegacy\n');
+/* The assertion is on the INVARIANT, not on the spelling that comes back. Where the filesystem is
+ * case-insensitive the OS already collapses the two names, so `exact` matches and the requested
+ * spelling is returned — and it is the same file. Where it is case-sensitive the scan finds the
+ * existing name. Both answers satisfy "one file per role and node"; only that is worth asserting,
+ * and only case-sensitive nodes can create the pair in the first place. */
+/* The decision itself, as a pure function over a list of names — the only way this branch can be
+ * tested here at all. On a case-insensitive filesystem the OS collapses the two names, so every
+ * filesystem-level assertion below passes with the guard removed entirely; the nodes that actually
+ * take this branch are the case-sensitive ones, and they are not the ones running these tests. */
+ok(queueLib.pickExistingVariant(['hv.Planck.queue.md', 'other.x.queue.md'], 'hv.planck.queue.md') === 'hv.Planck.queue.md',
+  'pickExistingVariant: finds the spelling already on disk');
+ok(queueLib.pickExistingVariant(['hv.planck.queue.md'], 'hv.planck.queue.md') === null,
+  'pickExistingVariant: the exact name is not a variant of itself');
+ok(queueLib.pickExistingVariant(['hv.fedora.queue.md', 'hvx.planck.queue.md'], 'hv.planck.queue.md') === null,
+  'pickExistingVariant: a different node or role is never treated as a case-variant');
+ok(queueLib.pickExistingVariant([], 'hv.planck.queue.md') === null,
+  'pickExistingVariant: an empty queues dir yields the canonical name');
+
+const qcolProbe = path.join(qcolDir, 'CaseProbe'); fs.writeFileSync(qcolProbe, '');
+const qcolInsensitive = fs.existsSync(path.join(qcolDir, 'caseprobe'));
+fs.rmSync(qcolProbe);
+ok(path.basename(queueLib.resolveQueueFile(qcolDir, 'hv', 'planck')) ===
+   (qcolInsensitive ? 'hv.planck.queue.md' : 'hv.Planck.queue.md'),
+  'resolveQueueFile: resolves to the file that already exists, whatever this filesystem calls it');
+ok(path.basename(queueLib.resolveQueueFile(qcolDir, 'hv', 'fedora')) === 'hv.fedora.queue.md',
+  'resolveQueueFile: a genuinely different node still gets its own file');
+ok(path.basename(queueLib.resolveQueueFile(qcolDir, 'other', 'planck')) === 'other.planck.queue.md',
+  'resolveQueueFile: a different role is not confused with one that exists');
+queueLib.queueSend('hv', 'sent after the rename', { from: 'dev-t', root: QCOL, node: 'planck' });
+const qcFiles = fs.readdirSync(qcolDir).filter(f => /^hv\./i.test(f)).sort();
+ok(qcFiles.length === 1 && qcFiles[0] === 'hv.Planck.queue.md',
+  `queueSend: appends to the existing file instead of creating a colliding pair (got ${qcFiles.join(', ')})`);
+ok(fs.readFileSync(path.join(qcolDir, 'hv.Planck.queue.md'), 'utf8').includes('sent after the rename'),
+  'queueSend: and the message really landed there');
+/* The other creation site, and the easier one to miss because waiting looks read-only: queueWait
+ * touches its own node's file so a fresh waiter has something to track. Named for THIS node's
+ * identity with the case flipped, which is exactly the shape the incident had. */
+const qcolOwn = core.JOURNAL_NODE;
+const qcolFlipped = qcolOwn.charAt(0).toUpperCase() + qcolOwn.slice(1);
+fs.writeFileSync(path.join(qcolDir, `hv3.${qcolFlipped}.queue.md`), '');
+queueLib.queueWait('hv3', { root: QCOL, timeoutSec: 0, subscriber: 'x' });
+const qcW = fs.readdirSync(qcolDir).filter(f => /^hv3\./i.test(f));
+ok(qcW.length === 1,
+  `queueWait: waiting does not create a second spelling either (got ${qcW.join(', ')})`);
+
+// ── a card is the one shared file that CAN conflict ──────────────────────────
+/* Every other shared file in a hub is per-node and append-only. A project card is one mutable file
+ * any node rewrites, so two nodes appending to the same section is a same-hunk change — three
+ * conflicts in one hour on one card. And markers left in a card are not a broken file to a reader:
+ * readCard returns them, hub_context hands them to an agent, and the agent reads two contradictory
+ * versions of the project as though both were true. */
+const CC = mktmp();
+core.setHubBase(CC);
+const ccCard = path.join(CC, 'projects', 'demo.md');
+fs.mkdirSync(path.dirname(ccCard), { recursive: true });
+const ccText = ['# demo', '', '## Digest', '<<<<<<< HEAD', 'our digest', '=======', 'their digest',
+  '>>>>>>> abc', '', '## Facts', '- fact: already here', '<<<<<<< HEAD', '- fact: ours',
+  '- fact: both wrote this', '=======', '- fact: both wrote this', '- fact: theirs', '>>>>>>> abc', ''].join('\n');
+fs.writeFileSync(ccCard, ccText);
+ok(core.conflictedFiles().length === 1 && core.conflictedFiles()[0] === ccCard,
+  'conflictedFiles: a card holding markers is found');
+const ccRes = core.resolveCardConflicts(ccText);
+ok(ccRes.resolved === 1 && ccRes.unresolved.length === 1 && ccRes.unresolved[0].section === 'Digest',
+  `resolveCardConflicts: unions the list hunk, refuses the prose one (got ${ccRes.resolved}/${JSON.stringify(ccRes.unresolved)})`);
+const ccLines = ccRes.text.split('\n');
+ok(ccLines.filter(l => l === '- fact: both wrote this').length === 1,
+  'resolveCardConflicts: a bullet both sides wrote appears once');
+ok(ccLines.includes('- fact: ours') && ccLines.includes('- fact: theirs'),
+  'resolveCardConflicts: and neither side loses its own bullet');
+ok(ccRes.text.includes('<<<<<<< HEAD') && ccRes.text.includes('our digest') && ccRes.text.includes('their digest'),
+  'resolveCardConflicts: the prose hunk is left byte-for-byte, both sides intact');
+/* A half-written hunk is left alone: guessing at the shape of one is how a resolver corrupts a
+ * file that a human could still have read. */
+const ccTorn = core.resolveCardConflicts('## Facts\n<<<<<<< HEAD\n- fact: a\n');
+ok(ccTorn.resolved === 0 && ccTorn.text === '## Facts\n<<<<<<< HEAD\n- fact: a\n',
+  'resolveCardConflicts: a hunk with no separator or terminator is not touched');
+const ccDoc = run('doctor', { HUBD_DIR: CC, HUBD_TEAM_DIR: CC });
+ok(/cards: +1 file\(s\) still hold git conflict markers/.test(ccDoc.out) && /hub card resolve/.test(ccDoc.out),
+  'doctor: names cards that still hold markers, and the command that fixes them');
+const ccCli = run('card resolve', { HUBD_DIR: CC, HUBD_TEAM_DIR: CC });
+ok(ccCli.code === 1 && /1 list hunk\(s\) unioned, 1 left for you/.test(ccCli.out),
+  `card resolve: exits non-zero while anything is left, so a script cannot mistake it for done (code ${ccCli.code})`);
+ok(/still conflicted in "Digest"/.test(ccCli.out),
+  'card resolve: and says which section a human still has to read');
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
