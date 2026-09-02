@@ -1623,7 +1623,101 @@ ok(pipedJson && pipedJson.tasks.length === 140,
   `pipe: a >64KB --json payload arrives whole and parses (${pipedJson ? pipedJson.tasks.length + ' tasks' : 'TRUNCATED at ' + piped.out.length + 'B'})`);
 fs.rmSync(PIPE, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL]) fs.rmSync(d, { recursive: true, force: true });
+// ── a mesh merge can duplicate lines in an append-only log, and every count believed them ──
+/* merge=union, the natural .gitattributes for logs like these, keeps BOTH sides of a conflicting
+ * hunk and never dedups — so a line present on both sides survives repeatedLine, and the next merge sees
+ * the doubled file as one side of the next union. Nothing errors anywhere: clean merge, valid
+ * JSONL, every line really written, append-only never violated. In the hub this was found in the
+ * journal held 27459 lines for 1916 entries and one task log 5359 for 519, and `hub doctor`
+ * reported the inflated figure as fact. */
+const DUP = mktmp();
+core.setHubBase(DUP);
+const dline = (ts, text) => JSON.stringify({ ts, project: 'p', agent: 'dev-t', kind: 'note', text });
+const repeatedLine = dline('2026-08-01 10:00', 'said once');
+fs.writeFileSync(path.join(DUP, 'journal.planck.jsonl'),
+  (repeatedLine + '\n').repeat(4) + dline('2026-08-01 10:05', 'said separately') + '\n');
+ok(core.journalTail(null, 50).length === 2,
+  `journal: four copies of one line read as ONE entry (got ${core.journalTail(null, 50).length})`);
+
+/* A node's month archives are the same log: journalAppend rotates journal.<node>.jsonl out to
+ * journal.<node>-<YYYY-MM>[.n].jsonl, and union left one archive a near-subset of the next —
+ * 1271 of 1272 lines shared, counted repeatedLine by every reader that globs journal*.jsonl. */
+fs.writeFileSync(path.join(DUP, 'journal.planck-2026-07.jsonl'), repeatedLine + '\n');
+fs.writeFileSync(path.join(DUP, 'journal.planck-2026-07.2.jsonl'), repeatedLine + '\n');
+ok(core.journalTail(null, 50).length === 2,
+  'journal: a line repeated across a node\'s live log and its month archives is still one entry');
+
+/* But never across nodes. A journal entry carries no node field, so the file name is the only
+ * place that distinction lives, and two machines writing one sentence really are two events. */
+fs.writeFileSync(path.join(DUP, 'journal.fedora.jsonl'), repeatedLine + '\n');
+ok(core.journalTail(null, 50).length === 3,
+  'journal: the same line under a DIFFERENT node is kept — dedup is per node, never global');
+
+/* And it keys on the whole line, not the timestamp: the journal stamps to the minute, so distinct
+ * entries routinely share a ts and collapsing those would delete real work. */
+fs.appendFileSync(path.join(DUP, 'journal.planck.jsonl'), dline('2026-08-01 10:00', 'other text, same minute') + '\n');
+ok(core.journalTail(null, 50).length === 4,
+  'journal: two different entries written in the same minute both survive');
+
+const jcounts = core.journalCounts();
+ok(jcounts.lines === 9 && jcounts.entries === 4 && jcounts.duplicate === 5,
+  `journalCounts: 9 lines on disk, 4 entries, 5 dropped (got ${jcounts.lines}/${jcounts.entries}/${jcounts.duplicate})`);
+const jdup = core.logDuplication().find(g => g.kind === 'journal' && g.node === 'planck');
+ok(jdup && jdup.lines === 8 && jdup.distinct === 3,
+  `logDuplication: names the inflated node log family (${jdup ? jdup.lines + '/' + jdup.distinct : 'missing'})`);
+ok(!core.logDuplication().some(g => g.node === 'fedora'),
+  'logDuplication: a clean log is not reported as duplicated');
+
+/* The task logs are where this actually cost work — union made the replays that the 0.9.2 fold
+ * bug then minted a task from, one per line. The fold is idempotent now, but a duplicated log
+ * still has to read as the events it holds and not as the lines it holds. */
+fs.writeFileSync(path.join(DUP, 'tasks.planck.events.jsonl'),
+  (JSON.stringify({ ts: '2026-08-02 09:00', node: 'planck', ev: 'add', id: 'planck-1',
+    t: { id: 'planck-1', project: 'p', text: 'one task', status: 'open' } }) + '\n').repeat(9));
+ok(core.foldTasks().tasks.length === 1,
+  `fold: nine duplicate lines of one add are one task (got ${core.foldTasks().tasks.length})`);
+const tdup = core.logDuplication().find(g => g.kind === 'tasks' && g.node === 'planck');
+ok(tdup && tdup.lines === 9 && tdup.distinct === 1,
+  `logDuplication: reports the task logs too (${tdup ? tdup.lines + '/' + tdup.distinct : 'missing'})`);
+
+/* Serving a corrected number over files that quietly keep the duplicates is the same lie one
+ * level down, so doctor prints the entry count AND the bloat AND what causes it. */
+const docDup = run('doctor', { HUBD_DIR: DUP, HUBD_TEAM_DIR: DUP });
+ok(/journal: +4 file\(s\), 4 entries/.test(docDup.out),
+  'doctor: the journal line counts ENTRIES a reader sees, not lines on disk');
+ok(/duplicate line\(s\)/.test(docDup.out) && /merge=union/.test(docDup.out),
+  'doctor: and it names the bloat and the cause instead of hiding the correction');
+
+// ── a cache folded by a buggy fold must not outlive the fix ───────────────────
+/* tasks.json is rebuilt when it is older than the newest event file, which can only ever notice
+ * NEW EVENTS. The case that misses is the one that matters most: a fix to the fold itself leaves
+ * every event byte-identical and every mtime untouched, so the wrong cache survives the upgrade
+ * and keeps being served as fact. On the hub 0.9.2 was found on, `hub doctor` still reported
+ * "977 open" after the phantom-task fix shipped — the corrected fold said 154. */
+const FV = mktmp();
+core.setHubBase(FV);
+const fvEvents = path.join(FV, 'tasks.planck.events.jsonl');
+fs.writeFileSync(fvEvents, JSON.stringify({ ts: '2026-08-03 09:00', node: 'planck', ev: 'add', id: 'planck-1',
+  t: { id: 'planck-1', project: 'p', text: 'real task', status: 'open' } }) + '\n');
+const past = new Date(Date.now() - 3600_000);
+fs.utimesSync(fvEvents, past, past);                    // events are OLD; the stale cache is fresh
+const phantoms = { seq: 9, tasks: [{ id: 1, project: 'p', text: 'phantom', status: 'open' },
+                                   { id: 2, project: 'p', text: 'phantom too', status: 'open' }] };
+fs.writeFileSync(path.join(FV, 'tasks.json'), JSON.stringify(phantoms));
+const fvTasks = core.loadTasks().tasks;
+ok(fvTasks.length === 1 && fvTasks[0].text === 'real task',
+  `loadTasks: a cache with no fold stamp is refolded, not trusted (got ${fvTasks.length}: ${fvTasks.map(t => t.text).join(', ')})`);
+ok(JSON.parse(fs.readFileSync(path.join(FV, 'tasks.json'), 'utf8')).foldVersion === core.VERSION,
+  'loadTasks: the rebuilt cache records the version that folded it');
+fs.writeFileSync(path.join(FV, 'tasks.json'), JSON.stringify({ ...phantoms, foldVersion: '0.0.1' }));
+fs.utimesSync(fvEvents, past, past);
+ok(core.loadTasks().tasks[0].text === 'real task',
+  'loadTasks: and a cache folded by a DIFFERENT version is refolded too');
+fs.utimesSync(fvEvents, past, past);
+ok(core.loadTasks().tasks.length === 1 && JSON.parse(fs.readFileSync(path.join(FV, 'tasks.json'), 'utf8')).foldVersion === core.VERSION,
+  'loadTasks: a cache stamped with the running version is served as-is');
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

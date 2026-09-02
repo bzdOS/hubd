@@ -218,6 +218,19 @@ next sync; task ids are node-scoped (`planck-3`), so offline adds can never
 collide. Runtime state (`tasks.json`, `HUBD.md`, `.qstate/`, `presence/`,
 `.env-state.json`) is gitignored automatically — each node keeps its own.
 
+**One warning about `.gitattributes`.** Single writer per file means pulls
+*normally* never conflict — but when one does (a restored backup, a rotated
+month archive, the same node's folder alive on two machines), `merge=union`
+looks like the obvious cure, and it is what this tool's own author reached for.
+It keeps both sides of the hunk instead of stopping to ask, so the sync never
+fails again. It also never deduplicates: a line present on both sides survives
+twice, the next merge sees the doubled file as one side of the next union, and
+it compounds without a word. One hub reached 27,464 journal lines holding 1,919
+entries. Since 0.9.3 readers drop byte-identical repeats and `hub doctor`
+reports the bloat and its cause, so your counts are right either way — but the
+files still grow, so prefer letting a genuine conflict stop the sync and fixing
+it once.
+
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.
 
