@@ -573,6 +573,78 @@ export function versionSkew() {
   };
 }
 
+/* ── Is the mesh actually syncing? ──
+ *
+ * The incident this exists for: one node's sync had been failing every 60 seconds for **228
+ * commits** of the other nodes' history. Its launchd job ran, wrote a line to a log file, exited
+ * non-zero, and was restarted a minute later to fail identically. Nothing else in hubd looked at
+ * that log, so `hub status`, `hub brief` and `hub doctor` all reported a healthy hub the whole
+ * time — a hub they were reading from a copy that had stopped receiving anyone else's work.
+ *
+ * A sync loop that keeps retrying is indistinguishable from a working one unless somebody counts
+ * the commits. So doctor counts them, from git rather than from the log: the log says whatever the
+ * script chose to say, and in this case the script's own diagnosis was wrong. */
+export function meshStatus() {
+  if (!fs.existsSync(path.join(HUB, '.git'))) return null;
+  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
+  const remotes = sh('git remote', HUB).split('\n').filter(Boolean);
+  if (!remotes.includes('origin')) return { branch, remote: null };
+  const counts = sh(`git rev-list --left-right --count origin/${branch}...HEAD`, HUB).split(/\s+/);
+  const behind = parseInt(counts[0], 10), ahead = parseInt(counts[1], 10);
+  // The script's last word, quoted rather than trusted: worth showing a human, but the counts
+  // above are what decides whether anything is wrong.
+  let lastError = null;
+  try {
+    const log = fs.readFileSync(path.join(HUB, '.mesh-sync.log'), 'utf8').split('\n').filter(l => l.trim());
+    for (let i = log.length - 1; i >= 0 && i > log.length - 40; i--) {
+      if (/mesh-sync: (REFUSED|.*failed)/.test(log[i])) { lastError = log[i].trim(); break; }
+    }
+  } catch {}
+  return {
+    branch, remote: 'origin',
+    behind: Number.isFinite(behind) ? behind : null,
+    ahead: Number.isFinite(ahead) ? ahead : null,
+    lastError,
+  };
+}
+
+/* Two tracked paths that differ only by case. On Linux they are two files; on macOS and Windows
+ * they are one, and git cannot check out the second without overwriting the first — so the merge
+ * refuses, every time, forever. That is what actually stopped the sync above.
+ *
+ * The pairs got there honestly. Queue files used to be named from the raw hostname while journals
+ * went through JOURNAL_NODE, which lowercases; unifying them on JOURNAL_NODE was correct and was
+ * argued carefully at the time, including why no message would be stranded (readers match
+ * <role>.<anything>.queue.md, so the old files are still read). What nobody examined was what two
+ * spellings of one node would mean to a case-insensitive filesystem three nodes away.
+ *
+ * Read from git, not from the directory: on the filesystem where this matters, the collision is
+ * invisible by definition — both names resolve to the same file. Only the index has both.
+ *
+ * And read the REMOTE's tree as well as this hub's index. The pair that blocks a merge usually
+ * arrived from another node and is not tracked here yet — which is the whole failure: the node
+ * cannot pull the commits that would give it the second name, so looking only at its own index
+ * finds nothing wrong with a hub that cannot sync. */
+export function caseCollisions() {
+  if (!fs.existsSync(path.join(HUB, '.git'))) return [];
+  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
+  const files = [
+    ...sh('git ls-files', HUB).split('\n'),
+    ...sh(`git ls-tree -r --name-only origin/${branch}`, HUB).split('\n'),
+  ].filter(Boolean);
+  const byLower = new Map();
+  for (const f of files) {
+    const k = f.toLowerCase();
+    let s = byLower.get(k);
+    if (!s) byLower.set(k, s = new Set());
+    s.add(f);
+  }
+  return [...byLower.entries()]
+    .filter(([, paths]) => paths.size > 1)
+    .map(([lower, paths]) => ({ lower, paths: [...paths].sort() }))
+    .sort((a, b) => (a.lower < b.lower ? -1 : 1));
+}
+
 function readTaskEvents() {
   const evs = [];
   for (const { e, node, idx } of readLogEntries(taskEventFiles(), taskEventNodeOf)) {

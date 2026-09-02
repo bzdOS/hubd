@@ -4,6 +4,59 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.5 — 2026-09-02
+
+Found by using 0.9.4's writer-version report on a live mesh, an hour after
+publishing it.
+
+- **One node had not received anyone else's work for 228 commits, and every
+  report called the hub healthy.** Its sync ran on a 60-second timer: commit,
+  pull, push. The pull failed, the job logged a line and exited non-zero, and a
+  minute later it was restarted to fail identically. Meanwhile `hub status`,
+  `hub brief` and `hub doctor` all read the local hub and found nothing wrong —
+  correctly, from a copy that had quietly stopped being part of the mesh. A sync
+  loop that keeps retrying is indistinguishable from a working one unless
+  somebody counts the commits.
+
+  `hub doctor` now counts them: `origin/<branch>: N behind, M ahead`, with a
+  warning that this hub is not receiving the other nodes' work. Read from git,
+  not from the sync log — the log says whatever the script decided to say, and
+  here the script's own diagnosis was wrong. The log's last complaint is quoted
+  underneath, as a human's clue rather than as the verdict.
+
+- **The cause: two tracked paths differing only by case.** Queue files used to be
+  named from the raw hostname while journals went through `HUBD_NODE`, which
+  lowercases. Unifying them was correct, and the safety argument at the time was
+  right too — readers match `<role>.<anything>.queue.md`, so nothing written
+  under the old name is stranded. What nobody examined was what *two spellings of
+  one node* mean to a case-insensitive filesystem three nodes away. Six pairs had
+  accumulated, e.g. `queues/hv.Planck.queue.md` and `queues/hv.planck.queue.md`.
+
+  On macOS or Windows the pair is **one file for two index entries**. Git maps the
+  file on disk to one of them; the other can never be satisfied. `git add -A`
+  stages nothing, `git commit` reports an empty commit, and any merge that has to
+  write the unsatisfiable path refuses — so the "resolve by hand" the sync kept
+  printing was not merely unclear advice, it was impossible advice. `hub doctor`
+  now names each pair and says plainly that no local commit can clear it: one of
+  the two has to leave the mesh.
+
+  The check reads the **remote's** tree as well as the local index, because the
+  pair that blocks a pull usually arrived from another node and is not tracked
+  here yet. Looking only at your own index finds nothing wrong with a hub that
+  cannot sync — which is exactly the state this was found in.
+
+- **`scripts/mesh-sync.sh` no longer misnames its own failure** (new exit 5). It
+  had one message for every kind of pull failure: `(real content conflict) —
+  resolve by hand`. That was wrong twice. Once for a missing git identity, where
+  the fix went into the code and the message was left saying the same wrong thing.
+  And once here, where git refuses *before* merging and no conflict exists at all.
+  Exit 5 is now "refused before merging, nothing conflicted", exit 2 stays for a
+  genuine content clash, and git's own output is printed instead of swallowed.
+
+- First tests for `mesh-sync.sh` (13 assertions), covering all four exits and
+  including a from-scratch reproduction of the case-collision deadlock. They skip
+  themselves on a case-sensitive filesystem, where it cannot happen.
+
 ## 0.9.4 — 2026-09-02
 
 - **`hub version` — the tool could not say what version it was.** No `version`

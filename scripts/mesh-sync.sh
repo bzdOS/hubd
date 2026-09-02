@@ -21,6 +21,10 @@
 #     CONFLICT that does not exist — a content clash that is really a missing name.
 #   * ABORT, NEVER HALF-MERGE (exit 2). Conflict markers inside journal or task files are
 #     corrupt hub data, not a thing to resolve later. Abort and leave it to a human.
+#   * NAME THE RIGHT FAILURE (exit 5 vs 2). A pull git REFUSES before merging is not a
+#     conflict, and telling a human to "resolve it by hand" sends them to fix nothing. Exit
+#     5 is that case — local changes, or two paths differing only by case, which no
+#     case-insensitive filesystem can hold. Exit 2 stays for a genuine content clash.
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
@@ -70,10 +74,29 @@ if git remote | grep -qx origin; then
   # identity injected on the pull too: the merge commit needs a committer, and a
   # node may have no global git user set (fedora hit exactly this — reported as a
   # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
-  if ! git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" pull --no-rebase --no-edit -q origin "$BR"; then
+  if ! PULL_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" pull --no-rebase --no-edit -q origin "$BR" 2>&1)"; then
     git merge --abort 2>/dev/null
-    echo "mesh-sync: pull/merge failed on $BR (real content conflict) — aborted; resolve by hand in $DIR" >&2
-    exit 2
+    [ -n "$PULL_OUT" ] && printf '%s\n' "$PULL_OUT" >&2
+    # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
+    # unconditionally, and it was wrong twice. Once for a missing git identity — the scar the
+    # comment above describes, where the fix went into the code and the message was left saying
+    # the same wrong thing. And once for two tracked paths differing only by case, where git
+    # refuses BEFORE merging anything, so there is no conflict to resolve and no amount of
+    # resolving by hand will help. One node retried that failure every 60 seconds for 228
+    # commits of everyone else's history, and the log said "resolve by hand" each time.
+    case "$PULL_OUT" in
+      *"would be overwritten by merge"*)
+        echo "mesh-sync: pull REFUSED on $BR before merging — nothing conflicted." >&2
+        echo "  Cause is local changes to a tracked file, or two paths differing only by case" >&2
+        echo "  (which a case-insensitive filesystem cannot both check out). Run: hub doctor" >&2
+        exit 5 ;;
+      *CONFLICT*)
+        echo "mesh-sync: real content conflict on $BR — aborted; resolve by hand in $DIR" >&2
+        exit 2 ;;
+      *)
+        echo "mesh-sync: pull failed on $BR (output above) — aborted; nothing was merged." >&2
+        exit 2 ;;
+    esac
   fi
   git push -q origin "$BR" || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
 fi

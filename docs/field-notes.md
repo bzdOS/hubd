@@ -330,6 +330,59 @@ its real size would be this whole post's failure mode one level down — so
 `hub doctor` now prints both figures, names every inflated log, and says what
 causes it. Every count in the Numbers section below is a distinct-line count.
 
+### 8. The node that left the mesh
+
+An hour after publishing the release that made versions observable, I used it.
+`hub doctor` on the laptop said what I expected about versions — and then, from
+a check added in the same release, said something I did not expect at all: this
+hub was **228 commits behind** the mesh.
+
+Not hours behind. Two hundred and twenty-eight commits of every other machine's
+work that this one had never received. Its sync ran on a 60-second timer:
+commit, pull, push. The pull had been failing every single time. The job logged
+a line, exited non-zero, and a minute later was restarted to fail identically.
+Nobody reads a log that says the same thing 20,000 times.
+
+And nothing else could have told me. `hub status`, `hub brief`, `hub doctor` all
+read the local hub and found it healthy — which it was. It was a perfectly
+healthy copy of a hub that had stopped being part of the mesh. A retrying sync
+loop is indistinguishable from a working one unless something counts the
+commits.
+
+The cause was a pair of file names. Queue files used to be named from the raw
+hostname, `Planck`, while journals went through the node variable, which
+lowercases: `planck`. Unifying them was correct, and the safety argument was
+right — readers match `<role>.<anything>.queue.md`, so no message written under
+the old name is stranded. I checked that carefully at the time. What I did not
+check was what two spellings of one node would mean, three machines away, to a
+filesystem that does not distinguish them.
+
+On macOS the pair is one file for two index entries. Git maps the file on disk
+to one of them; the other can never be satisfied by anything. `git add -A`
+stages nothing. `git commit` reports an empty commit. And any merge that has to
+write the unsatisfiable path refuses — so the sync's advice, printed 20,000
+times, was not merely unhelpful. It was impossible: *resolve by hand* a conflict
+that does not exist, in a state that no commit can leave.
+
+That message was wrong in a familiar way. It read `(real content conflict)`
+unconditionally, for every kind of pull failure. It had already been wrong once
+before, for a node with no git identity configured, and the fix then had gone
+into the code while the sentence was left saying the same wrong thing. The
+comment explaining that earlier scar sits three lines above the hardcoded
+diagnosis it should have corrected.
+
+So: the sync now distinguishes a refusal from a conflict and has its own exit
+code for it, git's own words get printed instead of swallowed, and `hub doctor`
+counts the divergence and names every colliding pair — including pairs that
+exist only in the remote's tree, which is the case that actually blocks you,
+because the node that cannot pull is the node that does not have the second
+name yet.
+
+Six pairs had accumulated. All six are on the far side of the mesh, and
+resolving them means choosing what happens to old queue messages, which is not
+a decision code gets to make for you. But the day one machine goes silent, the
+count says so in one line.
+
 ## What survived unchanged
 
 Not everything got rewritten. A few early choices took the full twelve weeks

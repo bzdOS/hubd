@@ -231,6 +231,20 @@ reports the bloat and its cause, so your counts are right either way — but the
 files still grow, so prefer letting a genuine conflict stop the sync and fixing
 it once.
 
+**One warning about mixed filesystems.** If any node runs macOS or Windows,
+never let two tracked paths differ only by case. On Linux they are two files; on
+a case-insensitive filesystem they are **one file for two index entries**, git
+can only ever satisfy one of them, and `git add -A` stages nothing while the
+other stays dirty forever. Every merge that must write the unsatisfiable path
+then refuses — permanently, with an error about local changes that no commit or
+stash can clear. This is not hypothetical: a hostname spelled `Planck` in old
+queue file names and `planck` in new ones took one node out of its own mesh for
+228 commits, while its sync loop retried every 60 seconds and reported a content
+conflict that did not exist. Since 0.9.5 `hub doctor` counts the divergence from
+`origin` and names any colliding pair — including pairs that exist only in the
+remote's tree, which is the case that blocks you. The fix is always the same:
+remove one of the two paths from the mesh.
+
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.
 
