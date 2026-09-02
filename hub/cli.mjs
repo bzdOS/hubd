@@ -20,6 +20,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
+  conflictedFiles, resolveCardConflicts,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
@@ -461,6 +462,17 @@ if (cmd === 'doctor') {
       if (mesh.lastError) console.log('            sync says: ' + mesh.lastError);
     }
   }
+  // Conflict markers in a card are not a broken file to a reader — they are content. readCard
+  // returns them, hub_context hands them to an agent, and the agent reads two contradictory
+  // versions of the project as though both were true.
+  const conflicted = conflictedFiles();
+  if (conflicted.length) {
+    warnings++;
+    console.log('  cards:    ' + conflicted.length + ' file(s) still hold git conflict markers - a reader');
+    console.log('            serves those as CONTENT. Fix with: hub card resolve');
+    for (const f of conflicted.slice(0, 6)) console.log('            ' + path.relative(HUB, f));
+  }
+
   const collisions = caseCollisions();
   if (collisions.length) {
     warnings++;
@@ -924,9 +936,39 @@ if (cmd === 'presence') {
   done(0);
 }
 
+/* `hub card resolve` — the one file in a hub that can conflict, resolved the way a human
+ * resolves it. Bullet-list hunks are unioned (two nodes appending facts have not disagreed);
+ * prose hunks are left alone and named, because if both sides rewrote a digest, one of them
+ * meant to replace the other and choosing would be inventing a decision. Exits non-zero while
+ * anything is left, so a script cannot mistake a partial resolution for a finished one. */
+if (cmd === 'card' && args[1] === 'resolve') {
+  const targets = args.slice(2).filter(a => !a.startsWith('-'));
+  const files = targets.length
+    ? targets.map(t => (t.includes('/') || t.endsWith('.md') ? path.resolve(t) : cardPath(t)))
+    : conflictedFiles();
+  if (!files.length) { console.log('No conflicted cards.'); done(0); }
+  let left = 0, touched = 0;
+  for (const f of files) {
+    let text;
+    try { text = fs.readFileSync(f, 'utf8'); } catch { console.log('  skip  ' + f + ' (unreadable)'); continue; }
+    const r = resolveCardConflicts(text);
+    if (!r.resolved && !r.unresolved.length) { console.log('  clean ' + path.basename(f)); continue; }
+    if (r.resolved) { fs.writeFileSync(f, r.text, 'utf8'); touched++; }
+    console.log('  ' + path.basename(f) + ': ' + r.resolved + ' list hunk(s) unioned' +
+      (r.unresolved.length ? ', ' + r.unresolved.length + ' left for you' : ''));
+    for (const u of r.unresolved) {
+      left++;
+      console.log('      still conflicted in "' + u.section + '" (' + u.ours + ' line(s) vs ' + u.theirs + ') - prose, not a list');
+    }
+  }
+  console.log(touched ? 'Rewrote ' + touched + ' card(s). Review, then commit.' : 'Nothing rewritten.');
+  if (left) console.log('note: ' + left + ' hunk(s) need a human — hubd will not pick which side replaces the other.');
+  done(left ? 1 : 0);
+}
+
 if (cmd === 'card') {
   const slug = args[1] && !args[1].startsWith('-') ? args[1] : null;
-  if (!slug) die('Usage: hub card <slug> -m "<digest>"');
+  if (!slug) die('Usage: hub card <slug> -m "<digest>"  |  hub card resolve [slug...]');
   const digest = getFlag('-m') || getFlag('--digest');
   if (!digest || typeof digest !== 'string') die('Digest required: hub card <slug> -m "<digest>"');
   const by = authorOrDie('--by');
@@ -1538,6 +1580,7 @@ else if (!cmd) {
     '  task done <id>',
     '  task list [-p proj] [--status open|done|all] [--json]',
     '  card <slug> -m "<digest>"        set a project card without a folder',
+    '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
     '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
     '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
     '  resource get <slug>              one resource + its in/out relationships',
