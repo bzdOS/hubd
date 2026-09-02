@@ -19,7 +19,7 @@ import {
   runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalCounts, logDuplication, versionSkew,
+  journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
@@ -445,6 +445,35 @@ if (cmd === 'doctor') {
       console.log('            WARNING ' + n.node + ': ' + n.versions.join(' and ') +
         ' both writing recently - two installs on one node');
     }
+  }
+
+  // A retrying sync loop looks exactly like a working one from inside the hub. One node's had
+  // been failing every 60 seconds for 228 commits of everyone else's history while every hubd
+  // report called the hub healthy, so the divergence is counted from git and printed here.
+  const mesh = meshStatus();
+  if (mesh && mesh.remote) {
+    const stuck = mesh.behind > 0 || mesh.ahead > 0;
+    console.log('  mesh:     ' + mesh.remote + '/' + mesh.branch + ': ' +
+      (stuck ? mesh.behind + ' behind, ' + mesh.ahead + ' ahead  WARNING' : 'in sync'));
+    if (stuck) {
+      warnings++;
+      console.log('            this hub is not receiving the other nodes\' work - the sync is not completing');
+      if (mesh.lastError) console.log('            sync says: ' + mesh.lastError);
+    }
+  }
+  const collisions = caseCollisions();
+  if (collisions.length) {
+    warnings++;
+    console.log('  paths:    ' + collisions.length + ' path pair(s) differ only by case');
+    for (const c of collisions.slice(0, 6)) console.log('            ' + c.paths.join('  +  '));
+    if (collisions.length > 6) console.log('            ... and ' + (collisions.length - 6) + ' more');
+    // Worth spelling out, because the obvious remedies do not work: a case-insensitive
+    // filesystem holds ONE file for the pair, git maps it to one index entry, and the other can
+    // never be satisfied. `git add -A` stages nothing, the commit is empty, and any merge that
+    // has to write the unsatisfiable path refuses. There is no local fix.
+    console.log('            a case-insensitive filesystem (macOS, Windows) holds one file for the pair,');
+    console.log('            so one index entry stays dirty forever and no merge can write it.');
+    console.log('            committing or stashing cannot clear it - one of each pair must leave the mesh.');
   }
 
   // team root

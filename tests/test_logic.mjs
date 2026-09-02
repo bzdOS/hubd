@@ -1783,7 +1783,70 @@ ok(/no version stamps yet/.test(run('doctor', { HUBD_DIR: wvEmpty, HUBD_TEAM_DIR
   'doctor: says the record is empty rather than printing a reassuring nothing');
 fs.rmSync(wvEmpty, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV]) fs.rmSync(d, { recursive: true, force: true });
+// ── a sync that keeps retrying looks exactly like one that works ─────────────
+/* One node's mesh-sync failed every 60 seconds for 228 commits of the other nodes' history. The
+ * job ran, logged a line, exited non-zero, and was restarted a minute later to fail identically —
+ * while hub status, hub brief and hub doctor all reported a healthy hub, because none of them
+ * looked. The divergence is read from git rather than from the log: the log says whatever the
+ * script decided to say, and in that incident the script's own diagnosis named the wrong cause. */
+const MS = mktmp();
+core.setHubBase(MS);
+ok(core.meshStatus() === null, 'meshStatus: a hub that is not a git repo reports nothing to sync');
+core.sh('git init -q -b main', MS);
+core.sh('git config user.email t@t && git config user.name t', MS);
+fs.writeFileSync(path.join(MS, 'journal.a.jsonl'), '{"ts":"2026-09-01 10:00","kind":"note","text":"x"}\n');
+core.sh('git add -A && git commit -q -m seed', MS);
+const msNoRemote = core.meshStatus();
+ok(msNoRemote && msNoRemote.remote === null && msNoRemote.branch === 'main',
+  'meshStatus: a hub with no origin is not a mesh member and is not warned about');
+
+const MSUP = mktmp();
+core.sh(`git clone -q "${MS}" "${MSUP}"`, MS);
+core.setHubBase(MSUP);
+core.sh('git config user.email t@t && git config user.name t', MSUP);
+ok(core.meshStatus().behind === 0 && core.meshStatus().ahead === 0,
+  'meshStatus: a fresh clone is in sync, and reports 0/0 rather than staying silent');
+fs.appendFileSync(path.join(MS, 'journal.a.jsonl'), '{"ts":"2026-09-01 11:00","kind":"note","text":"y"}\n');
+core.sh('git add -A && git commit -q -m more', MS);
+core.sh('git fetch -q origin', MSUP);
+const msBehind = core.meshStatus();
+ok(msBehind.behind === 1 && msBehind.ahead === 0,
+  `meshStatus: counts the commits this hub has not received (got ${msBehind.behind}/${msBehind.ahead})`);
+fs.writeFileSync(path.join(MSUP, '.mesh-sync.log'),
+  'mesh-sync: ok (n 2026-09-01 10:00, main)\nmesh-sync: pull/merge failed on main (bogus reason) - aborted\n');
+ok(core.meshStatus().lastError === 'mesh-sync: pull/merge failed on main (bogus reason) - aborted',
+  'meshStatus: quotes the sync\'s last complaint for a human, without trusting it for the verdict');
+const msDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
+ok(/mesh: +origin\/main: 1 behind, 0 ahead {2}WARNING/.test(msDoc.out) && /not receiving the other nodes/.test(msDoc.out),
+  'doctor: says out loud that the hub has stopped receiving the mesh');
+
+/* Two tracked paths differing only by case. On Linux they are two files; where it matters they are
+ * one, git maps it to a single index entry, and the other can never be satisfied — add -A stages
+ * nothing and every merge that must write it refuses. Read from the REMOTE's tree as well as this
+ * index, because the pair that blocks the pull usually arrived from another node and is not
+ * tracked here yet: looking only at the local index finds nothing wrong with a hub that cannot
+ * sync. That is precisely the state the incident was found in. */
+const csBlob = core.sh('printf "legacy\\n" | git hash-object -w --stdin', MS);
+core.sh(`git update-index --add --cacheinfo 100644,${csBlob},queues/r.Node.queue.md`, MS);
+core.sh(`git update-index --add --cacheinfo 100644,${csBlob},queues/r.node.queue.md`, MS);
+const csTree = core.sh('git write-tree', MS);
+const csCommit = core.sh(`git commit-tree ${csTree} -p HEAD -m pair`, MS);
+core.sh(`git update-ref refs/heads/main ${csCommit}`, MS);
+core.sh('git fetch -q origin', MSUP);
+const coll = core.caseCollisions();
+ok(coll.length === 1 && coll[0].paths.join(' ') === 'queues/r.Node.queue.md queues/r.node.queue.md',
+  `caseCollisions: finds a pair that exists only in the remote's tree (got ${JSON.stringify(coll)})`);
+core.setHubBase(MS);
+ok(core.caseCollisions().length === 1,
+  'caseCollisions: and finds it from the index too, on the node that can hold both');
+const collDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
+ok(/r\.Node\.queue\.md {2}\+ {2}queues\/r\.node\.queue\.md/.test(collDoc.out),
+  'doctor: prints the colliding pair');
+ok(/one of each pair must leave the mesh/.test(collDoc.out),
+  'doctor: and that no local commit can fix it, because the obvious remedies do not work');
+fs.rmSync(MSUP, { recursive: true, force: true });
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
