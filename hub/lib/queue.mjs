@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, withLock } from './core.mjs';
+import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, touchPresenceIfOwner, withLock } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -197,6 +197,9 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
+  // A queue reply is the one write that never touches the journal, and it is exactly how an
+  // owner answers a button — so presence would miss the human's most characteristic act.
+  touchPresenceIfOwner(sender);
   return qfile;
 }
 
