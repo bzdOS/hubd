@@ -1548,6 +1548,30 @@ ok(!jwLines.some(l => /→ edited$/.test(l)), 'journal: nothing falls back to th
 fs.rmSync(JW, { recursive: true, force: true });
 core.setHubBase(T0);
 
+// ── the one human in the fleet exists in presence too ──
+// Agents heartbeat because the protocol tells them to; nobody tells the owner anything, so a
+// board could show buttons waiting twelve days with no way to tell "away" from "here and not
+// answering". Nothing new is asked of the human: a write authored by a declared owner role IS
+// the evidence that a person acted.
+const OP = mktmp();
+fs.mkdirSync(path.join(OP, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(OP, 'owner-roles.json'), '["boss"]');
+core.setHubBase(OP);
+core.runReport({ project: 'p', by: 'dev-t', text: 'FACT: an agent wrote this' });
+ok(core.runPresence().agents.length === 0, 'owner presence: an agent write records nothing new');
+core.runReport({ project: 'p', by: 'boss', text: 'FACT: a card-only write, which never touches the journal' });
+const opAfter = core.runPresence().agents;
+ok(opAfter.length === 1 && opAfter[0].agent === 'boss' && opAfter[0].alive,
+  `owner presence: a declared owner's write puts the human on the roster (got ${JSON.stringify(opAfter.map(a => a.agent))})`);
+const opFirst = opAfter[0].last_seen;
+q.queueSend('worker', 'go ahead', { from: 'boss', root: OP, node: 'n1' });
+ok(core.runPresence().agents.find(a => a.agent === 'boss'),
+  'owner presence: answering a button counts too — a queue reply is the one write that never journals');
+ok(core.runPresence().agents[0].ttlMin > 15,
+  'owner presence: a person who answered an hour ago is still around in a way a polling loop is not');
+fs.rmSync(OP, { recursive: true, force: true });
+core.setHubBase(T0);
+
 // ── init does not scaffold a team into somebody's source checkout ──
 // Found by healthchecking 0.9.0: `hub init` with no argument took the cwd, and run from a code
 // repo it dropped AGENTS.md / INBOX.md / queues/ / specs/ in there, ready to be committed by

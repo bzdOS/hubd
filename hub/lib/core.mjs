@@ -622,7 +622,26 @@ export function journalAppendPrivate(entry) {
   return target;
 }
 
+/* The one human in the fleet was the only member of it who did not exist in `hub presence`.
+ * Agents heartbeat because the protocol tells them to; nobody tells the owner anything, so a
+ * board could show buttons waiting twelve days with no way to tell "away" from "here and not
+ * answering" — the two states that decide whether to wait or to route around them.
+ *
+ * Nothing new is asked of the human. A write authored by a declared owner role IS the evidence:
+ * they reported, closed a task, or replied in their queue, and that only happens when a person
+ * acted. Recorded from journalAppend, the choke point every write already passes through, so no
+ * caller has to remember it. TTL is longer than an agent's: a person who answered an hour ago is
+ * still around in a way a polling loop is not. */
+export function touchPresenceIfOwner(agent) {
+  try {
+    const who = String(agent ?? '').trim();
+    if (!who || !ownerRoles().includes(who)) return;
+    runHeartbeat({ agent: who, role: who, status: 'acted', ttlMin: 240 });
+  } catch {}
+}
+
 export function journalAppend(entry) {
+  if (entry && entry.agent) touchPresenceIfOwner(entry.agent);
   withLock(JOURNAL, () => {
     try {
       if (fs.existsSync(JOURNAL) && fs.statSync(JOURNAL).size > 2 * 1024 * 1024) {
@@ -1754,6 +1773,9 @@ export function runReport(a) {
     else journalAppend(entry);
     summary.note = true;
   }
+  // A report of pure FACT:/COMM:/NEXT: lines writes the CARD and never touches the journal, so the
+  // choke point inside journalAppend misses it — and filing one is unmistakably somebody acting.
+  touchPresenceIfOwner(by);
   return summary;
 }
 
