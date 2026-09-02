@@ -4,6 +4,61 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.3 — 2026-09-02
+
+- **A mesh merge could duplicate lines in an append-only log, and every count
+  believed them.** `merge=union` is the natural `.gitattributes` for logs like
+  these — keep both sides of a conflicting hunk instead of stopping to ask — and
+  for two machines appending *different* lines it is exactly right. What it does
+  not do is deduplicate: a line present on both sides survives twice, and the
+  next merge sees the doubled file as one side of the next union, so it
+  compounds. Nothing anywhere errors. Git reports a clean merge, the file is
+  still valid JSONL, every line in it is a line somebody really wrote, and
+  append-only was never violated — the log only grew, exactly as promised. Only
+  the counts are wrong, everywhere at once and all agreeing with each other,
+  which reads like corroboration rather than a fault. This is also what fed the
+  0.9.2 fold bug: union made the replays, the fold minted a task per replay.
+
+  Every read path now drops byte-identical repeats. Not the writer and not the
+  sync script: shrinking a log on disk would trip the append-only guard in
+  `scripts/mesh-sync.sh` on every other node, and the events were never wrong —
+  only the view built from them was. Byte-identical lines are indistinguishable
+  to every reader by construction, so keeping the first is lossless in the only
+  sense available, and the cost is stated rather than hidden: two genuinely
+  separate events that serialize identically (same node, same minute, same text)
+  now count once. Dedup is scoped per node log **family** — a node's live log
+  plus the month archives rotated out of it — and never across nodes, because a
+  journal entry carries no node field and the file name is the only place that
+  distinction lives.
+
+  On the hub this was found in: the journal read **27,464 lines as 1,919
+  entries**, one task log held 5,359 events for 519 distinct, single lines
+  appeared up to 33 times, and seven node log families were inflated. Scoping
+  the dedup per node rather than globally keeps three real events a global
+  `sort -u` would have merged.
+
+- **A cache folded by a buggy fold no longer outlives the fix.** `tasks.json` is
+  rebuilt when it is older than the newest event file, which can only ever
+  notice *new events* — and the case that misses is the one that matters most. A
+  fix to the fold itself leaves every event byte-identical and every mtime
+  untouched, so the wrong cache survives the upgrade and keeps being served as
+  fact. That is not hypothetical: after 0.9.2 shipped, `hub doctor` on the very
+  hub the bug was found on still reported **977 open tasks**; the corrected fold
+  said 154. The cache now carries the version that folded it and is refolded on
+  any mismatch — the same rule `HUBD.md` and `sections.json` already follow, for
+  the same reason. `hub doctor` also stopped reading the raw cache file and goes
+  through `loadTasks()` like everything else, because doctor is precisely where a
+  human checks the hub against their own expectations.
+
+- **`hub doctor` says the entry count, and says what it dropped.** The journal
+  line used to count lines on disk, so it reported the inflated figure as fact —
+  the exact failure this release is about, in the tool people run to check the
+  hub. It now prints entries a reader actually sees, plus a `logs:` block naming
+  each inflated node log, its raw and distinct counts, and the cause. Serving a
+  corrected number over files that quietly keep the duplicates would be the same
+  lie one level down. [recipes #7](docs/recipes.md) carries the same warning for
+  anyone setting up a mesh.
+
 ## 0.9.2 — 2026-09-02
 
 - **The owner exists in `hub presence`.** Agents heartbeat because the protocol

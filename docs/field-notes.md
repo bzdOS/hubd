@@ -288,11 +288,25 @@ reversible, because the mistake had never been written down as truth.
 Two things worth admitting about how it was found. First, I got there after two
 confident wrong guesses — a stale cache, then a cross-node id collision — both
 of which the data flatly refused; instrumenting the fold answered it in one
-run. Second, stage one is still open as I write this. Deduplication has to
-happen somewhere — on read, at sync time, or by replacing union with a merge
-driver that knows these lines are unique — and which of those is right is a
-design decision I haven't made yet. It is also why every count in the Numbers
-section below is a distinct-line count.
+run. Second, stage one was still open when this section was first drafted, and
+writing the Numbers section below is what closed it. Deduplication had three
+candidate homes and only one of them doesn't fight the design: shrinking a log
+on disk would trip the append-only guard in the sync script on every *other*
+node, and a custom git merge driver lives in per-clone config, which is exactly
+the rot of scar #6. So it went in the **reader**. Byte-identical lines are
+indistinguishable to every reader by construction, which makes keeping the
+first lossless in the only sense available — and the cost gets stated instead
+of buried: two genuinely separate events that serialize identically now count
+once. Scoping it per node rather than globally matters, too. A journal entry
+carries no node field, so the file name is the only place that distinction
+lives, and a global `sort -u` would have silently merged three events that two
+different machines really did both write.
+
+The files still carry the duplicates, and that part is deliberate. A reader that
+quietly served the corrected number over a directory growing at fourteen times
+its real size would be this whole post's failure mode one level down — so
+`hub doctor` now prints both figures, names every inflated log, and says what
+causes it. Every count in the Numbers section below is a distinct-line count.
 
 ## What survived unchanged
 
@@ -338,8 +352,8 @@ Honest limits, before the comments section finds them:
 Twelve weeks of data, one team, three nodes. Every count below is **distinct
 lines**, for the reason described in scar #7:
 
-- **1,916 journal entries** and **918 task events**. Count raw lines instead and
-  the very same files hand you 27,459 and 5,765. Both numbers come out of one
+- **1,919 journal entries** and **919 task events**. Count raw lines instead and
+  the very same files hand you 27,464 and 5,766. Both numbers come out of one
   directory and only one of them is real; the other is a sync artifact. I found
   that out while fact-checking this section, which is how scar #7 got written.
 - **354 queue messages across 63 queue files** — a good share of them throwaway
