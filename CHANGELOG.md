@@ -4,6 +4,49 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.7 — 2026-09-03
+
+Three places where hubd said more than it had seen.
+
+- **`hub doctor` no longer tells you to upgrade a node it cannot know is stale.**
+  The version-skew line read `installed here is X - upgrade that node`, and it was
+  wrong on a live hub the day it shipped: two nodes whose packages were *already*
+  current had simply not written since, so doctor sent a human to go and upgrade
+  what was done. From here, a node that upgraded and stayed quiet is
+  indistinguishable from one that never upgraded. So the line now reports what the
+  log says — `last wrote with X; this install is Y` — and states that caveat once,
+  out loud, instead of guessing past it.
+
+  The `ahead` direction keeps its verdict, because it is an observation and not an
+  inference: a stamp newer than this build cannot be produced by anything but newer
+  code, so *this copy is older than the mesh* is a fact.
+
+- **A malformed log line that cannot be repaired no longer warns forever.** 0.9.3's
+  own comment says a warning that can never be cleared is one a reader learns to
+  skip — and then doctor was set to nag about two malformed journal lines with no
+  legitimate repair: editing them rewrites an append-only log and trips the sync
+  guard on every peer.
+
+  The distinction that matters is not *malformed* but *still happening*. A torn
+  write at the tail of a live log means a writer is failing now and someone should
+  look. The same line with good entries appended after it is history. So
+  `journalCounts()` reports `malformedRecent` and only that warns; old ones are
+  stated with what a reader does about them (drops them) and why nothing else can
+  be.
+
+  The measure is how many good entries FOLLOW the line, not how far back it sits.
+  A line count cannot tell the difference: the first cut of this used a fixed window
+  of trailing lines and called two June-era lines at the head of a 58-line log
+  "happening NOW", because the whole file fitted inside the window.
+
+- **`scripts/mesh-sync.sh` bounds its network steps** (`HUBD_SYNC_TIMEOUT`, default
+  300s). It runs unattended on a timer, and `BatchMode`/`ConnectTimeout` cover ssh
+  but not git: a pull that blocks forever leaves a process nothing will ever clean
+  up and no line in the log to say so. Hitting the cap is a failed run, which the
+  next run retries — the same contract the script already had for a failed push.
+  Hosts without `timeout` keep the old behaviour rather than gaining a new failure
+  mode.
+
 ## 0.9.6 — 2026-09-02
 
 0.9.5 could *report* the deadlock it found. This stops it happening again, and

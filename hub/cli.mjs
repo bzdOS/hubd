@@ -396,8 +396,11 @@ if (cmd === 'doctor') {
 
   // Entries a reader actually sees, not lines on disk — a mesh merge can duplicate lines without
   // anything erroring, and this count used to report the inflated one. Both are printed.
+  // Only a malformed line that is still ARRIVING is actionable. An old one cannot be repaired at
+  // all — editing it rewrites an append-only file and trips the sync guard on every peer — so
+  // warning about it forever just teaches a reader to skip the warnings. State it, don't nag.
   const jc = journalCounts();
-  if (jc.malformed) warnings++;
+  if (jc.malformedRecent) warnings++;
 
   console.log('hub base:');
   console.log('  path:     ' + HUB);
@@ -406,7 +409,13 @@ if (cmd === 'doctor') {
   console.log('  tasks:    ' + openTasks + ' open' + (overdueTasks ? ', ' + overdueTasks + ' overdue' : ''));
   console.log('  claims:   ' + active.length + ' active, ' + expired + ' expired');
   console.log('  journal:  ' + jc.files + ' file(s), ' + jc.entries + ' entries' +
-    (jc.malformed ? ', ' + jc.malformed + ' malformed  WARNING' : ''));
+    (jc.malformed ? ', ' + jc.malformed + ' malformed' + (jc.malformedRecent ? '  WARNING' : '') : ''));
+  if (jc.malformedRecent)
+    console.log('            ' + jc.malformedRecent + ' of them in the last ' + 200 +
+      ' lines of a live log - a writer is tearing writes NOW');
+  else if (jc.malformed)
+    console.log('            all of them old: dropped on read, and not repairable without ' +
+      'rewriting an append-only log');
 
   // Duplicated log lines are invisible by construction: git reports a clean merge, the file stays
   // valid JSONL, and append-only was never broken. Readers drop the repeats, so say so out loud
@@ -431,16 +440,27 @@ if (cmd === 'doctor') {
   } else {
     console.log('  writers:  ' + skew.nodes.filter(g => g.last).map(g => g.node + ' ' + g.last).join(' - ') +
       (skew.nodes.some(g => !g.last) ? ' - unstamped: ' + skew.nodes.filter(g => !g.last).map(g => g.node).join(', ') : ''));
+    /* Report the observation, not a remedy inferred from it. "upgrade that node" was wrong on
+     * this hub the day it shipped: two nodes whose packages were ALREADY current simply had not
+     * written since, and doctor told a human to go and upgrade what was done. A node that
+     * upgraded and stayed quiet is indistinguishable, from here, from one that never upgraded —
+     * so the honest line is what the log says, and the caveat is stated once, out loud.
+     *
+     * The `ahead` direction is different and keeps its verdict: a stamp newer than this build
+     * cannot be produced by anything but newer code, so "this copy is older than the mesh" is
+     * observed, not guessed. */
     for (const n of skew.ahead) {
       warnings++;
-      console.log('            WARNING ' + n.node + ' wrote with ' + n.v + ' but this install is ' + VERSION +
-        ' - THIS copy is the stale one');
+      console.log('            WARNING ' + n.node + ' wrote with ' + n.v + ' (' + n.at + '); this install is ' +
+        VERSION + ' - THIS copy is older than the mesh');
     }
     for (const n of skew.behind) {
       warnings++;
-      console.log('            WARNING ' + n.node + ' last wrote with ' + n.v + ' (' + n.at + '), installed here is ' +
-        VERSION + ' - upgrade that node');
+      console.log('            WARNING ' + n.node + ' last wrote with ' + n.v + ' (' + n.at + '); this install is ' + VERSION);
     }
+    if (skew.behind.length)
+      console.log('            a node that upgraded but has not written since reads the same as one that' +
+        ' did not - check before upgrading');
     for (const n of skew.concurrent) {
       warnings++;
       console.log('            WARNING ' + n.node + ': ' + n.versions.join(' and ') +
