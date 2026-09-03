@@ -71,6 +71,7 @@ hub doctor           # hub base, team root, locks, queues, ghost queues, writer 
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
 hub queue gc         # list queues nobody ever consumed (--apply archives them)
+                     # (doctor flags work dispatched to a role with nobody home)
 hub now              # the ONE task to do next, and why it won
 hub agenda           # the day split by who can act: agent work vs owner buttons
 hub recall "<q>"     # ranked memory, every hit dated and flagged if stale

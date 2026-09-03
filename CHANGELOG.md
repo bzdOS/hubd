@@ -4,6 +4,35 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.8 — 2026-09-03
+
+- **`hub queue send` reported success when there was nobody to deliver to, and
+  nothing in the hub said otherwise.** A task dispatched to a role with no consumer
+  running is accepted, written, and counted — and then simply sits. On one hub two
+  roles were sent work twice in an afternoon; the only thing that ever noticed was a
+  third agent writing `REPEATED ESCALATION` in prose, hours later. A send that
+  cannot be delivered should not read like a send that was.
+
+  `hub doctor` now reports queues holding messages that nothing has taken, with no
+  agent present for the role. `queue gc`'s existing `ghost` predicate could not
+  cover this: it requires 30 days of age, which is the right threshold for "archive
+  this" and useless for "did anything happen". The two lists are complementary and
+  never double-count — stranded is the fresh case, ghost is the old one.
+
+  Owner queues are excluded. A human's queue waiting on a human is the system
+  working; only an agent role with nobody home is a fault.
+
+- **And the new line states its own scope, because the numbers diverge sharply.**
+  Cursors live in `.qstate/` and presence in `presence/`, and neither is mesh-synced
+  — deliberately, since three machines have three sets of readers. So the check can
+  only say *nothing here has taken these, and no agent for the role is running
+  here*, never *these were not delivered*. Measured on one mesh the same instant:
+  **473 messages across 41 queues** looked untaken from a laptop that consumes
+  almost nothing, and **53 across 18** from the node whose consumers actually hold
+  the cursors. The laptop's number is not wrong, it is answering a narrower
+  question, and the line says so rather than letting a reader assume the stronger
+  claim.
+
 ## 0.9.7 — 2026-09-03
 
 Three places where hubd said more than it had seen.

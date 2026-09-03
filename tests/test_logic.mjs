@@ -1135,6 +1135,39 @@ ok(byFile['ghost.n1.queue.md'].ghost === true, 'queue gc: a never-consumed old q
 ok(byFile['live.n1.queue.md'].ghost === false, 'queue gc: a queue with a cursor is spared');
 ok(byFile['boss.n1.queue.md'].ghost === false, 'queue gc: a human owner queue is spared (a person reads it as a file)');
 ok(byFile['tapped.n1.queue.md'].ghost === true, 'queue gc: a __watchall__ tap does not count as having consumed it');
+/* ── work dispatched to nobody ──
+ * `ghost` needs 30 days, which is right for "archive this" and useless for "did anything
+ * happen". A task sent to a role with no consumer running reports success, and the hub looks
+ * busy while nothing is happening: two roles on one hub were sent work twice in an afternoon
+ * and it just sat, noticed hours later only because a third agent wrote "REPEATED ESCALATION"
+ * in prose. So the same predicate without the age gate, reported separately. */
+const strandNow = '\n## ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' · from alice\nfresh work\n';
+fs.writeFileSync(path.join(QG, 'queues', 'nobodyhome.n1.queue.md'), strandNow);
+fs.writeFileSync(path.join(QG, 'queues', 'empty.n1.queue.md'), '');
+const stranded = q.strandedQueues({ root: QG, days: 30 });
+const strandedRoles = stranded.map(x => x.role);
+ok(strandedRoles.includes('nobodyhome'),
+  `strandedQueues: fresh messages with no consumer and no presence are reported at once (got ${strandedRoles.join(', ')})`);
+ok(!strandedRoles.includes('live'),
+  'strandedQueues: a queue with a cursor is not stranded — something is reading it');
+ok(!strandedRoles.includes('boss'),
+  'strandedQueues: an owner button is not stranded — a person is meant to be the slow part');
+ok(!strandedRoles.includes('empty'),
+  'strandedQueues: an empty file holds no message, so there is nothing to strand');
+ok(!strandedRoles.includes('ghost'),
+  'strandedQueues: an old one belongs to queue gc, not here — the two lists never double-count');
+const strandDoc = run('doctor', { HUBD_DIR: QG, HUBD_TEAM_DIR: QG });
+ok(/nothing here has taken, with no agent present for the role {2}WARNING/.test(strandDoc.out),
+  'doctor: says work was dispatched to nobody');
+/* The claim has to be bounded. Cursors live in .qstate/ and presence in presence/, neither of
+ * which is mesh-synced, so this node cannot see a consumer running on another one — and the
+ * numbers really do diverge: 473 messages looked untaken from a laptop, 53 from the node whose
+ * consumers actually hold the cursors. Printing the caveat is what keeps the line honest. */
+ok(/cursors and presence are per-node/.test(strandDoc.out),
+  'doctor: and says out loud that a consumer on another node is invisible from here');
+fs.rmSync(path.join(QG, 'queues', 'nobodyhome.n1.queue.md'));
+fs.rmSync(path.join(QG, 'queues', 'empty.n1.queue.md'));
+
 const gcDry = q.runQueueGc({ root: QG, days: 30 });
 ok(gcDry.apply === false && fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
   'queue gc: the dry run moves nothing');
