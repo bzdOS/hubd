@@ -1776,8 +1776,15 @@ ok(wvCon.some(n => n.node === 'twoinstalls' && n.versions.join(',') === '0.4.8,0
 const wvDoc = run('doctor', { HUBD_DIR: WV, HUBD_TEAM_DIR: WV });
 ok(/writers: +.*planck 0\.9\.2/.test(wvDoc.out),
   'doctor: prints which hubd wrote into each node log');
-ok(/THIS copy is the stale one/.test(wvDoc.out) && /two installs on one node/.test(wvDoc.out),
+ok(/THIS copy is older than the mesh/.test(wvDoc.out) && /two installs on one node/.test(wvDoc.out),
   'doctor: warns on both directions of skew and on two installs sharing a node');
+/* The `behind` direction must report what was SEEN, not a remedy inferred from it. "upgrade that
+ * node" was wrong on a live hub the day it shipped: two nodes whose packages were already current
+ * had simply not written since, and doctor sent a human to go and upgrade what was done. */
+ok(!/upgrade that node/.test(wvDoc.out),
+  'doctor: does not instruct an upgrade it cannot know is needed');
+ok(/has not written since reads the same as one that did not/.test(wvDoc.out),
+  'doctor: and says once why a quiet up-to-date node is indistinguishable from a stale one');
 const wvEmpty = mktmp();
 ok(/no version stamps yet/.test(run('doctor', { HUBD_DIR: wvEmpty, HUBD_TEAM_DIR: wvEmpty }).out),
   'doctor: says the record is empty rather than printing a reassuring nothing');
@@ -1940,6 +1947,43 @@ ok(ccCli.code === 1 && /1 list hunk\(s\) unioned, 1 left for you/.test(ccCli.out
   `card resolve: exits non-zero while anything is left, so a script cannot mistake it for done (code ${ccCli.code})`);
 ok(/still conflicted in "Digest"/.test(ccCli.out),
   'card resolve: and says which section a human still has to read');
+
+// ── a malformed line that cannot be repaired must not warn forever ───────────
+/* This tool's own comment says a warning that can never be cleared is one a reader learns to skip
+ * — and then doctor was set to nag about two malformed journal lines with no legitimate repair:
+ * editing them rewrites an append-only log and trips the sync guard on every peer.
+ *
+ * The distinction is not "malformed" but "still happening". A torn write at the TAIL of a live log
+ * means a writer is failing now. The same line with good entries appended after it is history. And
+ * the measure has to be entries-after, not a trailing line window: the first version of this used
+ * a 200-line window and called two June-era lines at the head of a 58-line log "happening NOW",
+ * because the whole file fitted inside the window. */
+const ML = mktmp();
+core.setHubBase(ML);
+const mlGood = (n) => Array.from({ length: n }, (_, i) =>
+  JSON.stringify({ ts: '2026-08-0' + (1 + (i % 9)) + '10:00', project: 'p', agent: 'dev-t', kind: 'note', text: 'ok' + i })).join('\n');
+// Torn line at the HEAD, 30 good entries after it: the writer plainly recovered.
+fs.writeFileSync(path.join(ML, 'journal.old.jsonl'), 'oject":"p","kind":"note"\n' + mlGood(30) + '\n');
+let mlc = core.journalCounts();
+ok(mlc.malformed === 1 && mlc.malformedRecent === 0,
+  `journalCounts: an old torn line counts as malformed but not as recent (got ${mlc.malformed}/${mlc.malformedRecent})`);
+ok(!/WARNING/.test(run('doctor', { HUBD_DIR: ML, HUBD_TEAM_DIR: ML }).out.split('\n').find(l => /journal:/.test(l)) || ''),
+  'doctor: an unrepairable old line is stated, not turned into a permanent warning');
+ok(/not repairable without rewriting an append-only log/.test(run('doctor', { HUBD_DIR: ML, HUBD_TEAM_DIR: ML }).out),
+  'doctor: and it says why nothing can be done about it');
+// Torn line at the TAIL of a live log: a writer is failing right now.
+fs.appendFileSync(path.join(ML, 'journal.old.jsonl'), 'oject":"p","kind":"task"\n');
+mlc = core.journalCounts();
+ok(mlc.malformed === 2 && mlc.malformedRecent === 1,
+  `journalCounts: a tear at the tail IS recent (got ${mlc.malformed}/${mlc.malformedRecent})`);
+const mlDoc = run('doctor', { HUBD_DIR: ML, HUBD_TEAM_DIR: ML });
+ok(/journal:.*malformed  WARNING/.test(mlDoc.out) && /a writer is tearing writes NOW/.test(mlDoc.out),
+  'doctor: warns, loudly, only while it is still happening');
+// The same tear inside a month-archive is closed history: journalAppend only renames INTO one.
+fs.writeFileSync(path.join(ML, 'journal.old-2026-07.jsonl'), mlGood(3) + '\noject":"p","kind":"note"\n');
+ok(core.journalCounts().malformedRecent === 1,
+  'journalCounts: a tear at the end of a month-archive is history, whatever its position');
+fs.rmSync(ML, { recursive: true, force: true });
 
 for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);

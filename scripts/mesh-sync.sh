@@ -28,6 +28,10 @@
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
+#   * BOUND THE NETWORK STEPS. Unattended on a timer, a git that blocks forever leaves a
+#     process nothing will clean up and no line in the log to say so. BatchMode and
+#     ConnectTimeout cover ssh, not git. HUBD_SYNC_TIMEOUT (default 300s) caps pull and
+#     push; hitting the cap is a failed run that the next one retries.
 #
 # Per-host files are what make this work at all: journal.<node>.jsonl,
 # tasks.<node>.events.jsonl and queues/<role>.<node>.queue.md have exactly one writer
@@ -42,6 +46,21 @@
 set -u
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
+
+# Bound the network steps. This runs unattended on a timer, and a git that blocks forever -- a
+# wedged pull, an unresponsive peer, a filesystem that stops answering -- leaves a process nothing
+# will ever clean up and no line in the log to say so. BatchMode and ConnectTimeout above cover
+# ssh; they do not cover git itself. A run that hits the cap exits non-zero and the next one
+# retries, which is the same contract as a failed push.
+#
+# `timeout` is in FreeBSD base and GNU coreutils, but not everywhere: without it, no wrapper. That
+# is the old behaviour, so a host that lacks it is no worse off than before.
+if command -v timeout >/dev/null 2>&1; then
+  GIT_MAX="${HUBD_SYNC_TIMEOUT:-300}"
+  g() { timeout "$GIT_MAX" git "$@"; }
+else
+  g() { git "$@"; }
+fi
 
 DIR="${HUBD_DIR:-$HOME/.hubd}"
 cd "$DIR" 2>/dev/null || { echo "mesh-sync: missing $DIR" >&2; exit 1; }
@@ -74,7 +93,7 @@ if git remote | grep -qx origin; then
   # identity injected on the pull too: the merge commit needs a committer, and a
   # node may have no global git user set (fedora hit exactly this — reported as a
   # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
-  if ! PULL_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" pull --no-rebase --no-edit -q origin "$BR" 2>&1)"; then
+  if ! PULL_OUT="$(g -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" pull --no-rebase --no-edit -q origin "$BR" 2>&1)"; then
     git merge --abort 2>/dev/null
     [ -n "$PULL_OUT" ] && printf '%s\n' "$PULL_OUT" >&2
     # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
@@ -98,6 +117,6 @@ if git remote | grep -qx origin; then
         exit 2 ;;
     esac
   fi
-  git push -q origin "$BR" || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
+  g push -q origin "$BR" || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
 fi
 echo "mesh-sync: ok ($NODE $STAMP, $BR)"
