@@ -538,28 +538,63 @@ export function logDuplication() {
 /** What `hub doctor` says about the journal: raw lines on disk vs entries a reader actually sees.
  *  The two diverge when a mesh merge duplicated lines, so reporting only one of them would hide
  *  either the bloat or the correction. Counts distinct-per-node, exactly as readLogEntries does. */
+/* `malformedRecent` exists because of a rule this tool states about itself and then broke: a
+ * warning that can never be cleared is one a reader learns to skip, which costs more than the
+ * warning is worth. Two malformed lines — a stray plain-text line and a write torn mid-key — sat
+ * in one node's journal, and there is no legitimate repair: editing them would rewrite an
+ * append-only file and trip the sync guard on every peer. So doctor was set to nag about them
+ * forever, in the same release whose own comment forbids exactly that.
+ *
+ * The distinction that matters is not "is it malformed" but "is it STILL HAPPENING". A torn write
+ * at the tail of a live log means a writer is failing now and someone should look. The same line
+ * with a hundred good entries appended after it is history: the writer plainly recovered, readers
+ * already drop the line, and nothing can be done. Recent ones warn; old ones are stated and left.
+ *
+ * The measure is HOW MANY GOOD ENTRIES FOLLOW IT, not how far back it sits in the file. A line
+ * count cannot tell the difference: the first version of this counted a fixed window of trailing
+ * lines, which called two June-era lines at the head of a 58-line log "happening NOW" simply
+ * because the whole file fitted inside the window. Entries-after is scale-free. */
+const MALFORMED_SETTLED_AFTER = 20;
+
 export function journalCounts() {
   const files = journalFiles();
   const seen = new Map();
-  let lines = 0, entries = 0, malformed = 0;
+  let lines = 0, entries = 0, malformed = 0, malformedRecent = 0;
   for (const f of files) {
-    const node = journalNodeOf(path.basename(f));
+    const base = path.basename(f);
+    const node = journalNodeOf(base);
+    // A month-archive is closed history — journalAppend only ever renames INTO one.
+    const archived = /-\d{4}-\d{2}(\.\d+)?\.jsonl$/.test(base);
     let dup = seen.get(node);
     if (!dup) seen.set(node, dup = new Set());
     try {
-      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-        const line = l.trim();
+      const all = fs.readFileSync(f, 'utf8').split('\n');
+      // Good entries following each position, so "did the writer recover after this" is answerable
+      // without a second pass per malformed line.
+      const goodAfter = new Array(all.length + 1).fill(0);
+      for (let i = all.length - 1; i >= 0; i--) {
+        let ok = false;
+        const t = all[i].trim();
+        if (t) { try { JSON.parse(t); ok = true; } catch {} }
+        goodAfter[i] = goodAfter[i + 1] + (ok ? 1 : 0);
+      }
+      for (let i = 0; i < all.length; i++) {
+        const line = all[i].trim();
         if (!line) continue;
         lines++;
         if (dup.has(line)) continue;
         dup.add(line);
-        try { JSON.parse(line); entries++; } catch { malformed++; }
+        try { JSON.parse(line); entries++; }
+        catch {
+          malformed++;
+          if (!archived && goodAfter[i + 1] < MALFORMED_SETTLED_AFTER) malformedRecent++;
+        }
       }
     } catch {}
   }
   let distinct = 0;
   for (const s of seen.values()) distinct += s.size;
-  return { files: files.length, lines, entries, malformed, duplicate: lines - distinct };
+  return { files: files.length, lines, entries, malformed, malformedRecent, duplicate: lines - distinct };
 }
 
 // Numeric compare, not string: '0.9.10' is NEWER than '0.9.2' and sorts before it as text.
