@@ -25,7 +25,7 @@ import {
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, strandedQueues, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -585,6 +585,26 @@ if (cmd === 'doctor') {
         } catch {}
 
         console.log(line);
+      }
+      /* Work dispatched to a role with nobody on the other end. The ghost roll-up below needs
+       * 30 days, which is right for "archive this" and useless for "did anything happen": two
+       * roles here were sent work twice in one afternoon and it just sat, and the only thing
+       * that noticed was a third agent writing "REPEATED ESCALATION" in prose hours later.
+       *
+       * The caveat is printed, not implied. Cursors and presence are both node-local and never
+       * mesh-synced, so this says "nothing HERE took these" — a consumer on another machine is
+       * invisible from this one. */
+      const stranded = strandedQueues({ root: teamRoot });
+      if (stranded.length) {
+        warnings++;
+        const msgs = stranded.reduce((n, s) => n + s.messages, 0);
+        console.log('  ' + msgs + ' message(s) in ' + stranded.length +
+          ' queue(s) nothing here has taken, with no agent present for the role  WARNING');
+        for (const s of stranded.slice(0, 6))
+          console.log('    ' + s.role + (s.node ? ' (' + s.node + ')' : '') + ': ' + s.messages +
+            ' msg, newest ' + (s.newest || 'n/a') + ', ' + s.ageDays + 'd old');
+        if (stranded.length > 6) console.log('    ... and ' + (stranded.length - 6) + ' more');
+        console.log('    cursors and presence are per-node: a consumer on another machine does not show up here');
       }
       // Ghost roll-up: files nobody ever consumed, nobody is present for, and that are not a
       // human's queue. They inflate every pending number in the hub until they are archived.

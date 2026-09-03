@@ -670,6 +670,28 @@ export function queueInventory({ root, days = 30 } = {}) {
   });
 }
 
+/* Queues holding messages that nobody has taken, RIGHT NOW — not in thirty days.
+ *
+ * `ghost` above needs ageDays >= 30, which is the correct threshold for "archive this" and the
+ * wrong one for "did anything happen". The case it misses is the one that costs work: a task is
+ * dispatched to a role with no consumer running, `hub queue send` reports success, and the hub
+ * looks busy while nothing is happening. On this hub two roles were sent work twice in one
+ * afternoon and it sat there; the only thing that ever noticed was a third agent writing
+ * "REPEATED ESCALATION" in prose, hours later. A send that cannot be delivered should not read
+ * as a send that was.
+ *
+ * Scope, stated because it bounds the claim: BOTH inputs are node-local. Cursors live in
+ * .qstate/ and presence/ in presence/, and neither is mesh-synced — by design, since three
+ * machines have three sets of readers. So this answers "nothing here has taken these, and no
+ * agent for the role is running here", never "these were not delivered anywhere". A consumer on
+ * another node is invisible from this one, and the caller has to say so rather than let a reader
+ * assume the stronger claim. */
+export function strandedQueues({ root, days = 30 } = {}) {
+  return queueInventory({ root, days })
+    .filter(x => x.messages > 0 && !x.read && !x.lastSeen && !x.isOwner && !x.ghost)
+    .sort((a, b) => b.messages - a.messages || (a.file < b.file ? -1 : 1));
+}
+
 /**
  * One host-agnostic ledger of a role's traffic: how much has been DELIVERED and how much is
  * still pending, aggregated across every per-host file.
