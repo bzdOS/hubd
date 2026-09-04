@@ -19,3 +19,17 @@ the moment the product moves).
 **Harvest** is a first-class prompt now: pick `harvest` from your MCP client, or
 run `hub harvest` — no need to fetch a file. Server inventory →
 [inventory.md](inventory.md).
+
+## Running a fleet, not a session
+
+The blocks above wire hubd into one tool. [fleet/](fleet/) wires the **team**:
+what an agent may change, who owns a queue, who creates tasks, how work is
+placed across machines, and how a model's death is told apart from its silence.
+Every rule there is stated with the incident that earned it.
+
+| Role | File |
+|---|---|
+| every role | [fleet/boundaries.md](fleet/boundaries.md) |
+| worker | [fleet/worker.md](fleet/worker.md) |
+| orchestrator | [fleet/orchestrator.md](fleet/orchestrator.md) |
+| orchestrator (model choice) | [fleet/model-routing.md](fleet/model-routing.md) |
