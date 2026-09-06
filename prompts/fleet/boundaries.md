@@ -103,3 +103,54 @@ observed, and say plainly when a step was skipped or failed.
 > contain the input box, so it declared failure when text had landed and success
 > when nothing had been sent. Hours of "the agents are not responding" were
 > hours of a delivery mechanism lying in both directions.
+
+A success check must test the **effect**, and it must be able to fail. A check
+written so that it always passes is worse than no check: it converts an
+unverified action into a confident false report.
+
+> **Scar.** A routing tool called a function returning a dictionary and tested
+> it with "is not False". The condition was true whatever happened, so the tool
+> announced delivery to two orchestrators while nothing had been written to any
+> queue. Caught only by comparing file timestamps by hand. The same hour, a
+> daemon restart was reported as done while the restart command had failed and
+> the old process kept serving stale code for half an hour.
+
+## 10. Kill by identity, never by pattern.
+
+Target a process by its exact pid, after printing what that pid is. Pattern
+kills (`pkill -f`, `killall`) match things you did not enumerate, including your
+own shell and other people's work.
+
+> **Scar.** Two pattern kills on a live node during a cleanup each killed the
+> operator's own session — the connection dropped with an error that looked
+> unrelated — and could as easily have killed an agent mid-write. Nothing about
+> the pattern was checked before firing it.
+
+Wide scans belong to the same family: never walk a filesystem from `/` on a
+shared node. Enumerate the directories you actually mean.
+
+## 11. Ask the node for headroom before you add load.
+
+An agent session costs memory and process slots — its own tool servers included.
+A node whose memory is committed to guests has less room than its specification
+suggests. Check free memory and pid count before starting sessions, batching
+calls, or launching a build; if there is no room, say so instead of starting
+something that cannot work.
+
+> **Scar.** A cleanup tool opened one ssh connection per message it re-sent —
+> sixty in a burst, each spawning a hub CLI process on the far side — and four
+> agent sessions were restarted within minutes on a hypervisor already hosting
+> four guests. The node stopped being able to fork: sshd accepted TCP and closed
+> every connection before the banner. The whole fleet became unobservable, and
+> recovery needed the hosting panel because the machine has no local console.
+> The tool that was repairing the fleet is what took it down.
+
+Batch remote work into one connection, stagger anything that starts processes,
+and treat "one operation per remote call" as a defect.
+
+## 12. Announce an irreversible step before taking it.
+
+Archiving shared state, resetting read offsets, killing a session you did not
+start, retiring a role: one line saying what you are about to do to what, then
+do it. Being right about the action does not remove the need to say it — other
+agents depend on that state, and a silent change looks to them like corruption.
