@@ -1168,6 +1168,77 @@ ok(/cursors and presence are per-node/.test(strandDoc.out),
 fs.rmSync(path.join(QG, 'queues', 'nobodyhome.n1.queue.md'));
 fs.rmSync(path.join(QG, 'queues', 'empty.n1.queue.md'));
 
+/* ── a purged queue must not re-deliver what survived it ──
+ * Cursors are byte offsets, and a shrunken file used to reset them to 0 — right for a file that
+ * was RECREATED, wrong for one that was PURGED. Purging is routine: two commits on one mesh
+ * removed 15531 and 13422 lines of consumed messages, because the files had grown past fifteen
+ * thousand lines and hubd has no compaction. Every surviving block was then delivered again,
+ * silently, to workers whose contract is at-most-once. See docs/queue-invariant.md. */
+const WM = mktmp();
+fs.mkdirSync(path.join(WM, 'queues'), { recursive: true });
+fs.mkdirSync(path.join(WM, '.qstate'), { recursive: true });
+const wmQ = path.join(WM, 'queues', 'w.n1.queue.md');
+const wmOff = path.join(WM, '.qstate', 'w.n1.queue.md.offset');
+const blk = (ts, txt) => `\n## ${ts} · from alice\n${txt}\n`;
+fs.writeFileSync(wmQ, blk('2026-09-01 10:00', 'one') + blk('2026-09-01 10:01', 'two'));
+const wmFirst = await q.queueWait('w', { timeout: 1, root: WM });
+ok(wmFirst.changed && /one/.test(wmFirst.text) && /two/.test(wmFirst.text),
+  'watermark: a first drain delivers everything');
+const wmCur = fs.readFileSync(wmOff, 'utf8');
+ok(/^\d+\n## 2026-09-01 10:01 · from alice\n?$/.test(wmCur),
+  `cursor file: offset on line 1, the last delivered header on line 2 (got ${JSON.stringify(wmCur)})`);
+/* Format-compatible on purpose: every existing reader does parseInt(trim(contents)), parseInt
+ * stops at the first non-digit, so an older hubd on the same node still reads the offset. */
+ok(parseInt(wmCur.trim(), 10) === fs.statSync(wmQ).size,
+  'cursor file: an old reader parseInt()s it to exactly the byte offset, ignoring the watermark');
+
+// PURGE: drop the first block, keep the second — the watermark is still in the file.
+fs.writeFileSync(wmQ, blk('2026-09-01 10:01', 'two'));
+ok(!(await q.queueWait('w', { timeout: 1, root: WM })).changed,
+  'watermark: after a purge that kept the last delivered block, nothing is re-delivered');
+ok(parseInt(fs.readFileSync(wmOff, 'utf8').trim(), 10) === fs.statSync(wmQ).size,
+  'watermark: and the cursor resumes at the end of that block, not at 0');
+fs.appendFileSync(wmQ, blk('2026-09-01 10:02', 'three'));
+const wmNext = await q.queueWait('w', { timeout: 1, root: WM });
+ok(wmNext.changed && /three/.test(wmNext.text) && !/two/.test(wmNext.text),
+  'watermark: the next append is delivered, and only it');
+
+// PURGE PAST the watermark: it went too, so every remaining block postdates it.
+fs.writeFileSync(wmQ, blk('2026-09-01 11:00', 'later'));
+const wmAfter = await q.queueWait('w', { timeout: 1, root: WM });
+ok(wmAfter.changed && /later/.test(wmAfter.text),
+  'watermark: when the watermark itself was purged, what remains is newer and IS delivered');
+
+/* A repeated header is possible — timestamps are minute-resolution, so one sender can write two
+ * identical ones. Take the LAST, erring toward delivering less rather than twice. */
+fs.writeFileSync(wmQ, blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:00', 'dup'));
+fs.writeFileSync(wmOff, `${fs.statSync(wmQ).size}\n## 2026-09-02 09:00 · from alice\n`);
+fs.writeFileSync(wmQ, blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:05', 'new'));
+fs.writeFileSync(wmOff, `999999\n## 2026-09-02 09:00 · from alice\n`);
+const wmDup = await q.queueWait('w', { timeout: 1, root: WM });
+ok(!wmDup.changed || !/dup/.test(wmDup.text),
+  'watermark: a repeated header resolves to its LAST occurrence, so nothing already seen repeats');
+
+/* A cursor written before 0.9.9 has no watermark. Behaviour is unchanged — reset to 0 — but it is
+ * now disclosed instead of silent, because there is genuinely no information to do better with. */
+fs.writeFileSync(wmQ, blk('2026-09-03 08:00', 'legacy-a') + blk('2026-09-03 08:01', 'legacy-b'));
+fs.writeFileSync(wmOff, '999999');
+const trims = q.outOfBandTrims({ root: WM });
+ok(trims.length === 1 && trims[0].file === 'w.n1.queue.md' && trims[0].hasMark === false,
+  `outOfBandTrims: a cursor past the end of its file is found, and its missing watermark noted (got ${JSON.stringify(trims)})`);
+const wmLegacy = await q.queueWait('w', { timeout: 1, root: WM });
+ok(wmLegacy.changed && /legacy-a/.test(wmLegacy.text),
+  'watermark: with no watermark there is nothing to do better than restart from 0');
+ok(q.outOfBandTrims({ root: WM }).length === 0,
+  'outOfBandTrims: a healthy cursor is not reported');
+const wmDoc = run('doctor', { HUBD_DIR: WM, HUBD_TEAM_DIR: WM });
+fs.writeFileSync(wmOff, '999999');
+ok(/trimmed outside hubd {2}WARNING/.test(run('doctor', { HUBD_DIR: WM, HUBD_TEAM_DIR: WM }).out),
+  'doctor: names queue files trimmed outside hubd');
+ok(/NO watermark — will restart from 0/.test(run('doctor', { HUBD_DIR: WM, HUBD_TEAM_DIR: WM }).out),
+  'doctor: and says which of them will re-deliver, rather than letting it happen quietly');
+fs.rmSync(WM, { recursive: true, force: true });
+
 const gcDry = q.runQueueGc({ root: QG, days: 30 });
 ok(gcDry.apply === false && fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
   'queue gc: the dry run moves nothing');
