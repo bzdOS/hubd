@@ -25,7 +25,7 @@ import {
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, strandedQueues, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -594,6 +594,19 @@ if (cmd === 'doctor') {
        * The caveat is printed, not implied. Cursors and presence are both node-local and never
        * mesh-synced, so this says "nothing HERE took these" — a consumer on another machine is
        * invisible from this one. */
+      /* Queue files trimmed outside hubd. Legitimate — the files had grown past fifteen thousand
+       * lines and hubd offers no compaction — but until 0.9.9 a trim silently re-delivered
+       * everything that survived it, because a shrunken file reset the cursor to zero. The
+       * watermark handles that now; this line is how the missing operation stops being invisible. */
+      const trims = outOfBandTrims({ root: teamRoot });
+      if (trims.length) {
+        warnings++;
+        console.log('  ' + trims.length + ' cursor(s) point past the end of their queue — trimmed outside hubd  WARNING');
+        for (const t of trims.slice(0, 5))
+          console.log('    ' + t.file + (t.subscriber ? ' [' + t.subscriber + ']' : '') + ': cursor ' + t.cursor +
+            ' > size ' + t.size + (t.hasMark ? ', resumes at the watermark' : ', NO watermark — will restart from 0'));
+        if (trims.length > 5) console.log('    ... and ' + (trims.length - 5) + ' more');
+      }
       const stranded = strandedQueues({ root: teamRoot });
       if (stranded.length) {
         warnings++;

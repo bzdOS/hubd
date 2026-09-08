@@ -4,6 +4,58 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.9 — 2026-09-07
+
+- **A purged queue re-delivered everything that survived the purge.** Cursors are
+  byte offsets, and a shrunken file reset its cursor to `0` — right for a file that
+  was *recreated*, wrong for one that was *trimmed*. And trimming turns out to be
+  routine, not aberrant: two commits on one mesh removed **15531** and **13422**
+  lines of consumed messages, because those files had grown past fifteen thousand
+  lines and hubd offers no operation for compacting them. So it happens with a shell
+  redirect, and every surviving block was then delivered a second time, silently, to
+  workers whose stated contract is at-most-once. On the hub this was found on, one
+  cursor sat at byte 131043 of a 17651-byte file — one drain away from re-delivering
+  the whole thing to nine subscribers.
+
+  The cursor file now carries a **watermark**: the header of the last block
+  delivered, on a second line. On a shrink it decides without needing to know what
+  was removed — found in what remains, resume just past it; absent, it was purged
+  along with everything before it, so every surviving block postdates it and `0` is
+  genuinely correct. A file that was truly recreated lands in the same branch and
+  wants the same answer.
+
+  Format-compatible on purpose: every reader does `parseInt(trim(contents))`, and
+  `parseInt` stops at the first non-digit, so an older hubd on the same node still
+  reads the offset and ignores the rest. `.qstate` is node-local and gitignored, so
+  none of this touches the mesh or the message format.
+
+  A repeated header resolves to its **last** occurrence — timestamps are
+  minute-resolution, so one sender can write two identical ones — erring toward
+  delivering less rather than twice.
+
+- **`hub doctor` names queue files trimmed outside hubd**, and says which of them
+  will re-deliver. A cursor past the end of its file is direct evidence that the file
+  lost content after that cursor last read it: no git, no heuristic, no false
+  positives. Cursors written before this release have no watermark, so their
+  behaviour is unchanged — `0`, because there is genuinely no information to do
+  better with — but it is now disclosed instead of silent.
+
+  The alternative check, comparing the node in each filename against the authors of
+  its commits, does find real cross-node writes: on this mesh
+  `barechat.planck.queue.md` carried commits from three different nodes. But it also
+  flags renamed files, nodes that are not in the git mesh at all, hostname case, and
+  history that was already resolved — so it is a forensic tool, not a monitor, and it
+  stays out of doctor.
+
+- **`merge=union` on queue files: considered and rejected**, with the reasoning
+  written down in `docs/queue-invariant.md`. It would silence the conflict that
+  exposed all of this, and it would destroy the byte-offset contract: union inserts
+  the other side's lines mid-file, so every cursor past the insertion points
+  somewhere else, and the result is skipped or duplicated messages with no error and
+  no trace. Journals survive union because they are read whole and deduplicated; a
+  queue is read incrementally by offset. A stopped sync is better than a wrong
+  delivery.
+
 ## 0.9.8 — 2026-09-03
 
 - **`hub queue send` reported success when there was nobody to deliver to, and

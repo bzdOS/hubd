@@ -176,22 +176,71 @@ export function resolveQueueFile(qdir, role, node) {
  * competitor by construction) — one code path beats two. Returns the new text, or
  * null when there is nothing new.
  */
+/* The cursor file carries a byte offset AND, on a second line, the header of the last block
+ * delivered — the watermark. See docs/queue-invariant.md.
+ *
+ * Format-compatible on purpose: every existing reader does parseInt(trim(contents)), and parseInt
+ * stops at the first non-digit, so an older hubd on the same node still reads the offset and
+ * ignores the rest. .qstate is node-local and gitignored, so none of this reaches the mesh. */
+const readCursor = (offFile) => {
+  try {
+    const raw = fs.readFileSync(offFile, 'utf8');
+    const nl = raw.indexOf('\n');
+    return { off: parseInt(raw.trim(), 10) || 0, mark: nl === -1 ? null : (raw.slice(nl + 1).trim() || null) };
+  } catch { return { off: 0, mark: null }; }
+};
+const writeCursor = (offFile, off, mark) =>
+  fs.writeFileSync(offFile, mark ? `${off}\n${mark}\n` : String(off), 'utf8');
+
+const BLOCK_HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm;
+const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[m.length - 1] : null; };
+
+/* Where the cursor belongs after the file shrank.
+ *
+ * Resetting to 0 was right for a file that was RECREATED and wrong for one that was PURGED —
+ * and purging is routine here: two commits removed 15531 and 13422 lines of consumed messages
+ * from queue files, because the files had grown past fifteen thousand lines and hubd offers no
+ * operation for trimming them. Every surviving block then got delivered a second time, silently,
+ * to workers whose contract is at-most-once.
+ *
+ * The watermark settles it without knowing what was removed. Found in the new content: the purge
+ * cut above it, so resume just past that block. Absent: it was purged together with everything
+ * before it, so every remaining block postdates it and really is undelivered — and a genuinely
+ * recreated file lands in the same branch and wants the same answer.
+ *
+ * On a repeated header — timestamps are minute-resolution, so one sender can write two identical
+ * ones — take the LAST. That errs toward delivering less rather than twice, which is the
+ * direction at-most-once points. */
+function offsetAfterShrink(text, mark) {
+  if (!mark) return 0;
+  const at = text.lastIndexOf(mark);
+  if (at === -1) return 0;
+  const after = text.indexOf('\n## ', at + mark.length);
+  return Buffer.byteLength(after === -1 ? text : text.slice(0, after + 1), 'utf8');
+}
+
 function drainFile(qdir, stateDir, f) {
   const offFile = path.join(stateDir, `${f}.offset`);
-  const readOff = () => { try { return parseInt(fs.readFileSync(offFile, 'utf8').trim(), 10) || 0; } catch { return 0; } };
-  const sizeOf = () => { try { return fs.statSync(path.join(qdir, f)).size; } catch { return 0; } };
-  if (sizeOf() === readOff()) return null;            // nothing new — don't even lock
+  const full = path.join(qdir, f);
+  const sizeOf = () => { try { return fs.statSync(full).size; } catch { return 0; } };
+  if (sizeOf() === readCursor(offFile).off) return null;   // nothing new — don't even lock
   try {
     return withLock(offFile, () => {
-      const off = readOff(), sz = sizeOf();           // re-read under the lock
-      if (sz < off) { fs.writeFileSync(offFile, '0', 'utf8'); return null; }   // truncated/recreated — reset
+      const { off, mark } = readCursor(offFile), sz = sizeOf();   // re-read under the lock
+      if (sz < off) {
+        let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
+        const resumed = Math.min(offsetAfterShrink(text, mark), sz);
+        writeCursor(offFile, resumed, mark);
+        return null;
+      }
       if (sz === off) return null;                    // a competitor drained it first
-      const fd = fs.openSync(path.join(qdir, f), 'r');
+      const fd = fs.openSync(full, 'r');
       const buf = Buffer.allocUnsafe(sz - off);
       fs.readSync(fd, buf, 0, sz - off, off);
       fs.closeSync(fd);
-      fs.writeFileSync(offFile, String(sz), 'utf8');
-      return buf.toString('utf8').trim() || null;
+      const chunk = buf.toString('utf8');
+      writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
+      return chunk.trim() || null;
     });
   } catch { return null; }                            // lock busy — skip this poll, retry next
 }
@@ -668,6 +717,49 @@ export function queueInventory({ root, days = 30 } = {}) {
     return { file: f, role, node, bytes, messages: heads.length, newest, ageDays, read, lastSeen, isOwner,
       ghost: !read && !lastSeen && !isOwner && ageDays >= days };
   });
+}
+
+/* Queue files that were trimmed or replaced outside hubd.
+ *
+ * A cursor whose recorded offset is past the file's current size is direct evidence: the file was
+ * shorter than something had already read from it, which only happens if it lost content after
+ * that read. No git, no heuristic, no false positives.
+ *
+ * The alternative — comparing the node in each filename against the authors of its commits — is a
+ * better forensic tool than a monitor. It does find real cross-node writes (one file here carried
+ * commits from three nodes), but it also flags renamed files, nodes that are not in the git mesh
+ * at all (their files are committed by whichever node received them), hostname case, and history
+ * that was already resolved. A monitor that cries about settled history is one a reader learns to
+ * skip. So the cursor comparison is what doctor carries, and the author check stays a thing you
+ * run by hand when doctor has already told you where to look.
+ *
+ * This is reported rather than prevented because the trimming is LEGITIMATE: the files had grown
+ * past fifteen thousand lines and hubd has no operation for compacting them, so it happens with a
+ * shell redirect. The watermark in drainFile keeps that from re-delivering everything; naming it
+ * here is how the missing operation stops being invisible. */
+export function outOfBandTrims({ root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  const out = [];
+  const check = (subscriber, dir) => {
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(x => x.endsWith('.queue.md.offset')); } catch { return; }
+    for (const n of names) {
+      const file = n.replace(/\.offset$/, '');
+      let size = null;
+      try { size = fs.statSync(path.join(qdir, file)).size; } catch { continue; }   // gone: that is gc's business
+      const { off, mark } = readCursor(path.join(dir, n));
+      if (off > size) out.push({ file, subscriber, cursor: off, size, lost: off - size, hasMark: !!mark });
+    }
+  };
+  check(null, stateDir);
+  try {
+    for (const d of fs.readdirSync(stateDir, { withFileTypes: true })) {
+      if (d.isDirectory() && d.name !== '__watchall__') check(d.name, path.join(stateDir, d.name));
+    }
+  } catch {}
+  return out.sort((a, b) => b.lost - a.lost);
 }
 
 /* Queues holding messages that nobody has taken, RIGHT NOW — not in thirty days.
