@@ -47,6 +47,27 @@ a version here never migrates or deletes data.
   history that was already resolved — so it is a forensic tool, not a monitor, and it
   stays out of doctor.
 
+- **`hub queue resolve` — block-level union for a conflicted queue.** Queue files
+  are append-only by contract but have no union merge, so two sides that both
+  appended really do conflict: one node came back after two days holding 49 local
+  commits with five queue files conflicted at once, and every block on both sides
+  was a message somebody had sent.
+
+  Ours stays exactly where it is; blocks only the other side has are appended at
+  the **end**. That is a better trade than the timestamp-ordered union this was
+  first designed as, and the reason is cursors: they are byte offsets, so inserting
+  a block anywhere before one silently moves it, and a ts-ordered merge would have
+  to recompute every cursor in the hub — including the ones on other nodes that
+  this one cannot see. Appending inserts nothing before anything, so every existing
+  cursor stays as valid as it was. Strict time order is the cost, and it costs
+  nothing: a reader walks forward from its cursor and every block carries its own
+  timestamp.
+
+  Deduplicated on the whole block, not the header — the same minute and sender can
+  carry two different messages, and collapsing those would be losing work to save a
+  line. A malformed hunk is counted and left untouched, and the command exits
+  non-zero while any remain.
+
 - **`merge=union` on queue files: considered and rejected**, with the reasoning
   written down in `docs/queue-invariant.md`. It would silence the conflict that
   exposed all of this, and it would destroy the byte-offset contract: union inserts
