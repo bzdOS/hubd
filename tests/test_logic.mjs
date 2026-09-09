@@ -2012,6 +2012,56 @@ const qcW = fs.readdirSync(qcolDir).filter(f => /^hv3\./i.test(f));
 ok(qcW.length === 1,
   `queueWait: waiting does not create a second spelling either (got ${qcW.join(', ')})`);
 
+// ── a conflicted queue: ours in place, theirs appended, cursors untouched ────
+/* Queue files are append-only by contract but have no union merge (only the journals and task
+ * event logs do), so two sides that both appended really do conflict — one node came back after
+ * two days holding 49 local commits with five queue files conflicted at once, and every block on
+ * both sides was a message somebody sent.
+ *
+ * Appending theirs at the END is the load-bearing choice, and it is a better trade than the
+ * ts-ordered union this was first designed as: cursors are byte offsets, so inserting a block
+ * before one silently moves it, and a ts-ordered merge would have to recompute every cursor in
+ * the hub including those on nodes this one cannot see. Appending inserts nothing before anything.
+ * Strict time order is the cost, and it costs nothing — a reader walks forward from its cursor and
+ * every block carries its own timestamp. */
+const QRC = mktmp();
+const qrcHead = '\n## 2026-09-01 10:00 · from alice\nshared\n';
+const qrcText = qrcHead +
+  '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from ours\nmine\n' +
+  '=======\n\n## 2026-09-02 09:00 · from theirs\ntheirs\n' +
+  '>>>>>>> abc\n';
+const qrc = core.resolveQueueConflicts(qrcText);
+ok(qrc.hunks === 1 && qrc.carried === 1,
+  `resolveQueueConflicts: one hunk, one block carried over (got ${qrc.hunks}/${qrc.carried})`);
+ok(qrc.text.startsWith(qrcHead),
+  'resolveQueueConflicts: every byte that was already there stays where it was — cursors keep pointing at it');
+ok(qrc.text.indexOf('from ours') < qrc.text.indexOf('from theirs'),
+  'resolveQueueConflicts: theirs lands at the END even though its timestamp is EARLIER — position beats chronology, because position is what a cursor means');
+/* Dedup is on the whole block, not the header: the same minute and sender can carry two different
+ * messages, and collapsing those would be losing work to save a line. */
+const qrcSame = core.resolveQueueConflicts(
+  '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nfirst\n=======\n\n## 2026-09-02 11:00 · from bob\nsecond\n>>>>>>> abc\n');
+ok(qrcSame.carried === 1 && /first/.test(qrcSame.text) && /second/.test(qrcSame.text),
+  'resolveQueueConflicts: same minute and sender, different bodies — both survive');
+const qrcDup = core.resolveQueueConflicts(
+  '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nsame\n=======\n\n## 2026-09-02 11:00 · from bob\nsame\n>>>>>>> abc\n');
+ok(qrcDup.carried === 0 && (qrcDup.text.match(/from bob/g) || []).length === 1,
+  'resolveQueueConflicts: an identical block on both sides appears once');
+const qrcClean = core.resolveQueueConflicts(qrcHead);
+ok(qrcClean.hunks === 0 && qrcClean.text === qrcHead,
+  'resolveQueueConflicts: a file with no conflict is returned byte-for-byte');
+const qrcTorn = core.resolveQueueConflicts('<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nx\n');
+ok(qrcTorn.hunks === 0 && qrcTorn.malformed === 1 && qrcTorn.text.includes('<<<<<<< HEAD'),
+  'resolveQueueConflicts: a hunk with no separator is counted and left untouched');
+fs.mkdirSync(path.join(QRC, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(QRC, 'queues', 'r.n1.queue.md'), qrcText);
+const qrcCli = run('queue resolve', { HUBD_DIR: QRC, HUBD_TEAM_DIR: QRC });
+ok(/1 hunk\(s\), 1 block\(s\) carried over/.test(qrcCli.out) && qrcCli.code === 0,
+  `queue resolve: the command reports what it carried (code ${qrcCli.code})`);
+ok(!/<<<<<<</.test(fs.readFileSync(path.join(QRC, 'queues', 'r.n1.queue.md'), 'utf8')),
+  'queue resolve: and leaves no markers behind');
+fs.rmSync(QRC, { recursive: true, force: true });
+
 // ── a card is the one shared file that CAN conflict ──────────────────────────
 /* Every other shared file in a hub is per-node and append-only. A project card is one mutable file
  * any node rewrites, so two nodes appending to the same section is a same-hunk change — three

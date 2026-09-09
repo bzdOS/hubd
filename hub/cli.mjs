@@ -20,7 +20,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
-  conflictedFiles, resolveCardConflicts,
+  conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks,
 } from './lib/core.mjs';
@@ -1579,6 +1579,34 @@ else if (cmd === 'queue') {
       for (const rd of r.readers) console.log(`    reader ${rd.subscriber}: ${rd.delivered} delivered`);
     }
     done(0);
+  } else if (sub === 'resolve') {
+    /* Queue files are append-only by contract but have no union merge, so two sides that both
+     * appended really do conflict — one node came back after two days with five queue files
+     * conflicted at once. Ours, then theirs-unique appended at the END: nothing is inserted
+     * before existing content, so every byte cursor in the hub stays valid, including the ones on
+     * other nodes this one cannot see. Strict time order is what that costs, and it costs nothing:
+     * a reader walks forward from its cursor and every block carries its own timestamp. */
+    const qdir = path.join(resolveQueueRoot(), 'queues');
+    const named = args.slice(2).filter(a => !a.startsWith('-'));
+    const files = (named.length ? named.map(n => (n.includes('/') ? path.resolve(n) : path.join(qdir, n)))
+      : (() => { try { return fs.readdirSync(qdir).filter(f => f.endsWith('.queue.md')).map(f => path.join(qdir, f)); } catch { return []; } })());
+    let touched = 0, left = 0;
+    for (const f of files) {
+      let text; try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
+      if (!CONFLICT_RE.test(text)) continue;
+      const r = resolveQueueConflicts(text);
+      if (r.malformed) {
+        left++;
+        console.log('  ' + path.basename(f) + ': ' + r.malformed + ' malformed hunk(s) left alone — look by hand');
+      }
+      if (!r.hunks) continue;
+      fs.writeFileSync(f, r.text, 'utf8');
+      touched++;
+      console.log('  ' + path.basename(f) + ': ' + r.hunks + ' hunk(s), ' + r.carried +
+        ' block(s) carried over from the other side');
+    }
+    console.log(touched ? 'Rewrote ' + touched + ' queue file(s). Review, then commit.' : 'No conflicted queue files.');
+    done(left ? 1 : 0);
   } else if (sub === 'gc') {
     const days = parseInt(String(getFlag('--days') || '30'), 10);
     const apply = args.includes('--apply');
