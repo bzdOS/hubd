@@ -22,10 +22,10 @@ import {
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
-  runHeartbeat, runPresence, envChecks,
+  runHeartbeat, runPresence, envChecks, ownerWaiting,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -177,6 +177,33 @@ function formatBrief(data, hours) {
   }
   if (data.buttons && data.buttons.count > 0) {
     lines.push(`BUTTONS: ${data.buttons.count} waiting (oldest ${data.buttons.oldestDays}d) — ${data.buttons.items.map(b => b.role).join(', ')}`);
+    // The count said how far behind; it never said what OF. One line each, oldest first.
+    for (const b of (data.buttonItems || [])) {
+      lines.push(`  ${String(b.ageDays).padStart(3)}d ${b.role} ← ${b.from}${b.task ? ' #' + b.task : ''}: ${b.subject}`);
+    }
+  }
+  // A decision on the board that only the owner may move — a different wait from the queue above,
+  // and the one that was actually rotting when this was written.
+  const ow = data.ownerWaiting;
+  if (ow && ow.count > 0) {
+    lines.push(`OWNER'S OWN (${ow.count} open task(s) nobody else can move` +
+      (ow.oldestDays != null ? `, oldest ${ow.oldestDays}d` : '') +
+      (ow.overdue ? `, ${ow.overdue} past deadline` : '') + '):');
+    for (const t of ow.items) {
+      lines.push(`  ${t.ageDays == null ? '  ?' : String(t.ageDays).padStart(3)}d #${t.id} [${t.project || '?'}]` +
+        (t.overdueDays != null ? ` ⏰+${t.overdueDays}d` : '') + ` ${t.text}`);
+    }
+  }
+  // The audit, riding on a call somebody was going to make anyway (see runReview).
+  const rv = data.review;
+  if (rv && rv.findings && rv.findings.length) {
+    lines.push(`RULES BROKEN (${rv.total} finding(s) in ${rv.kinds} kind(s); lint ${rv.lint}, audit ${rv.audit}):`);
+    for (const f of rv.findings) {
+      lines.push(`  [${f.severity}] ${f.id}${f.alsoLikeThis ? ` (+${f.alsoLikeThis} more like it)` : ''}: ${f.what}`);
+      lines.push(`     rule: ${f.law}${f.lawSince ? ' (recorded ' + f.lawSince + ')' : f.lawDeclared ? '' : '  ← engine default; declare yours in rules.json → laws'}`);
+    }
+    if (rv.hint) lines.push('  ' + rv.hint);
+    for (const n of rv.notes) lines.push('  note: ' + n);
   }
   return lines.join('\n');
 }
@@ -461,10 +488,21 @@ if (cmd === 'doctor') {
     if (skew.behind.length)
       console.log('            a node that upgraded but has not written since reads the same as one that' +
         ' did not - check before upgrading');
+    /* Two versions interleaving is observed; "two installs" was a guessed cause, and the guess was
+     * wrong on this hub. The resident MCP server kept writing the version it had imported while a
+     * fresh CLI wrote the current one from the same single install. Print the agent names instead:
+     * a process that predates the upgrade is restartable, and the remedy for it is not the remedy
+     * for two copies on disk. */
     for (const n of skew.concurrent) {
       warnings++;
-      console.log('            WARNING ' + n.node + ': ' + n.versions.join(' and ') +
-        ' both writing recently - two installs on one node');
+      console.log('            WARNING ' + n.node + ': ' + n.versions.join(' and ') + ' both writing recently');
+      for (const v of n.versions) {
+        const who = (n.by || {})[v] || [];
+        if (who.length) console.log('              ' + v + ': ' + who.join(', '));
+      }
+      console.log('              usually a long-lived process, not a second install: upgrading the package on');
+      console.log('              disk does not reach a server that already imported it - restart those agents.');
+      console.log('              `hub version` on that node prints the path it resolved, if it IS two copies.');
     }
   }
 
@@ -616,17 +654,40 @@ if (cmd === 'doctor') {
             ' > size ' + t.size + (t.hasMark ? ', resumes at the watermark' : ', NO watermark — will restart from 0'));
         if (trims.length > 5) console.log('    ... and ' + (trims.length - 5) + ' more');
       }
+      /* One number covered two unrelated situations and read as the alarming one. 2811 messages
+       * "nothing here has taken" sounds like 2811 pieces of dropped work; 2700 of them were in
+       * queues somebody had written to WITHIN THE DAY, which a dead role does not do. Cursors and
+       * presence are node-local, so a queue being fed here and drained on Planck looks identical
+       * from this machine to one addressed to nobody — and the caveat that said so was one line
+       * under a list of six, after the scary total.
+       *
+       * So split on the only evidence available locally: is anything still ARRIVING. Still-fed
+       * queues are reported as unverifiable-from-here, not as backlog. Gone-quiet ones are the
+       * short list actually worth a decision, and that list is printed whole — it was the tail
+       * that got truncated before, which is exactly backwards. */
       const stranded = strandedQueues({ root: teamRoot });
-      if (stranded.length) {
+      const STRANDED_QUIET_DAYS = 7;
+      const quiet = stranded.filter(s => (s.ageDays ?? 0) >= STRANDED_QUIET_DAYS);
+      const fed = stranded.filter(s => (s.ageDays ?? 0) < STRANDED_QUIET_DAYS);
+      if (quiet.length) {
         warnings++;
-        const msgs = stranded.reduce((n, s) => n + s.messages, 0);
-        console.log('  ' + msgs + ' message(s) in ' + stranded.length +
-          ' queue(s) nothing here has taken, with no agent present for the role  WARNING');
-        for (const s of stranded.slice(0, 6))
+        const msgs = quiet.reduce((n, s) => n + s.messages, 0);
+        console.log('  ' + msgs + ' message(s) in ' + quiet.length + ' queue(s) nobody took, and nothing new has' +
+          ' arrived in ' + STRANDED_QUIET_DAYS + 'd  WARNING');
+        for (const s of quiet)
           console.log('    ' + s.role + (s.node ? ' (' + s.node + ')' : '') + ': ' + s.messages +
             ' msg, newest ' + (s.newest || 'n/a') + ', ' + s.ageDays + 'd old');
-        if (stranded.length > 6) console.log('    ... and ' + (stranded.length - 6) + ' more');
-        console.log('    cursors and presence are per-node: a consumer on another machine does not show up here');
+        console.log('    a role still being written to is elsewhere in this block; these are the ones to staff or retire');
+      }
+      if (fed.length) {
+        const msgs = fed.reduce((n, s) => n + s.messages, 0);
+        console.log('  ' + msgs + ' message(s) in ' + fed.length + ' queue(s) with no cursor HERE, still being written to');
+        for (const s of fed.slice(0, 4))
+          console.log('    ' + s.role + (s.node ? ' (' + s.node + ')' : '') + ': ' + s.messages +
+            ' msg, newest ' + (s.newest || 'n/a'));
+        if (fed.length > 4) console.log('    ... and ' + (fed.length - 4) + ' more');
+        console.log('    NOT a backlog: cursors and presence are node-local, so a consumer on another machine');
+        console.log('    cannot be seen from here. Check on the node that runs the role before touching these.');
       }
       // Ghost roll-up: files nobody ever consumed, nobody is present for, and that are not a
       // human's queue. They inflate every pending number in the hub until they are archived.
@@ -785,8 +846,14 @@ if (cmd === 'status') {
 
 if (cmd === 'brief') {
   const hours = parseInt(getFlag('--hours') || getFlag('-h') || '48');
-  const queues = queueSummaryForBrief({ root: resolveQueueRoot() });
-  console.log(formatBrief({ ...runBrief({ hours }), queues, buttons: buttonsSummary(queues) }, hours));
+  const qroot = resolveQueueRoot();
+  const queues = queueSummaryForBrief({ root: qroot });
+  const b = runBrief({ hours, queues });
+  console.log(formatBrief({
+    ...b, queues, buttons: buttonsSummary(queues),
+    buttonItems: ownerQueueItems({ root: qroot }),
+    ownerWaiting: ownerWaiting(b.tasksOpen),
+  }, hours));
   done(0);
 }
 

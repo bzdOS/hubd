@@ -455,7 +455,117 @@ fs.writeFileSync(path.join(btnRoot1, 'queues', 'boss.node1.queue.md'), '');
 const rows2 = queueLib.queueSummaryForBrief({ root: btnRoot1 });
 const btnSum2 = queueLib.buttonsSummary(rows2);
 ok(btnSum2.count === 1, `buttonsSummary: an empty owner queue does not inflate the count (got ${btnSum2.count})`);
+
+/* ── OQI: what is waiting, not how many bytes ──
+ * The count was right and useless — finding out WHAT was waiting meant opening the file and
+ * scrolling past two months of blocks, which is the friction that let the items rot. */
+const oqi1 = queueLib.ownerQueueItems({ root: btnRoot1 });
+ok(oqi1.length === 1 && oqi1[0].role === 'alice' && oqi1[0].from === 'agent',
+  `ownerQueueItems: one row per pending block in an owner queue (got ${JSON.stringify(oqi1)})`);
+ok(oqi1[0].subject === 'sign this contract',
+  `ownerQueueItems: the subject is the block's first line — the convention senders already use (got ${JSON.stringify(oqi1[0].subject)})`);
+ok(oqi1[0].ageDays >= 2000 && oqi1[0].ts === oldTs, 'ownerQueueItems: age comes from the block header, not the file mtime');
+ok(!oqi1.some(r => r.role === 'dev'), 'ownerQueueItems: a non-owner role is not an owner item');
+
+// A task ref in the header is carried through, and the header shape is the one peekQueueDepth
+// counts — so the list and the count can never disagree about what is pending.
+fs.appendFileSync(path.join(btnRoot1, 'queues', 'alice.node1.queue.md'),
+  '\n## 2026-03-04 05:06 · from planner · task #77\nBUTTON: ship it?\nmore body\n');
+const oqi2 = queueLib.ownerQueueItems({ root: btnRoot1 });
+ok(oqi2.length === 2 && oqi2[1].task === '77' && oqi2[1].subject === 'BUTTON: ship it?',
+  `ownerQueueItems: task ref parsed, body's first line is the subject (got ${JSON.stringify(oqi2[1])})`);
+ok(oqi2[0].ts < oqi2[1].ts, 'ownerQueueItems: oldest first — that is what a queue is');
+ok(queueLib.peekQueueDepth('alice', { root: btnRoot1 }).pending === oqi2.length,
+  'ownerQueueItems: agrees with peekQueueDepth about how many are pending');
+
+/* Reading a queue to LOOK at it must not consume it — this project has already had that bug. */
+const oqiOffBefore = fs.existsSync(path.join(btnRoot1, '.qstate', 'alice.node1.queue.md.offset'));
+queueLib.ownerQueueItems({ root: btnRoot1 });
+ok(!oqiOffBefore && !fs.existsSync(path.join(btnRoot1, '.qstate', 'alice.node1.queue.md.offset')),
+  'ownerQueueItems: moves no cursor and creates no offset — looking is not consuming');
+
+// Already-delivered blocks are past the cursor and are not waiting on anybody.
+fs.mkdirSync(path.join(btnRoot1, '.qstate'), { recursive: true });
+fs.writeFileSync(path.join(btnRoot1, '.qstate', 'alice.node1.queue.md.offset'),
+  String(fs.statSync(path.join(btnRoot1, 'queues', 'alice.node1.queue.md')).size));
+ok(queueLib.ownerQueueItems({ root: btnRoot1 }).length === 0,
+  'ownerQueueItems: a queue read to the byte has nothing waiting');
 fs.rmSync(btnRoot1, { recursive: true, force: true });
+
+/* ── OW: the buttons that were actually rotting ──
+ * The spec was aimed at the owner queue. Measured, that queue was empty; 31 of 143 open tasks
+ * belonged to the owner, oldest 80 days, four past deadline. Different surface, same rot. */
+const owRoot = mktmp();
+core.setHubBase(owRoot);
+fs.writeFileSync(path.join(owRoot, 'owner-roles.json'), JSON.stringify(['boss']));
+const owToday = '2026-06-10';
+const owTasks = [
+  { id: 1, status: 'open', assignee: 'boss', project: 'p', created: '2026-04-01 09:00', deadline: '2026-05-01', text: 'decide the thing' },
+  { id: 2, status: 'open', owner_kind: 'human', project: 'p', created: '2026-06-01 09:00', text: 'sign' },
+  { id: 3, status: 'open', assignee: 'dev', project: 'p', created: '2026-01-01 09:00', text: 'agent work' },
+  { id: 4, status: 'done', assignee: 'boss', project: 'p', created: '2026-01-01 09:00', text: 'already decided' },
+  { id: 5, status: 'open', assignee: 'boss', project: 'p', text: 'no created stamp' },
+];
+const ow1 = core.ownerWaiting(owTasks, { today: owToday });
+ok(ow1.count === 3, `ownerWaiting: owner_kind OR an assignee in owner-roles, open only (got ${ow1.count})`);
+ok(ow1.overdue === 1 && ow1.items.find(r => r.id === 1).overdueDays === 40,
+  `ownerWaiting: counts how far past the deadline, not just that it passed (got ${JSON.stringify(ow1.items.find(r => r.id === 1))})`);
+ok(ow1.unknownAge === 1 && ow1.items[ow1.items.length - 1].ageDays === null,
+  'ownerWaiting: a task with no created stamp is counted but its age is unknown, never guessed as 0');
+ok(ow1.oldestDays === ow1.items[0].ageDays && ow1.items[0].id === 1,
+  'ownerWaiting: oldest first, and oldestDays ignores the unstamped rows rather than reading them as new');
+ok(core.ownerWaiting(owTasks, { today: owToday, limit: 1 }).items.length === 1 &&
+   core.ownerWaiting(owTasks, { today: owToday, limit: 1 }).count === 3,
+  'ownerWaiting: the limit cuts the list, never the count');
+fs.rmSync(owRoot, { recursive: true, force: true });
+
+/* ── LR: the two card checks, and the review that carries them ── */
+const lrRoot = mktmp();
+core.setHubBase(lrRoot);
+fs.writeFileSync(path.join(lrRoot, 'projects', 'titleonly.md'), '# titleonly v1\n');
+fs.writeFileSync(path.join(lrRoot, 'projects', 'nodigest.md'),
+  '# nodigest\n\n## Next step\nsomething real\n\n## Gates\nby 2026-01-01\n');
+fs.writeFileSync(path.join(lrRoot, 'projects', 'fine.md'),
+  '# fine\n\n- synced: 2026-06-01 10:00\n\n## Next step\nall good\n');
+const lr1 = core.runLint({});
+const lrIds = lr1.findings.map(f => f.id + ':' + f.project);
+ok(lrIds.includes('card-empty:titleonly'),
+  `runLint: a card that is a title and nothing else is a finding (got ${JSON.stringify(lrIds)})`);
+ok(lrIds.includes('card-without-digest:nodigest'),
+  'runLint: a real card with no digest line is unchecked by every freshness check, and says so');
+ok(!lrIds.includes('card-without-digest:titleonly'),
+  'runLint: an empty card is not also told it lacks a digest — one remedy per card');
+ok(!lrIds.some(x => x.endsWith(':fine')), 'runLint: a card with a digest and sections is clean');
+ok(lr1.findings.find(f => f.id === 'card-empty').law && lr1.findings.find(f => f.id === 'card-empty').lawDeclared === false,
+  'runLint: a new finding still quotes a rule, and admits the rule is the engine\'s own');
+
+// One per KIND: a plain top-N filled itself with three copies of one rule and pushed the other
+// kinds off the list, which teaches its reader less than three different rules would.
+fs.writeFileSync(path.join(lrRoot, 'projects', 'titleonly2.md'), '# titleonly2\n');
+fs.writeFileSync(path.join(lrRoot, 'projects', 'nodigest2.md'),
+  '# nodigest2\n\n## Next step\nalso real\n');
+const lrRev = core.runReview({ limit: 2 });
+ok(lrRev.total === 4 && lrRev.kinds === 2, `runReview: totals count instances, kinds count rules (got ${JSON.stringify({ t: lrRev.total, k: lrRev.kinds })})`);
+ok(lrRev.findings.length === 2 && new Set(lrRev.findings.map(f => f.id)).size === 2,
+  'runReview: one finding per kind, so a repeated rule cannot crowd out the others');
+ok(lrRev.findings.every(f => f.alsoLikeThis === 1),
+  `runReview: says how many more of the same kind it did not print (got ${JSON.stringify(lrRev.findings.map(f => f.alsoLikeThis))})`);
+ok(core.runReview({ limit: 1 }).hint === '3 more finding(s) in 1 further kind(s) — hub lint / hub audit for all of them',
+  `runReview: a short list says so, in both instances and kinds (got ${JSON.stringify(core.runReview({ limit: 1 }).hint)})`);
+ok(core.runReview({ limit: 0 }).findings.length === 0 && core.runReview({ limit: 0 }).total === 4,
+  'runReview: limit 0 turns the block off without blinding the count');
+
+/* It files NOTHING. The spec wanted a finding older than 7 days applied automatically under
+ * "auditor-ambient" — an agent writing a verdict nobody reached. hub audit --apply still files,
+ * with a caller's name on it; the passenger only reports. */
+const lrTasksBefore = core.loadTasks().tasks.length;
+core.runReview({ limit: 3 });
+core.runBrief({});
+ok(core.loadTasks().tasks.length === lrTasksBefore,
+  'runReview: rides on brief and files nothing — an unanswered finding is not thereby decided');
+const lrBrief = core.runBrief({});
+ok(lrBrief.review && lrBrief.review.total === 4, 'runBrief: carries the review block on a call somebody was going to make anyway');
+fs.rmSync(lrRoot, { recursive: true, force: true });
 
 // ── regression: cross-node task-id collision must not mis-close the wrong task ──
 // Bug: `hub task done N` keyed its `set` event on (writing-node, N) — if the WRITING
@@ -1156,16 +1266,29 @@ ok(!strandedRoles.includes('empty'),
   'strandedQueues: an empty file holds no message, so there is nothing to strand');
 ok(!strandedRoles.includes('ghost'),
   'strandedQueues: an old one belongs to queue gc, not here — the two lists never double-count');
+/* One number covered two unrelated situations. 2811 messages "nothing here has taken" reads as
+ * 2811 dropped pieces of work; 2718 of them were in queues written to within the day, which a dead
+ * role does not do — and cursors are node-local, so a queue fed here and drained on another node
+ * looks from here exactly like one addressed to nobody. Split on the one local piece of evidence:
+ * is anything still ARRIVING. */
+fs.writeFileSync(path.join(QG, 'queues', 'wentquiet.n1.queue.md'),
+  '\n## ' + new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 16).replace('T', ' ') + ' · from alice\nold work\n');
 const strandDoc = run('doctor', { HUBD_DIR: QG, HUBD_TEAM_DIR: QG });
-ok(/nothing here has taken, with no agent present for the role {2}WARNING/.test(strandDoc.out),
-  'doctor: says work was dispatched to nobody');
+ok(/1 message\(s\) in 1 queue\(s\) nobody took, and nothing new has arrived in 7d {2}WARNING/.test(strandDoc.out),
+  'doctor: a queue that has gone quiet with work still in it is the one that warns');
+ok(/1 message\(s\) in 1 queue\(s\) with no cursor HERE, still being written to/.test(strandDoc.out) &&
+   /NOT a backlog/.test(strandDoc.out),
+  'doctor: a queue still being fed is reported as unverifiable from here, not as dropped work');
 /* The claim has to be bounded. Cursors live in .qstate/ and presence in presence/, neither of
  * which is mesh-synced, so this node cannot see a consumer running on another one — and the
  * numbers really do diverge: 473 messages looked untaken from a laptop, 53 from the node whose
  * consumers actually hold the cursors. Printing the caveat is what keeps the line honest. */
-ok(/cursors and presence are per-node/.test(strandDoc.out),
+ok(/cursors and presence are node-local/.test(strandDoc.out),
   'doctor: and says out loud that a consumer on another node is invisible from here');
+ok(!/and \d+ more/.test(strandDoc.out.split('nobody took')[1].split('still being written to')[0]),
+  'doctor: the quiet list is printed whole — it was the decidable tail that used to be truncated');
 fs.rmSync(path.join(QG, 'queues', 'nobodyhome.n1.queue.md'));
+fs.rmSync(path.join(QG, 'queues', 'wentquiet.n1.queue.md'));
 fs.rmSync(path.join(QG, 'queues', 'empty.n1.queue.md'));
 
 /* ── a purged queue must not re-deliver what survived it ──
@@ -1852,7 +1975,7 @@ const wvRelay = fs.readFileSync(path.join(WV, 'journal.' + core.JOURNAL_NODE + '
 ok(JSON.parse(wvRelay[1]).v === '0.4.8',
   'journalAppend: an entry that already names a version keeps it — a relayed line describes its origin');
 
-const wvl = (ts, v, text) => JSON.stringify({ ts, project: 'p', agent: 'dev-t', kind: 'note', text, ...(v ? { v } : {}) });
+const wvl = (ts, v, text, agent = 'dev-t') => JSON.stringify({ ts, project: 'p', agent, kind: 'note', text, ...(v ? { v } : {}) });
 fs.writeFileSync(path.join(WV, 'journal.planck.jsonl'),
   wvl('2026-08-01 09:00', '0.9.1', 'old') + '\n' + wvl('2026-08-02 09:00', '0.9.2', 'newer') + '\n');
 fs.writeFileSync(path.join(WV, 'journal.attic.jsonl'),
@@ -1883,19 +2006,34 @@ fs.writeFileSync(path.join(WV, 'journal.clean.jsonl'),
   wvl('2026-08-01 09:00', '0.4.8', 'a') + '\n' + wvl('2026-08-02 09:00', '0.4.8', 'b') + '\n' +
   wvl('2026-08-03 09:00', '0.9.4', 'c') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd') + '\n');
 fs.writeFileSync(path.join(WV, 'journal.twoinstalls.jsonl'),
-  wvl('2026-08-01 09:00', '0.4.8', 'a') + '\n' + wvl('2026-08-02 09:00', '0.9.4', 'b') + '\n' +
-  wvl('2026-08-03 09:00', '0.4.8', 'c') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd') + '\n');
+  wvl('2026-08-01 09:00', '0.4.8', 'a', 'resident') + '\n' + wvl('2026-08-02 09:00', '0.9.4', 'b', 'fresh') + '\n' +
+  wvl('2026-08-03 09:00', '0.4.8', 'c', 'resident') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd', 'fresh') + '\n');
 const wvCon = core.versionSkew().concurrent;
 ok(!wvCon.some(n => n.node === 'clean'),
-  'writerVersions: a clean upgrade cutover is not reported as two installs');
+  'writerVersions: a clean upgrade cutover is not reported as two versions running side by side');
 ok(wvCon.some(n => n.node === 'twoinstalls' && n.versions.join(',') === '0.4.8,0.9.4'),
-  'writerVersions: an older version still appearing after a newer one is two installs on one node');
+  'writerVersions: an older version still appearing after a newer one is two hubds writing at once');
+
+/* WHO holds the old one. Without the names the reader was sent to look for a second install, and
+ * on the hub this shipped from there was none: a resident MCP server was writing the version it had
+ * imported while a fresh CLI wrote the current one out of the same file. */
+// Read through a helper, not by indexing: a regression that drops the map should FAIL here, not
+// throw and take every assertion after it down with it.
+const wvWho = (v) => ((wvCon.find(n => n.node === 'twoinstalls') || {}).by || {})[v] || [];
+ok(wvWho('0.4.8').join(',') === 'resident' && wvWho('0.9.4').join(',') === 'fresh',
+  `writerVersions: reports which agents wrote each version, so the stale process is addressable (got ${JSON.stringify(wvWho('0.4.8'))})`);
+fs.appendFileSync(path.join(WV, 'journal.twoinstalls.jsonl'), wvl('2026-08-05 09:00', '0.4.8', 'e', 'fresh') + '\n');
+const wvBoth = ((core.versionSkew().concurrent.find(n => n.node === 'twoinstalls') || {}).by || {})['0.4.8'] || [];
+ok(wvBoth.join(',') === 'fresh,resident',
+  `writerVersions: one agent name under both versions is reported as such, not smoothed away (got ${JSON.stringify(wvBoth)})`);
 
 const wvDoc = run('doctor', { HUBD_DIR: WV, HUBD_TEAM_DIR: WV });
 ok(/writers: +.*planck 0\.9\.2/.test(wvDoc.out),
   'doctor: prints which hubd wrote into each node log');
-ok(/THIS copy is older than the mesh/.test(wvDoc.out) && /two installs on one node/.test(wvDoc.out),
-  'doctor: warns on both directions of skew and on two installs sharing a node');
+ok(/THIS copy is older than the mesh/.test(wvDoc.out) && /0\.4\.8 and 0\.9\.4 both writing recently/.test(wvDoc.out),
+  'doctor: warns on both directions of skew and on two versions writing at once');
+ok(/0\.4\.8: fresh, resident/.test(wvDoc.out) && /long-lived process, not a second install/.test(wvDoc.out),
+  'doctor: names the agents on the old version and stops asserting a cause it cannot observe');
 /* The `behind` direction must report what was SEEN, not a remedy inferred from it. "upgrade that
  * node" was wrong on a live hub the day it shipped: two nodes whose packages were already current
  * had simply not written since, and doctor sent a human to go and upgrade what was done. */

@@ -154,9 +154,14 @@ is a folder you own. They are two separate things — and that is the whole poin
   of the copy that printed it*, because on a real machine those are one question: a stale
   global install and a live source checkout are both called `hub`. From 0.9.4 each journal
   line also carries the version that appended it, so `hub doctor` reports the whole mesh —
-  which node is behind, whether **this** copy is the stale one, and whether two installs
-  are writing into the same node. This exists because the machine that develops hubd ran a
-  CLI nine releases old for weeks and nothing anywhere could have said so.
+  which node is behind, whether **this** copy is the stale one, and whether two hubds are
+  writing into one node at the same time, **naming the agents on each version**. That last
+  detail is 0.9.12 paying for a wrong guess of its own: the warning used to say "two installs
+  on one node", and on this hub there was one install — a resident MCP server kept writing the
+  version it had imported while a fresh CLI wrote the current one out of the same file.
+  Upgrading a package on disk does not reach a process that already imported it. This whole
+  block exists because the machine that develops hubd ran a CLI nine releases old for weeks
+  and nothing anywhere could have said so.
 - **What an upgrade needs from you** — sometimes a new version wants something outside
   the code: a variable in a client's config, a role declared in the hub, a protocol
   section worth re-reading. hubd works that out and tells the agents itself:

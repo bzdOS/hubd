@@ -14,9 +14,9 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
-  runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
+  runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, transportHealth } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -174,10 +174,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_brief',
-    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json).',
+    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json). Two things wait on the owner and they are NOT the same: buttonItems = each unanswered package in an owner queue (age, sender, subject); ownerWaiting = open tasks only the owner can move, with age and how far past deadline — invisible in every "what can I start" list because the answer there is "not this". `review` carries the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces with the date that rule was written: the audit rides on this call instead of waiting to be remembered. It reports only — nothing is filed without an explicit hub_audit({apply:true}) carrying somebody\'s name.',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'journal window, default 48' },
       staleDays: { type: 'integer', description: 'card considered stale after N days, default 7' },
+      reviewLimit: { type: 'integer', description: 'how many finding KINDS to inline, default 3; 0 turns the review block off' },
     } } },
 
   { name: 'hub_kanban',
@@ -250,10 +251,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_whatsnew',
-    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call.',
+    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing.',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
+      reviewLimit: { type: 'integer', description: 'how many finding KINDS to inline, default 3; 0 turns the review block off' },
     }, required: ['agent'] } },
 
   { name: 'hub_inbox',
@@ -296,7 +298,9 @@ const TOOLS = [
  * or its most repetitive list and ends with the things a caller asked the tool for. A tool
  * absent from this table is already small by construction (single card, one record, counts). */
 const OUTPUT_PLANS = {
-  hub_brief:      [['journalRecent', 30], ['queues', 40], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40]],
+  // buttonItems last on purpose: the plan cuts in the order listed, and a pending owner decision
+  // is the least compressible thing in this answer (same reasoning as tasksOpen, one step further).
+  hub_brief:      [['journalRecent', 30], ['queues', 40], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40], ['buttonItems', 20]],
   hub_status:     [['recentJournal', 10], ['projects', 60]],
   hub_get:        [['journal', 15], ['claims', 20]],
   hub_whatsnew:   [['entries', 50]],
@@ -338,7 +342,17 @@ const DISPATCH = {
     // converging, and a quiet queue reads exactly like a stopped transport. Both
     // transports leave an observable artefact, so report both ages here — see
     // transportHealth() and docs/interop.md -> Transport.
-    return { ...runBrief(a), queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: HUB }) };
+    // `queues` is handed to runBrief as well: the audit rides on this call (runReview) and its
+    // stale-button check needs the rows, which core.mjs cannot read for itself.
+    const b = runBrief({ ...a, queues });
+    return {
+      ...b, queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: HUB }),
+      // Two different waits, deliberately apart: a package addressed to the owner and not yet
+      // answered, vs a decision sitting on the board that only the owner may move. See
+      // ownerQueueItems / ownerWaiting.
+      buttonItems: ownerQueueItems({ root: HUB }),
+      ownerWaiting: ownerWaiting(b.tasksOpen),
+    };
   },
   // queues are read HERE and handed in: lib/queue.mjs imports core, so core cannot read them
   // itself without closing an import cycle (see runAudit).
@@ -354,7 +368,10 @@ const DISPATCH = {
   // for every remote caller — keying whatsnew checkpoints on it would make the whole
   // team share one "what did I miss". Null there; the agent label becomes the key.
   hub_onboarding: () => runOnboarding(),
-  hub_whatsnew: (a) => runWhatsNew({ ...a, session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE }),
+  // queues: same hand-off as hub_brief — the review block rides on this call and its stale-button
+  // check needs rows core.mjs cannot read for itself.
+  hub_whatsnew: (a) => runWhatsNew({ ...a, queues: queueSummaryForBrief({ root: HUB }),
+    session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE }),
   hub_inbox: runInbox, hub_trajectory: runTrajectory,
   // root: HUB is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request

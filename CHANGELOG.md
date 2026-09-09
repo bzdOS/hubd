@@ -4,6 +4,91 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.12 — 2026-09-09
+
+- **The version-skew warning named a cause it could not observe, and the cause was wrong on this
+  hub.** `hub doctor` reported "0.9.10 and 0.9.11 both writing recently — two installs on one node"
+  and told the reader to check before upgrading. There was one install. The resident MCP server had
+  imported `core.mjs` while `VERSION` still read 0.9.10 and went on writing 0.9.10 while a freshly
+  spawned CLI wrote 0.9.11 out of the same file — upgrading a package on disk does not reach a
+  process that already imported it, and no amount of `npm ls -g` would have shown that.
+
+  The interleaving detection was right and is unchanged. What it prints now is the **agent names
+  per version**, which turns an unanswerable question ("where is the second install?") into an
+  addressable one ("these agents hold the older module — restart their clients"). An agent
+  appearing under both versions is reported as such rather than smoothed away: it means that name
+  is used by more than one process, which is itself the thing worth seeing.
+
+- **The audit now rides on traffic it does not generate.** `roles/auditor.md` has existed for
+  months and has never been run once; `hub_lint` and `hub_audit` both work and nothing calls them,
+  because calling them is a separate decision somebody has to remember to make — and the whole
+  class of thing they catch is the class nobody remembers. `hub_brief` and `hub_whatsnew` now carry
+  a `review` block: the top findings from both, **one per kind**, each quoting the rule it enforces
+  with the date that rule was written. A plain top-3 filled itself with three copies of one rule
+  and pushed two other kinds of problem off the list, so each kind appears once with its remaining
+  count beside it.
+
+  What this deliberately does **not** do is file anything. The spec asked for a finding older than
+  seven days to be applied automatically under the author `auditor-ambient`. That is an agent
+  writing a record claiming a verdict nobody reached — the same move as "acknowledged in version X"
+  that this project bans in so many words. A finding that has sat for a week is not thereby
+  decided. `hub audit --apply` still files, from an explicit call, with the caller's name on it.
+
+- **Two new lint checks, from measuring the cards rather than judging them.** Three of thirty-nine
+  cards on the live hub had no `- synced:`/`- set:` line, and every freshness check in the engine —
+  `hub_status`'s `digestStale`, `hub_brief`'s `staleDigests`, the audit's `card-behind-journal` —
+  silently **skips** a card that has none. Two of those three were substantial: 55 and 60 lines,
+  nine sections, real content no check had ever looked at. A card that reads perfectly to a person
+  and is invisible to the instrument is the worst of the two states, because nothing says so.
+  `card-without-digest` says so. `card-empty` is kept separate for the degenerate case (one card
+  was a title and nothing else): "write the card" and "stamp the card you already wrote" are not
+  the same job.
+
+- **The buttons that were rotting were not in the queue.** The spec was aimed at the owner queue —
+  items sent to a human, waiting weeks. Measured, that queue was empty: read to the byte, cursor
+  offsets equal to file size. What had actually rotted was the other surface entirely — **31 of 143
+  open tasks belonged to the owner, the oldest 80 days, four of them past deadlines that fell 15
+  days earlier**. The queue was read; the decisions were never made.
+
+  `ownerWaiting()` reports them with age and how far past deadline, `hub brief` prints them, and
+  the audit files **one** rollup finding rather than thirty-one — a backlog about a backlog is
+  addressed to the same person it would be shouting at. A task with no `created` stamp is counted
+  but its age reported as unknown; guessing zero would make the oldest backlog look like the
+  freshest.
+
+- **`ownerQueueItems()`: what is waiting, not how many bytes.** The old rollup answered "6 waiting,
+  oldest 61 days" — right and useless, because finding out *what* meant opening the file and
+  scrolling past two months of blocks, which is the friction that let them rot. One row per pending
+  block now, with age, sender and the block's first line (the subject every sender in this hub
+  already writes). No format is enforced and nothing is asked of senders; the existing convention
+  is simply read. Pure read: no cursor moves, because looking at a queue must not consume it.
+
+  Also refused here: the spec wanted `hub_queue_send` to **reject** owner items lacking `proposal`
+  and `default_on_silence`, and a sweep inside `hub_brief` to **execute** that default —
+  hibernate, kill, defer — once an expiry passed. Executing a default on silence is hubd deciding
+  the owner's work for them because they did not answer fast enough. Silence is not consent. The
+  hard refusal would also have broken every existing sender in the fleet at once, to enforce a
+  field shape never written down anywhere those senders can read.
+
+- **`hub doctor`'s stranded-queue number covered two unrelated situations and read as the alarming
+  one.** "2811 messages in 45 queues nothing here has taken" sounds like 2811 dropped pieces of
+  work. 2718 of them were in queues written to **within the day**, which a dead role does not do —
+  and cursors and presence are node-local, so a queue fed here and drained on Planck looks
+  identical from this machine to one addressed to nobody. The caveat saying so was one line under a
+  truncated list, after the total.
+
+  Split now on the only locally available evidence — is anything still arriving. Queues that have
+  gone quiet with work still in them are the decidable list, **printed whole** (it was that tail
+  which used to be truncated, exactly backwards): 93 messages in 24 queues. Still-fed queues are
+  reported as unverifiable from here, not as backlog.
+
+- **`hub audit` no longer reads a year of journal to answer nothing.** The gate-expired check needs
+  the last decision per project, and consults it only for projects declared as money bets in
+  `rules.json → money`, which is empty until somebody declares one. On an undeclared hub that scan
+  was 460ms of a 472ms run and answered no question at all. That became load-bearing the moment
+  the audit started riding on `hub_brief`: the price of a check that checks nothing is paid by
+  every call that carries it.
+
 ## 0.9.11 — 2026-09-09
 
 - **The journal is the owner's memory prosthesis, and it was half machine echo.** Measured on a
