@@ -701,16 +701,42 @@ export function cmpVersion(a, b) {
  * running side by side keep taking turns, so an older version goes on appearing after the newer
  * one first showed up. Only that is reported.
  *
- * Bounded to the last 50 stamped entries because the claim is about the present. Interleaving that
- * stopped months ago is history, and a warning that can never be cleared is one a reader learns to
- * skip — which would cost more than this check is worth. */
+ * Bounded to the last CONCURRENT_WINDOW stamped entries because the claim is about the present.
+ * Interleaving that stopped months ago is history, and a warning that can never be cleared is one a
+ * reader learns to skip — which would cost more than this check is worth. */
+const CONCURRENT_WINDOW = 50;
+
 function concurrentWriters(seq) {
-  const recent = seq.slice(-50);
+  const recent = seq.slice(-CONCURRENT_WINDOW);
   if (!recent.length) return [];
   const newest = [...new Set(recent.map(x => x.v))].sort(cmpVersion).pop();
   const from = recent.findIndex(x => x.v === newest);
   const older = new Set(recent.slice(from + 1).filter(x => cmpVersion(x.v, newest) < 0).map(x => x.v));
   return older.size ? [...older, newest].sort(cmpVersion) : [];
+}
+
+/* WHO is running the old one. The version pair alone sent a reader to the wrong place: doctor said
+ * "two installs on one node - check before upgrading", and on this very hub that diagnosis was
+ * false. There is one install; the resident MCP server had loaded core.mjs when VERSION still read
+ * 0.9.10 and went on writing 0.9.10 while a freshly spawned CLI wrote 0.9.11 from the same file.
+ * Upgrading a package on disk does not reach into a process that already imported it, and no amount
+ * of checking `npm ls -g` would have revealed that.
+ *
+ * So report the agent names per version. That converts an unanswerable question ("where is the
+ * second install?") into an addressable one ("these agents are holding the older module — restart
+ * their clients"), and it stays honest when the cause really is two installs, because then the
+ * names point at the sessions using each. An agent appearing under BOTH versions is not a
+ * contradiction to smooth over: it means that agent name is used by more than one process, which is
+ * itself the thing worth seeing. */
+function concurrentBy(seq, versions) {
+  if (!versions.length) return {};
+  const want = new Set(versions), out = {};
+  for (const x of seq.slice(-CONCURRENT_WINDOW)) {
+    if (!want.has(x.v) || !x.agent) continue;
+    (out[x.v] = out[x.v] || new Set()).add(x.agent);
+  }
+  for (const v of Object.keys(out)) out[v] = [...out[v]].sort();
+  return out;
 }
 
 export function writerVersions() {
@@ -724,17 +750,19 @@ export function writerVersions() {
     if (!v) { g.unstamped++; continue; }
     g.versions[v] = (g.versions[v] || 0) + 1;
     const ms = parseTs(e.ts).getTime();
-    g._seq.push({ v, ms: Number.isFinite(ms) ? ms : 0 });
+    g._seq.push({ v, ms: Number.isFinite(ms) ? ms : 0, agent: e.agent || null });
   }
   const out = [];
   for (const g of byNode.values()) {
     g._seq.sort((a, b) => a.ms - b.ms);
     const last = g._seq.length ? g._seq[g._seq.length - 1] : null;
+    const concurrent = concurrentWriters(g._seq);
     out.push({
       node: g.node, versions: g.versions, unstamped: g.unstamped,
       last: last ? last.v : null,
       lastAt: last ? new Date(last.ms).toISOString().slice(0, 16).replace('T', ' ') : null,
-      concurrent: concurrentWriters(g._seq),
+      concurrent,
+      concurrentBy: concurrentBy(g._seq, concurrent),
     });
   }
   return out.sort((a, b) => (a.node < b.node ? -1 : a.node > b.node ? 1 : 0));
@@ -753,7 +781,8 @@ export function versionSkew() {
     stamped: stamped.length,
     behind: stamped.filter(g => cmpVersion(g.last, VERSION) < 0).map(pick),
     ahead: stamped.filter(g => cmpVersion(g.last, VERSION) > 0).map(pick),
-    concurrent: nodes.filter(g => g.concurrent.length > 1).map(g => ({ node: g.node, versions: g.concurrent })),
+    concurrent: nodes.filter(g => g.concurrent.length > 1)
+      .map(g => ({ node: g.node, versions: g.concurrent, by: g.concurrentBy })),
   };
 }
 
@@ -1298,10 +1327,44 @@ export function runLint(a = {}) {
     }
   }
 
+  /* (3) A card the engine cannot check.
+   *
+   * The freshness checks — hub_status's digestStale, hub_brief's staleDigests, the audit's
+   * card-behind-journal — all key off the card's own `- synced:`/`- set:` line, and every one of
+   * them SKIPS a card that has none. On the hub this was written against, three of thirty-nine
+   * cards had no digest line, and two of those were substantial: 55 and 60 lines, nine sections,
+   * real content that no freshness check has ever looked at. The card reads perfectly well to a
+   * person and is invisible to the instrument, which is the worst of the two states to be in,
+   * because nothing ever says so.
+   *
+   * (4) And the degenerate case, kept separate because the remedy is different: a card that is a
+   * title and nothing else (mrgd.md was one line, no sections). "Write the card" and "stamp the
+   * card you already wrote" are not the same job. */
+  for (const c of projectCards()) {
+    if (restrict && !restrict.includes(c.slug)) continue;
+    const lines = String(c.text || '').split('\n').filter(l => l.trim());
+    const sections = (String(c.text || '').match(/^## /gm) || []).length;
+    if (lines.length <= 2 && !sections) {
+      findings.push({ id: 'card-empty', severity: 'med', project: c.slug,
+        what: `${c.slug}.md is ${lines.length} line(s) with no sections — the card exists and says nothing`,
+        fix: `hub card ${c.slug} -m "<what this project is and where it stands>" --by <you>` });
+      continue;   // no point telling an empty card it also lacks a digest
+    }
+    if (!/^- (?:synced|set): /m.test(c.text)) {
+      findings.push({ id: 'card-without-digest', severity: 'med', project: c.slug,
+        what: `${c.slug}.md has ${lines.length} lines and ${sections} section(s) but no digest line, so every freshness check skips it silently`,
+        fix: `hub card ${c.slug} -m "<what is true now>" --by <you>  (writes the "- synced:" line the checks read)` });
+    }
+  }
+
+  const LINT_DEFAULTS = {
+    'gate-without-date': 'A gate is a date plus a criterion; without a date it is an intention.',
+    'button-without-prep': 'Work only the owner can do splits into prep (an agent) and the button (the owner).',
+    'card-empty': 'A card is what a session reads before it acts; a title is not a card.',
+    'card-without-digest': 'A card no check can read is unchecked, however well it reads to a person.',
+  };
   for (const f of findings) {
-    const law = lawFor(f.id, f.id === 'gate-without-date'
-      ? 'A gate is a date plus a criterion; without a date it is an intention.'
-      : 'Work only the owner can do splits into prep (an agent) and the button (the owner).');
+    const law = lawFor(f.id, LINT_DEFAULTS[f.id] || f.id);
     f.law = law.text; f.lawSince = law.since; f.lawDeclared = law.declared;
     f.enforced = !!strict[f.id];
   }
@@ -1334,6 +1397,7 @@ const AUDIT_DEFAULTS = {
   'button-stale': 'A package waiting on the owner is either decided or withdrawn — an unanswered button is a decision made by default.',
   'card-behind-journal': 'A card that stopped following its own project misinforms every session that reads it next.',
   'task-without-project': 'Work with no project cannot be prioritised against anything.',
+  'owner-backlog': 'A decision only the owner can make is either made or withdrawn; carrying it is the third option nobody chose.',
 };
 
 /**
@@ -1357,11 +1421,18 @@ export function runAudit(a = {}) {
   // (1) Gates x calendar. A date in the gate that has passed, with no decision recorded since —
   //     the decision is what turns an expiry into a verdict, so its absence IS the finding.
   if (!money.length) notes.push('gates x calendar checked nothing: no money bets declared (rules.json -> money).');
+  /* A YEAR of journal, read only if something can use it. Nothing below consults decisionsSince
+   * unless a money bet is declared, and `money` is empty until someone declares one — so on an
+   * undeclared hub this scan cost 460 of the 472ms runAudit took and answered no question at all.
+   * That mattered the moment the audit started riding on hub_brief: the price of a check that
+   * checks nothing is paid by every call that carries it. */
   const decisionsSince = {};
-  for (const e of journalSince(365 * 24)) {
-    if (e.kind === 'decision' && e.project) {
-      const cur = decisionsSince[e.project];
-      if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) decisionsSince[e.project] = e.ts;
+  if (money.length) {
+    for (const e of journalSince(365 * 24)) {
+      if (e.kind === 'decision' && e.project) {
+        const cur = decisionsSince[e.project];
+        if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) decisionsSince[e.project] = e.ts;
+      }
     }
   }
   for (const c of cards) {
@@ -1433,6 +1504,20 @@ export function runAudit(a = {}) {
       what: `#${t.id} has no project`, fix: 'assign one, or close it' });
   }
 
+  /* (6) The owner's own backlog — ONE finding, not one per task. Thirty-one separate incidents
+   * saying "the owner has not decided this" is a backlog about a backlog, and the reader it needs
+   * is the person it would be shouting at. Keyed on the oldest item, so a weekly run refiles only
+   * when the oldest one changes — which is exactly when something actually moved. */
+  const waiting = ownerWaiting(tasks, { today, limit: 5 });
+  if (waiting.count && (waiting.oldestDays ?? 0) >= staleButtonDays) {
+    findings.push({ id: 'owner-backlog', key: `owner-backlog:${waiting.items[0] ? waiting.items[0].id : 'none'}`,
+      severity: waiting.overdue ? 'high' : 'med',
+      what: `${waiting.count} open task(s) only the owner can move, oldest ${waiting.oldestDays}d` +
+        (waiting.overdue ? `, ${waiting.overdue} past its deadline` : '') +
+        (waiting.unknownAge ? ` (${waiting.unknownAge} with no created stamp)` : ''),
+      fix: 'hub agenda shows them as ownerButtons — decide, delegate or close; an unanswered one decides by default' });
+  }
+
   // The thermometer: reported, never filed. A rate is not a violation, and dressing one up as an
   // incident is how an audit loses the reader it needs.
   const closedInWindow = tasks.filter(t => t.status === 'done' && t.done && parseTs(t.done).getTime() >= nowMs - days * 86400000);
@@ -1493,6 +1578,71 @@ export function runAudit(a = {}) {
   // (see BOOKKEEPING_KINDS).
   runReport({ project: 'general', by, text: lines.join('\n'), kind: 'audit' });
   return { apply: true, findings, notes, numbers, filed, skipped, generated: now() };
+}
+
+/* ── The audit rides on traffic it does not generate ──
+ *
+ * roles/auditor.md has existed for months and has never been run once. hub_lint and hub_audit both
+ * work; nothing calls them, because calling them is a separate decision somebody has to remember to
+ * make, and the whole class of thing they catch is the class nobody remembers. A check that depends
+ * on being remembered checks nothing.
+ *
+ * So the findings ride on the two calls a session already makes — hub_brief at the start, and
+ * hub_whatsnew on return. Top few only, each quoting the rule it enforces with the date that rule
+ * was written, exactly as the filed incidents do: an engine's opinion carries no weight, the
+ * reader's own past decision does.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO — and the spec asked for it — is file anything. The proposal
+ * was that a finding older than seven days should be applied automatically under the author
+ * `auditor-ambient`, one incident per key. That is an agent writing a record that claims a
+ * verdict nobody reached, which is the same move as "acknowledged in version X" that this project
+ * bans in so many words. A finding that has sat for a week is not thereby decided; it is a finding
+ * that has sat for a week, and saying so is the whole of what an instrument may do here.
+ * `hub audit --apply` still files, from a human's or an agent's explicit call, with their name on
+ * it. That is the difference between a report and a forgery.
+ *
+ * Read-only. Never throws: it is a passenger on someone else's call, and a passenger that can
+ * crash the vehicle is not worth carrying. */
+export function runReview(a = {}) {
+  const limit = Number.isFinite(a.limit) ? Math.max(0, a.limit) : 3;
+  const rank = { high: 0, med: 1, low: 2 };
+  let all = [], lintTotal = 0, auditTotal = 0, notes = [];
+  try {
+    const l = runLint({});
+    lintTotal = l.findings.length;
+    all = all.concat(l.findings.map(f => ({ ...f, from: 'lint' })));
+  } catch (e) { notes.push('lint failed: ' + (e && e.message ? e.message : String(e))); }
+  try {
+    // `queues` comes from the caller for the same reason runAudit takes it there: queue.mjs
+    // imports this file. Without rows the stale-button check is skipped, and runAudit says so in
+    // its own notes rather than reading as "no buttons are stale".
+    const r = runAudit({ apply: false, days: a.days, queues: a.queues });
+    auditTotal = r.findings.length;
+    all = all.concat(r.findings.map(f => ({ ...f, from: 'audit' })));
+  } catch (e) { notes.push('audit failed: ' + (e && e.message ? e.message : String(e))); }
+  all.sort((x, y) => (rank[x.severity] ?? 3) - (rank[y.severity] ?? 3));
+  /* One per KIND, not the first N by severity. The plain top-3 filled itself with three copies of
+   * button-without-prep — same rule, same wording, three different task numbers — and pushed two
+   * other kinds of problem off the list entirely. A reader given three instances of one rule learns
+   * less than one given three rules, so each kind appears once with its remaining count beside it. */
+  const byId = new Map();
+  for (const f of all) if (!byId.has(f.id)) byId.set(f.id, f);
+  const top = [...byId.values()].slice(0, limit).map(f => ({
+    from: f.from, id: f.id, severity: f.severity, what: f.what, fix: f.fix,
+    law: f.law, lawSince: f.lawSince || null, lawDeclared: !!f.lawDeclared,
+    project: f.project || null, task: f.task || null, role: f.role || null,
+    alsoLikeThis: all.filter(x => x.id === f.id).length - 1,
+  }));
+  return {
+    total: all.length, kinds: byId.size, lint: lintTotal, audit: auditTotal, shown: top.length,
+    findings: top, notes,
+    // Stated, not implied: the caller sees a short list and must not read it as the whole list.
+    hint: all.length > top.length
+      ? `${all.length - top.length} more finding(s)` +
+        (byId.size > top.length ? ` in ${byId.size - top.length} further kind(s)` : ' of the kinds above') +
+        ' — hub lint / hub audit for all of them'
+      : null,
+  };
 }
 
 /* ── Output budgets ──
@@ -2912,7 +3062,13 @@ export function runBrief(a = {}) {
   staleDigests.sort((x, y) => y.daysBehind - x.daysBehind);
 
   const claimsDb = loadClaims();
-  return { tasksOpen, journalRecent, staleCards, staleDigests, activeClaims: activeClaims(claimsDb.claims), generated: now() };
+  return {
+    tasksOpen, journalRecent, staleCards, staleDigests, activeClaims: activeClaims(claimsDb.claims),
+    // The audit rides here rather than waiting to be called — see runReview. `queues` arrives from
+    // the caller (index.mjs/cli.mjs already compute the rows for the queue section).
+    review: runReview({ queues: a.queues, limit: a.reviewLimit }),
+    generated: now(),
+  };
 }
 
 /* ── Onboarding / what's-new ── */
@@ -2974,6 +3130,9 @@ export function runWhatsNew(a = {}) {
     newEntries: entries.length,
     entries: entries.slice(0, 50),
     ...(env.items.length ? { environment: env.items, environmentTotal: env.total } : {}),
+    // Same passenger as in runBrief: an agent that returns to work sees what the hub's own rules
+    // say is wrong, without anyone having to remember to ask (see runReview).
+    review: runReview({ queues: a.queues, limit: a.reviewLimit }),
   };
 }
 
@@ -3121,6 +3280,53 @@ export function runNext(a = {}) {
 /* The day split by WHO CAN ACT, which is the split that decides whether anything moves: agent
  * work, the owner's buttons, and what is waiting on something else. A single mixed list hides
  * the fact that half of it cannot be started by the reader holding it. */
+/* A task is the owner's either because it says so (owner_kind) or because it is assigned to a role
+ * the instance already DECLARED as a human owner. Most real tasks carry no owner_kind, so without
+ * the second test every owner decision lands in the "agent work, ready now" column — a list whose
+ * whole purpose is that its reader can start everything in it. */
+const isOwnerTask = (owners) => (t) => t.owner_kind === 'human' || (t.assignee && owners.has(t.assignee));
+
+/* ── The buttons that are actually rotting ──
+ *
+ * The spec that asked for this was aimed at the owner QUEUE: items sent to a human, waiting weeks.
+ * Measured on the hub it was written for, that queue was empty — read to the byte, offsets equal to
+ * file size. What had actually rotted was on the other surface entirely: 31 of 143 open tasks
+ * belonged to the owner, the oldest 80 days old, three of them past deadlines that fell 15 days
+ * ago. The queue was read; the decisions were never made.
+ *
+ * The two are not the same thing and are reported apart (see ownerQueueItems in queue.mjs for the
+ * other one). A queue item is a package somebody addressed and is waiting on. An owner-assigned
+ * task is a decision sitting on the board that nobody else is permitted to move — invisible in
+ * every "what can I start" list precisely because the answer there is "not this".
+ *
+ * Age is measured from `created`, and a task without a stamp is counted but reported as unknown
+ * rather than as new: guessing zero would make the oldest backlog look like the freshest.
+ *
+ * Pure over the task list — no I/O, so it costs nothing to carry on a call that already loaded it. */
+export function ownerWaiting(tasks, { today = new Date().toISOString().slice(0, 10), limit = 10 } = {}) {
+  const owners = new Set(ownerRoles());
+  const isOwner = isOwnerTask(owners);
+  const ageOf = (t) => {
+    const ms = t.created ? parseTs(t.created).getTime() : NaN;
+    return Number.isFinite(ms) ? Math.max(0, Math.floor((Date.now() - ms) / 86400000)) : null;
+  };
+  const rows = (tasks || []).filter(t => t.status === 'open' && isOwner(t)).map(t => ({
+    id: t.id, project: t.project || null, assignee: t.assignee || null,
+    deadline: t.deadline || null,
+    overdueDays: t.deadline && t.deadline < today
+      ? Math.floor((parseTs(today).getTime() - parseTs(t.deadline).getTime()) / 86400000) : null,
+    ageDays: ageOf(t), text: String(t.text || '').slice(0, 100),
+  })).sort((x, y) => (y.ageDays ?? -1) - (x.ageDays ?? -1));
+  const aged = rows.filter(r => r.ageDays != null);
+  return {
+    count: rows.length,
+    oldestDays: aged.length ? aged[0].ageDays : null,
+    unknownAge: rows.length - aged.length,
+    overdue: rows.filter(r => r.overdueDays != null).length,
+    items: limit > 0 ? rows.slice(0, limit) : rows,
+  };
+}
+
 export function runAgenda(a = {}) {
   const today = new Date().toISOString().slice(0, 10);
   const today3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
@@ -3129,12 +3335,7 @@ export function runAgenda(a = {}) {
   const short = (t) => ({ id: t.id, project: t.project, importance: t.importance, deadline: t.deadline || null,
     assignee: t.assignee || null, text: (t.text || '').slice(0, 100),
     overdue: !!(t.deadline && t.deadline < today) });
-  // A task is the owner's either because it says so (owner_kind) or because it is assigned to a
-  // role the instance already DECLARED as a human owner. Most real tasks carry no owner_kind, so
-  // without the second test every owner decision lands in the "agent work, ready now" column —
-  // a list whose whole purpose is that its reader can start everything in it.
-  const owners = new Set(ownerRoles());
-  const isOwner = (t) => t.owner_kind === 'human' || (t.assignee && owners.has(t.assignee));
+  const isOwner = isOwnerTask(new Set(ownerRoles()));
   return {
     overdue: sorted.filter(t => t.deadline && t.deadline < today).map(short),
     dueSoon: sorted.filter(t => t.deadline && t.deadline >= today && t.deadline <= today3).map(short),
