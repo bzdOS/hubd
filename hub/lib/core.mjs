@@ -2794,18 +2794,48 @@ export function runTaskUpdate(a) {
      * took this task — was indistinguishable from a typo fix in its text. A reader scanning the
      * journal needs the new owner, the new priority, the new date; that is the whole reason the
      * line exists. */
+    /* WHAT REACHES THE JOURNAL, AND WHAT STAYS IN THE EVENT LOG.
+     *
+     * The journal is the owner's memory prosthesis and has to stay readable by a person. Measured
+     * on a live hub it was not: of 2642 entries, 1211 were task echo, and 725 of those were this
+     * line. `~ task #planck-66 → @opencode-bsdos` is not something a human reads for meaning —
+     * every field of it is already in tasks.<node>.events.jsonl at full fidelity, which is where a
+     * machine looks anyway.
+     *
+     * So a field edit no longer writes here at all. But the spec that asked for this wanted `kind:
+     * task` gone entirely, and that would have been wrong: of 467 "-> done" echoes, 83 were the
+     * ONLY journal trace that the task was ever closed, because closing through the CLI never wrote
+     * a `done` entry — the assumption that hub_report already covers closures is false for that
+     * path. Deleting them would have erased 83 closures from the readable record to remove noise.
+     *
+     * A CLOSURE IS NARRATIVE, so it is promoted rather than dropped: `kind: 'done'`, carrying the
+     * task's text, which is what a person scanning the month actually needs. A reopen is an event
+     * too and keeps its line. Everything else — assignee, dates, tags, deps, text fixes — is
+     * bookkeeping and now lives in exactly one place.
+     *
+     * ASSIGNMENT STAYS TOO. The comment this replaces made the case and it still holds: "somebody
+     * took this task" is the single most useful event in a coordination log, and it is 33 of the
+     * 725 lines, not the bulk. What goes is attribute maintenance — text fixes, tags, deps,
+     * resources, importance, dates, and the bare "edited" that said nothing at all. The dividing
+     * line is not verbosity, it is whether a person reconstructing the month needs it: who holds
+     * a task and what state it is in, yes; which of its fields was touched, no.
+     *
+     * `kind: 'task'` survives for creation (line 2682), assignment and non-done status, and that
+     * matters beyond taste: BOOKKEEPING_KINDS excludes `task` from the card-freshness signal
+     * precisely so that filing a task does not count as the project having moved. Promoting
+     * creation to `note` would silently undo that fix. */
     if (!a.quiet) {
       const bits = [];
-      if (a.status) bits.push(a.status);
+      if (a.status && a.status !== 'done') bits.push(a.status);
       if (patch.assignee != null) bits.push('@' + patch.assignee);
-      if (patch.importance != null) bits.push('importance ' + patch.importance);
-      if (patch.deadline != null) bits.push(patch.deadline ? 'due ' + patch.deadline : 'no deadline');
-      if (patch.cat != null || patch.tags != null) bits.push('cat/tags');
-      if (patch.depends_on != null) bits.push('deps');
-      if (patch.resources != null) bits.push('resources');
-      if (patch.text != null) bits.push('text');
-      journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
-        text: '~ task #' + t.id + ' → ' + (bits.join(', ') || 'edited') });
+      if (a.status === 'done') {
+        journalAppend({ ts: now(), project: t.project, agent: author, kind: 'done',
+          text: '#' + t.id + ' ' + String(t.text || '').slice(0, 160) });
+      }
+      if (bits.length) {
+        journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
+          text: '~ task #' + t.id + ' → ' + bits.join(', ') });
+      }
     }
     const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
     return { ok: true, task: { ...t, ...patch }, ...(resourceHint ? { resourceHint } : {}) };

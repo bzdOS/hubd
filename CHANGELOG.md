@@ -37,6 +37,40 @@ a version here never migrates or deletes data.
   `git config core.hooksPath .githooks`. Rewriting an unpushed message is free;
   rewriting a pushed one is not, and a published one cannot be rewritten at all.
 
+- **The journal is the owner's memory prosthesis, and it was half machine echo.** Measured on a
+  live hub: 2642 entries, **1211 of them task echo**, and 725 came from one line in
+  `runTaskUpdate` — `~ task #planck-66 -> @opencode-bsdos`, `~ task #planck-65 -> done`. Every
+  field of that line already exists in `tasks.<node>.events.jsonl` at full fidelity, which is where
+  a machine looks anyway.
+
+  Attribute maintenance no longer reaches the journal: text fixes, tags, deps, resources,
+  importance, dates, and the bare `edited` that said nothing at all. Who holds a task and what
+  state it is in still does — an assignment is the single most useful event in a coordination log,
+  and it was 33 of those 725 lines, not the bulk.
+
+- **A closure is narrative, so it was promoted rather than dropped.** The spec this came from asked
+  for `kind: task` to disappear from the journal entirely, on the assumption that closures are
+  already recorded as `kind: done` by `hub_report`. That assumption is false for the CLI path: of
+  467 `-> done` echoes on the live hub, **83 were the only journal trace that the task had ever
+  been closed**. Deleting them to remove noise would have erased 83 closures from the readable
+  record.
+
+  Closing now writes a `done` entry carrying the task's text — what a person scanning the month
+  actually needs — and the echo line is not written alongside it, so a close is recorded once.
+
+- **Two thirds of that spec turned out to be unnecessary, and saying so is part of the change.**
+  It also asked for deduplication of identical adjacent events within 60s, and for `hub_recall` to
+  ignore echo. On the live data there were **zero** identical adjacent entries — 0.9.3's read-side
+  dedup already drops byte-identical lines — while 264 pairs were identical *modulo the task id*,
+  which no exact-match dedup would ever catch. Removing the echo at the write side deletes that
+  whole category instead. And recall already ranks every journal line below every card and
+  decision; excluding what survives the cut would remove signal, not noise.
+
+  Its proposed allowlist (`done/note/decision/blocked/sync`) would also have silently stopped
+  journaling five real narrative kinds that exist in the data: `resource`, `insight`, `reflection`,
+  `ship`, `broken`. A denylist of echo is the right shape — a new narrative kind is then recorded by
+  default.
+
 ## 0.9.9 — 2026-09-07
 
 - **A purged queue re-delivered everything that survived the purge.** Cursors are
