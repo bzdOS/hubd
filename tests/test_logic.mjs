@@ -1643,11 +1643,25 @@ const jwT = core.runTaskAdd({ project: 'p', text: 'the work', by: 'dev-t' }).tas
 core.runTaskUpdate({ id: jwT.id, assignee: 'dev-atlas', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, importance: 'high', deadline: '2026-12-01', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, status: 'done', by: 'dev-atlas' });
-const jwLines = core.journalTail('p', 20).filter(e => e.kind === 'task').map(e => e.text);
+const jwAll = core.journalTail('p', 20);
+const jwLines = jwAll.filter(e => e.kind === 'task').map(e => e.text);
 ok(jwLines.some(l => /@dev-atlas/.test(l)), `journal: an assignment names the new owner (got ${JSON.stringify(jwLines)})`);
-ok(jwLines.some(l => /importance high/.test(l) && /due 2026-12-01/.test(l)),
-  'journal: a priority and deadline change name both');
-ok(jwLines.some(l => /→ done$/.test(l)), 'journal: a close still reads as done');
+/* ATTRIBUTE MAINTENANCE NO LONGER REACHES THE JOURNAL.
+ * Measured on a live hub: 2642 entries, 1211 of them task echo, 725 from this one line. A reader
+ * scanning the month does not need to know which field was touched — that is in
+ * tasks.<node>.events.jsonl at full fidelity. Who holds a task and what state it is in, they do,
+ * so assignment and status stay. */
+ok(!jwLines.some(l => /importance high|due 2026-12-01|text|cat\/tags|deps/.test(l)),
+  `journal: a field edit writes nothing here — it is already in the event log (got ${JSON.stringify(jwLines)})`);
+/* But a CLOSURE is narrative and gets PROMOTED, not dropped. The spec asked for kind:task to go
+ * entirely; on the live hub 83 of 467 "-> done" echoes were the only journal trace that a task was
+ * ever closed, because closing through the CLI never wrote a `done` entry. Cutting them would have
+ * erased 83 closures from the readable record in order to remove noise. */
+const jwDone = jwAll.filter(e => e.kind === 'done').map(e => e.text);
+ok(jwDone.some(l => l.includes('#' + jwT.id)) && jwDone.some(l => /the work/.test(l)),
+  `journal: a close reads as a done entry carrying the task text, not as field echo (got ${JSON.stringify(jwDone)})`);
+ok(!jwLines.some(l => /→ done/.test(l)),
+  'journal: and the close is recorded once, not as both a done entry and an echo line');
 ok(!jwLines.some(l => /→ edited$/.test(l)), 'journal: nothing falls back to the useless word');
 fs.rmSync(JW, { recursive: true, force: true });
 core.setHubBase(T0);
