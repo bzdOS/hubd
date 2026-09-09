@@ -190,6 +190,10 @@ an instance says which is which:
 - Incidents quote **`laws`** — your own rule with the date you wrote it — because an engine's
   opinion carries no weight and your own past decision does. No local law? The finding still
   fires and says it is using the engine's wording.
+- You do not have to remember to call either one. `hub_brief` and `hub_whatsnew` carry a
+  **`review`** block: the top findings of both, one per KIND (a repeated rule cannot crowd out the
+  others), each quoting its law and date. It **reports only** — nothing is filed unless somebody
+  calls `hub audit --apply` with their own name on it. `reviewLimit: 0` turns the block off.
 - `strict.rejectNoteOnlyReport` refuses a report made of nothing but unprefixed prose (an explicit
   `NOTE:` still lands). Off unless asked: nothing here starts refusing writes because it was
   upgraded.
@@ -243,7 +247,17 @@ agent boils it down to a package the owner can decide on in <=30s) and the butto
 queue role via plain `hub queue send <owner-role> "<package>"` — no separate mechanism.
 List human-owner role names (e.g. `["alice"]`) in `HUB/owner-roles.json` and `hub_brief`
 rolls up pending items in those roles as "N buttons waiting (oldest X days)" — visibility
-without an agent (or you) having to check each owner's queue by hand.
+without an agent (or you) having to check each owner's queue by hand. From 0.9.12 it also
+lists them one per line (`buttonItems`: age, sender, subject), because the count told the
+owner they were behind without telling them what of.
+
+Two things wait on an owner and they are NOT the same. A **queue item** is a package somebody
+addressed and is waiting on. An **open task assigned to an owner role** is a decision sitting on
+the board that nobody else may move — `ownerWaiting` in `hub_brief`, with age and how far past
+deadline. Measured on the hub this shipped from, the owner's queue was empty and 31 open tasks
+were his, the oldest 80 days: the queue had been read, the decisions never made. Nothing acts on
+either list. hubd does not hibernate, defer or close your work because you did not answer — silence
+is not consent, and a default executed in your name is not a default, it is a decision.
 
 ### Handoff convention — the queue IS the channel, not the terminal
 When you hand a task to another agent, the task text goes in the QUEUE (`hub queue send`),
