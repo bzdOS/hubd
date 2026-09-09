@@ -358,6 +358,59 @@ export function conflictedFiles() {
   return out.sort();
 }
 
+/* Resolve a conflicted QUEUE file: ours, then whatever blocks only theirs has, appended at the end.
+ *
+ * Queue files are append-only by contract but have no union merge (only journal.*.jsonl and
+ * tasks.*.events.jsonl do), so two sides that both appended are a real conflict. It happens: one
+ * node came back after two days holding 49 local commits, with five queue files conflicted at
+ * once, and every block on both sides was a message somebody really sent.
+ *
+ * Appending theirs at the END rather than merging by timestamp is the whole point, and it is a
+ * better trade than the ts-ordered union this was first designed as. Cursors are byte offsets:
+ * insert a block anywhere before a cursor and that cursor silently points at the wrong place, so
+ * a ts-ordered merge has to recompute every cursor in the hub, including the ones on other nodes
+ * that this node cannot see. Appending inserts nothing before anything, so every existing cursor
+ * stays exactly as valid as it was. The cost is that the file is no longer in strict time order —
+ * which costs nothing, because a reader walks forward from its cursor and every block carries its
+ * own timestamp.
+ *
+ * Deduplicated on the whole block, not the header: the same minute and sender can carry two
+ * different messages, and dropping one of those would be losing work to save a line. */
+export function resolveQueueConflicts(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  const theirs = [];
+  let hunks = 0, malformed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^<<<<<<< /.test(lines[i])) { out.push(lines[i]); continue; }
+    let mid = -1, end = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (mid === -1 && lines[j] === '=======') mid = j;
+      else if (/^>>>>>>> /.test(lines[j])) { end = j; break; }
+    }
+    if (mid === -1 || end === -1) { malformed++; out.push(lines[i]); continue; }
+    out.push(...lines.slice(i + 1, mid));
+    theirs.push(...lines.slice(mid + 1, end));
+    hunks++;
+    i = end;
+  }
+  if (!hunks) return { text: String(text), hunks: 0, carried: 0, malformed };
+  const blocksOf = (arr) => {
+    const src = arr.join('\n');
+    const idx = [];
+    const re = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm;
+    for (let m; (m = re.exec(src));) idx.push(m.index);
+    return idx.map((s, k) => src.slice(s, k + 1 < idx.length ? idx[k + 1] : src.length).replace(/\s+$/, ''));
+  };
+  const have = new Set(blocksOf(out));
+  const carried = blocksOf(theirs).filter(b => b && !have.has(b));
+  const body = out.join('\n').replace(/\s+$/, '');
+  return {
+    text: (carried.length ? body + '\n\n' + carried.join('\n\n') : body) + '\n',
+    hunks, carried: carried.length, malformed,
+  };
+}
+
 /* Resolve a conflicted card the way a human resolving one actually reasons.
  *
  * A card's accumulating sections are bullet lists — Facts, Next step, decisions — and two nodes

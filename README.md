@@ -138,6 +138,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   no commit can ever clean, and they stop a merge permanently. Since 0.9.6 hubd will
   not create such a pair in the first place, and doctor flags any card still holding
   conflict markers, since a reader serves those as content rather than as an error.
+- **When a queue conflicts** — append-only by contract, but without union merge two
+  sides that both appended do collide. `hub queue resolve` keeps ours in place and
+  appends theirs at the end, which leaves every byte cursor in the hub valid.
 - **When a card does conflict** — the only shared file that can, being the one
   mutable one — `hub card resolve` unions the bullet-list hunks (two nodes appending
   facts have not disagreed) and leaves prose hunks for you, named by section. It
