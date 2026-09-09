@@ -2076,8 +2076,19 @@ const ccText = ['# demo', '', '## Digest', '<<<<<<< HEAD', 'our digest', '======
   '>>>>>>> abc', '', '## Facts', '- fact: already here', '<<<<<<< HEAD', '- fact: ours',
   '- fact: both wrote this', '=======', '- fact: both wrote this', '- fact: theirs', '>>>>>>> abc', ''].join('\n');
 fs.writeFileSync(ccCard, ccText);
-ok(core.conflictedFiles().length === 1 && core.conflictedFiles()[0] === ccCard,
-  'conflictedFiles: a card holding markers is found');
+ok(core.conflictedFiles().length === 1 && core.conflictedFiles()[0].file === ccCard && core.conflictedFiles()[0].kind === 'card',
+  'conflictedFiles: a card holding markers is found, and named as a card');
+/* Queues were missing from this for three releases, and they are the worse case: a card is READ,
+ * a queue is DELIVERED. 83 marker lines were found committed across eight queue files on one
+ * mesh, 57 in a single file, every one handed to a worker as the text of a message. */
+fs.mkdirSync(path.join(CC, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(CC, 'queues', 'q.n1.queue.md'),
+  '\n## 2026-09-01 10:00 · from alice\nx\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> abc\n');
+const ccAll = core.conflictedFiles({ queueRoot: CC });
+ok(ccAll.length === 2 && ccAll.some(c => c.kind === 'queue'),
+  `conflictedFiles: a queue holding markers is found too (got ${JSON.stringify(ccAll.map(c => c.kind))})`);
+ok(core.conflictedFiles().filter(c => c.kind === 'queue').length === 0,
+  'conflictedFiles: and queues are only scanned when a queue root is given — the team root can differ from the hub base');
 const ccRes = core.resolveCardConflicts(ccText);
 ok(ccRes.resolved === 1 && ccRes.unresolved.length === 1 && ccRes.unresolved[0].section === 'Digest',
   `resolveCardConflicts: unions the list hunk, refuses the prose one (got ${ccRes.resolved}/${JSON.stringify(ccRes.unresolved)})`);
@@ -2094,8 +2105,12 @@ const ccTorn = core.resolveCardConflicts('## Facts\n<<<<<<< HEAD\n- fact: a\n');
 ok(ccTorn.resolved === 0 && ccTorn.text === '## Facts\n<<<<<<< HEAD\n- fact: a\n',
   'resolveCardConflicts: a hunk with no separator or terminator is not touched');
 const ccDoc = run('doctor', { HUBD_DIR: CC, HUBD_TEAM_DIR: CC });
-ok(/cards: +1 file\(s\) still hold git conflict markers/.test(ccDoc.out) && /hub card resolve/.test(ccDoc.out),
-  'doctor: names cards that still hold markers, and the command that fixes them');
+ok(/markers: +\d+ file\(s\) still hold git conflict markers/.test(ccDoc.out) && /card\(s\) - fix with: hub card resolve/.test(ccDoc.out),
+  'doctor: names files that still hold markers, and the command that fixes each KIND');
+ok(/queue\(s\) - fix with: hub queue resolve/.test(ccDoc.out),
+  'doctor: a conflicted queue is sent to the queue resolver, not the card one');
+ok(/a queue DELIVERS them/.test(ccDoc.out),
+  'doctor: and says why a queue is the worse case of the two');
 const ccCli = run('card resolve', { HUBD_DIR: CC, HUBD_TEAM_DIR: CC });
 ok(ccCli.code === 1 && /1 list hunk\(s\) unioned, 1 left for you/.test(ccCli.out),
   `card resolve: exits non-zero while anything is left, so a script cannot mistake it for done (code ${ccCli.code})`);

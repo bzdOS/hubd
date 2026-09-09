@@ -20,7 +20,20 @@ sh tests/smoke_cli.sh          # the CLI end to end
 sh tests/smoke_mcp.sh          # the MCP server over stdio
 sh tests/test_sync_preserve.sh # card writes never drop a hand-written section
 sh tests/check_clean.sh        # no private names or non-English in tracked files
+sh tests/test_mesh_sync.sh     # what the mesh sync says when a pull does not go through
 ```
+
+Wire the commit-message hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`check_clean.sh` scans the git log, and a message enters the log only *after* the
+commit is made — so the gate cannot catch the commit that breaks it. It passed
+honestly three times in a row here while three non-English messages went in, and
+the next release was blocked until they had to be rewritten with `commit-tree`.
+The hook runs the same denylist over the message while rewriting it is still free.
 
 Point everything at a throwaway hub while you work — `HUBD_DIR=/tmp/hub` — and
 never at `~/.hubd`. The suites do this themselves; a stray command run from your
