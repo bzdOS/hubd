@@ -3,7 +3,17 @@
 # Fails (exit 1) if private or non-English leaks are found in tracked file
 # contents OR in the git log. Must pass before any public push / npm publish.
 #
-#   sh tests/check_clean.sh
+#   sh tests/check_clean.sh              # the full gate
+#   sh tests/check_clean.sh --msg FILE   # one commit message, before it exists
+#
+# The --msg mode exists because THE GATE CANNOT CATCH THE COMMIT THAT BREAKS IT.
+# A message enters the git log only after the commit is made, so a run that passes
+# is honest and the very next commit can still poison the log. Three commits did
+# exactly that here, each ending with "Checked: check_clean PASS", each true, and
+# together they blocked the next release until the messages were rewritten.
+# Wire it once and the class is gone:
+#
+#   git config core.hooksPath .githooks
 #
 # This file is intentionally ASCII-only: Cyrillic/CJK personal terms are caught
 # by the generic codepoint-range check below (built from hex via chr()), so no
@@ -11,8 +21,12 @@
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+MSG_FILE=""
+if [ "${1:-}" = "--msg" ]; then MSG_FILE="${2:?--msg needs a file}"; fi
+export MSG_FILE
+
 python3 - <<'PY' || exit 1
-import subprocess, sys, re
+import subprocess, sys, re, os
 
 # ASCII denylist (case-insensitive). Latin transliterations of private terms.
 ASCII_DENY = [r"dayatlas", r"izmail", r"bazi", r"bodrov", r"nextop",
@@ -25,6 +39,28 @@ def hits(line):
     return deny_re.search(line) or nonlatin_re.search(line)
 
 fails = []
+
+# --msg: check one message and nothing else. Same denylist, applied before the commit exists
+# rather than after, which is the only moment at which a bad message is still cheap to fix.
+msg_file = os.environ.get("MSG_FILE") or ""
+if msg_file:
+    try:
+        with open(msg_file, encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh, 1):
+                if line.startswith("#"):
+                    continue          # git's own comment lines are stripped from the commit
+                if hits(line):
+                    fails.append("commit-msg:%d: %s" % (i, line.rstrip()[:100]))
+    except OSError as e:
+        fails.append("commit-msg: cannot read %s (%s)" % (msg_file, e))
+    if fails:
+        print("check_clean FAIL - %d leak(s) in the commit message:" % len(fails))
+        for x in fails:
+            print("  " + x)
+        print("  the public repo is English-only; the git log is as public as the files")
+        sys.exit(1)
+    print("check_clean PASS - commit message is clean.")
+    sys.exit(0)
 
 # 1) tracked file contents
 files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split("\n")

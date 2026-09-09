@@ -482,15 +482,24 @@ if (cmd === 'doctor') {
       if (mesh.lastError) console.log('            sync says: ' + mesh.lastError);
     }
   }
-  // Conflict markers in a card are not a broken file to a reader — they are content. readCard
-  // returns them, hub_context hands them to an agent, and the agent reads two contradictory
-  // versions of the project as though both were true.
-  const conflicted = conflictedFiles();
+  /* Conflict markers are not a broken file to a reader — they are content. A card gets read; a
+   * QUEUE gets DELIVERED, which is why queues were the worse omission: 83 marker lines were found
+   * committed across eight queue files on one mesh, 57 in one file, every one handed to a worker
+   * as the text of a message. The remedy differs per kind, so it is named per kind — sending a
+   * reader to `hub card resolve` for a queue is the same mistake as 0.9.7's "upgrade that node". */
+  const conflicted = conflictedFiles({ queueRoot: resolveQueueRoot() });
   if (conflicted.length) {
     warnings++;
-    console.log('  cards:    ' + conflicted.length + ' file(s) still hold git conflict markers - a reader');
-    console.log('            serves those as CONTENT. Fix with: hub card resolve');
-    for (const f of conflicted.slice(0, 6)) console.log('            ' + path.relative(HUB, f));
+    const byKind = {};
+    for (const c of conflicted) (byKind[c.kind] = byKind[c.kind] || []).push(c.file);
+    console.log('  markers:  ' + conflicted.length + ' file(s) still hold git conflict markers - a reader');
+    console.log('            serves those as CONTENT, and a queue DELIVERS them');
+    for (const [kind, files] of Object.entries(byKind)) {
+      console.log('            ' + files.length + ' ' + kind + '(s) - fix with: hub ' +
+        (kind === 'queue' ? 'queue' : 'card') + ' resolve');
+      for (const f of files.slice(0, 4)) console.log('              ' + path.relative(HUB, f));
+      if (files.length > 4) console.log('              ... and ' + (files.length - 4) + ' more');
+    }
   }
 
   const collisions = caseCollisions();
@@ -998,7 +1007,10 @@ if (cmd === 'card' && args[1] === 'resolve') {
   const targets = args.slice(2).filter(a => !a.startsWith('-'));
   const files = targets.length
     ? targets.map(t => (t.includes('/') || t.endsWith('.md') ? path.resolve(t) : cardPath(t)))
-    : conflictedFiles();
+    // Cards and resources only: a queue conflict wants block union with theirs appended, which is
+    // `hub queue resolve`. Running the card resolver over one would union its LISTS and leave the
+    // message blocks alone, which is not a resolution of anything.
+    : conflictedFiles().filter(c => c.kind !== 'queue').map(c => c.file);
   if (!files.length) { console.log('No conflicted cards.'); done(0); }
   let left = 0, touched = 0;
   for (const f of files) {

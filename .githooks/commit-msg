@@ -1,0 +1,11 @@
+#!/bin/sh
+# Reject a commit whose MESSAGE would fail the publish gate.
+#
+# tests/check_clean.sh scans the git log, and a message enters the log only after the commit is
+# made — so the gate cannot catch the commit that breaks it. It passed honestly three times in a
+# row here while three Russian-language messages went in, and the next release was blocked until
+# they were rewritten with commit-tree. Rewriting an unpushed message is cheap; rewriting a pushed
+# one is not, and rewriting a published one is not possible.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+exec sh "$(git rev-parse --show-toplevel)/tests/check_clean.sh" --msg "$1"

@@ -343,19 +343,34 @@ export const CONFLICT_RE = /^<<<<<<< |^=======$|^>>>>>>> /m;
  * is CONTENT. readCard returns it, digestOf slices it, hub_context hands it to an agent, and the
  * agent reads two contradictory versions of the project's state as though both were true.
  *
- * So this is checked out loud. Cheap — cards and resources only, the small files. */
-export function conflictedFiles() {
+ * QUEUES were missing from this check for three releases, and they are the worse case. A card is
+ * only READ; a queue is DELIVERED. 83 marker lines turned out to be committed as content across
+ * eight queue files on one mesh — 57 in a single file — and every one of them had been handed to
+ * a worker as the text of a message. The markers got there the ordinary way: an earlier merge was
+ * resolved by hand, incompletely, and committed, after which each new merge nested markers inside
+ * the leftovers (`<<<<<<<` with no `=======`, two `=======` in a row).
+ *
+ * Reported with the kind, because the remedy differs: `hub card resolve` unions list hunks and
+ * refuses prose, `hub queue resolve` unions blocks and appends. Telling a reader to run the wrong
+ * one is the same class of mistake as the "upgrade that node" line 0.9.7 removed. */
+/* queueRoot is passed in rather than resolved here: the team root can differ from the hub base
+ * (HUBD_TEAM_DIR), and the resolver for it lives in queue.mjs, which imports this file. Taking it
+ * as an argument keeps the dependency pointing one way. */
+export function conflictedFiles({ queueRoot } = {}) {
   const out = [];
-  for (const dir of [PROJ, RESOURCES]) {
+  const scan = (dir, kind, ext) => {
     let names = [];
-    try { names = fs.readdirSync(dir).filter(f => f.endsWith('.md')); } catch { continue; }
+    try { names = fs.readdirSync(dir).filter(f => f.endsWith(ext)); } catch { return; }
     for (const f of names) {
       try {
-        if (CONFLICT_RE.test(fs.readFileSync(path.join(dir, f), 'utf8'))) out.push(path.join(dir, f));
+        if (CONFLICT_RE.test(fs.readFileSync(path.join(dir, f), 'utf8'))) out.push({ file: path.join(dir, f), kind });
       } catch {}
     }
-  }
-  return out.sort();
+  };
+  scan(PROJ, 'card', '.md');
+  scan(RESOURCES, 'resource', '.md');
+  if (queueRoot) scan(path.join(queueRoot, 'queues'), 'queue', '.queue.md');
+  return out.sort((a, b) => (a.file < b.file ? -1 : 1));
 }
 
 /* Resolve a conflicted QUEUE file: ours, then whatever blocks only theirs has, appended at the end.
