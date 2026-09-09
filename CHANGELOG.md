@@ -4,38 +4,7 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
-## 0.9.10 — 2026-09-09
-
-- **`hub doctor` looks for conflict markers in queue files too, and names the right
-  remedy per kind.** Queues were missing from that check for three releases, and
-  they are the worse case: a card is only *read*, a queue is *delivered*. On one
-  mesh 83 marker lines turned out to be committed as content across eight queue
-  files — 57 in a single file — and every one had been handed to a worker as the
-  text of a message. They got there the ordinary way: an earlier merge was resolved
-  by hand, incompletely, and committed, after which each new merge nested markers
-  inside the leftovers (`<<<<<<<` with no `=======`, two `=======` in a row).
-
-  The remedy differs, so it is named per kind rather than once: `hub card resolve`
-  unions list hunks and refuses prose, `hub queue resolve` unions blocks and
-  appends. Sending a reader to the wrong one is the same class of mistake as the
-  "upgrade that node" line 0.9.7 removed. `hub card resolve` also stops picking up
-  queue files, which it could never have resolved.
-
-  The queue root is passed in rather than resolved inside `core`: the team root can
-  differ from the hub base, and the resolver for it lives in `queue.mjs`, which
-  imports `core`.
-
-- **A commit-message gate, because the publish gate cannot catch the commit that
-  breaks it.** `tests/check_clean.sh` scans the git log, and a message enters the
-  log only after the commit exists — so a run that passes is honest and the very
-  next commit can still poison it. Three commits did exactly that here, each
-  ending with "Checked: check_clean PASS", each true, and together they blocked a
-  release until the messages had to be rewritten with `commit-tree`.
-
-  `sh tests/check_clean.sh --msg FILE` applies the same denylist to one message,
-  and `.githooks/commit-msg` calls it. Enable once per clone with
-  `git config core.hooksPath .githooks`. Rewriting an unpushed message is free;
-  rewriting a pushed one is not, and a published one cannot be rewritten at all.
+## 0.9.11 — 2026-09-09
 
 - **The journal is the owner's memory prosthesis, and it was half machine echo.** Measured on a
   live hub: 2642 entries, **1211 of them task echo**, and 725 came from one line in
@@ -70,6 +39,39 @@ a version here never migrates or deletes data.
   journaling five real narrative kinds that exist in the data: `resource`, `insight`, `reflection`,
   `ship`, `broken`. A denylist of echo is the right shape — a new narrative kind is then recorded by
   default.
+
+## 0.9.10 — 2026-09-09
+
+- **`hub doctor` looks for conflict markers in queue files too, and names the right
+  remedy per kind.** Queues were missing from that check for three releases, and
+  they are the worse case: a card is only *read*, a queue is *delivered*. On one
+  mesh 83 marker lines turned out to be committed as content across eight queue
+  files — 57 in a single file — and every one had been handed to a worker as the
+  text of a message. They got there the ordinary way: an earlier merge was resolved
+  by hand, incompletely, and committed, after which each new merge nested markers
+  inside the leftovers (`<<<<<<<` with no `=======`, two `=======` in a row).
+
+  The remedy differs, so it is named per kind rather than once: `hub card resolve`
+  unions list hunks and refuses prose, `hub queue resolve` unions blocks and
+  appends. Sending a reader to the wrong one is the same class of mistake as the
+  "upgrade that node" line 0.9.7 removed. `hub card resolve` also stops picking up
+  queue files, which it could never have resolved.
+
+  The queue root is passed in rather than resolved inside `core`: the team root can
+  differ from the hub base, and the resolver for it lives in `queue.mjs`, which
+  imports `core`.
+
+- **A commit-message gate, because the publish gate cannot catch the commit that
+  breaks it.** `tests/check_clean.sh` scans the git log, and a message enters the
+  log only after the commit exists — so a run that passes is honest and the very
+  next commit can still poison it. Three commits did exactly that here, each
+  ending with "Checked: check_clean PASS", each true, and together they blocked a
+  release until the messages had to be rewritten with `commit-tree`.
+
+  `sh tests/check_clean.sh --msg FILE` applies the same denylist to one message,
+  and `.githooks/commit-msg` calls it. Enable once per clone with
+  `git config core.hooksPath .githooks`. Rewriting an unpushed message is free;
+  rewriting a pushed one is not, and a published one cannot be rewritten at all.
 
 ## 0.9.9 — 2026-09-07
 
