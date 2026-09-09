@@ -884,6 +884,90 @@ export function runQueueGc({ root, days = 30, apply = false } = {}) {
  * @param {Array<{ role: string, pending: number, oldestWaiting: string|null, isButton: boolean, ageDays: number|null }>} rows
  * @returns {{ count: number, oldestDays: number|null, items: Array }}
  */
+/* ── What is actually waiting, not how many bytes ──
+ *
+ * buttonsSummary answers "6 waiting, oldest 61 days". That number was right and useless: the
+ * items it counted had been sitting since 2026-07-10, and finding out WHAT they were meant opening
+ * the queue file and scrolling past two months of blocks, which is precisely the friction that let
+ * them rot in the first place. A count tells the owner that they are behind. A list lets them
+ * answer one and be done.
+ *
+ * So: one row per pending block, with its age, its sender, and its first line — the line every
+ * sender in this hub already uses as the subject ("BUTTON (#195, <=30s): publish @bzdos/hubd?").
+ * Nothing new is asked of senders and no format is enforced; the convention that already exists is
+ * simply read.
+ *
+ * WHAT THIS DOES NOT DO. The spec around it wanted every owner item to carry `proposal` and
+ * `default_on_silence`, with hub_queue_send REFUSING items that lack them and a sweep inside
+ * hub_brief EXECUTING the default once an expiry passed — hibernate, kill, defer. That half is
+ * refused, and not on grounds of effort:
+ *
+ *   - Executing a default on silence is hubd deciding the owner's work for them because they did
+ *     not answer fast enough. Silence is not consent, and an engine that reads it as consent is
+ *     worse than a queue that grows. The owner's own law on buttons says a default must never be
+ *     an outward action taken in their name; killing their task is inward, which makes it easier
+ *     to justify and no more theirs.
+ *   - A hard refusal in queueSend breaks every existing sender in the fleet at once, to enforce a
+ *     field shape that has never been written down anywhere the senders can read.
+ *
+ * What survives is the honest part: make the queue legible, then let the person decide. Age is
+ * reported so an unanswered item is visibly a decision being deferred — which is the thing the
+ * spec was really after — without anything pretending to have made it.
+ *
+ * Pure read: no cursor is moved, nothing is delivered. Reading a queue to LOOK at it must not
+ * consume it (that is a bug this project has already had) — the offsets are untouched.
+ *
+ * @param {{ root?: string, roles?: string[], limit?: number, subjectChars?: number }} options
+ * @returns {Array<{role,file,ts,from,task,ageDays,subject}>} oldest first
+ */
+export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  const want = new Set(roles && roles.length ? roles : ownerRoles());
+  if (!want.size) return [];
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
+
+  const out = [];
+  for (const f of files) {
+    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
+    if (!m || !want.has(m[1])) continue;
+    let off = 0;
+    try { off = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10) || 0; } catch {}
+    let text;
+    try {
+      const size = fs.statSync(path.join(qdir, f)).size;
+      if (size <= off) continue;
+      const fd = fs.openSync(path.join(qdir, f), 'r');
+      const buf = Buffer.allocUnsafe(size - off);
+      fs.readSync(fd, buf, 0, size - off, off);
+      fs.closeSync(fd);
+      text = buf.toString('utf8');
+    } catch { continue; }
+
+    // Same header shape peekQueueDepth counts, so the list and the count can never disagree.
+    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · task #([^\n]+))?$/gm;
+    let mm, prev = null;
+    const push = (h, body) => {
+      const subject = String(body || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+      const ms = parseTs(h.ts).getTime();
+      out.push({
+        role: m[1], file: f, ts: h.ts, from: h.from, task: h.task,
+        ageDays: Number.isFinite(ms) ? Math.floor((Date.now() - ms) / 86400000) : null,
+        subject: subject.length > subjectChars ? subject.slice(0, subjectChars) + '…' : subject,
+      });
+    };
+    while ((mm = re.exec(text)) !== null) {
+      if (prev) push(prev.h, text.slice(prev.end, mm.index));
+      prev = { h: { ts: mm[1], from: mm[2].trim(), task: mm[3] ? mm[3].trim() : null }, end: re.lastIndex };
+    }
+    if (prev) push(prev.h, text.slice(prev.end));
+  }
+  out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));   // oldest first: that is the queue
+  return limit > 0 ? out.slice(0, limit) : out;
+}
+
 export function buttonsSummary(rows) {
   // A fanout role carries pending:null (per-reader cursors, see queueSummaryForBrief),
   // so `pending > 0` also keeps a broadcast owner role out of the rollup — the count
