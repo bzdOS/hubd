@@ -745,7 +745,11 @@ export function writerVersions() {
     if (node === 'life') continue;               // the private braid is this machine's, not a node
     const key = node || 'legacy';
     let g = byNode.get(key);
-    if (!g) byNode.set(key, g = { node: key, versions: {}, unstamped: 0, last: null, lastAt: null, _seq: [] });
+    if (!g) byNode.set(key, g = { node: key, versions: {}, unstamped: 0, last: null, lastAt: null, lastWrite: null, _seq: [] });
+    /* Newest entry of ANY kind, stamped or not. `lastAt` can only see stamped ones, so a node
+     * still running a pre-0.9.4 hubd reported lastAt: null — indistinguishable from a node that
+     * has never written at all. Membership questions need the second fact, not the first. */
+    if (e.ts && (!g.lastWrite || String(g.lastWrite) < String(e.ts))) g.lastWrite = e.ts;
     const v = typeof e.v === 'string' && e.v ? e.v : null;
     if (!v) { g.unstamped++; continue; }
     g.versions[v] = (g.versions[v] || 0) + 1;
@@ -761,6 +765,7 @@ export function writerVersions() {
       node: g.node, versions: g.versions, unstamped: g.unstamped,
       last: last ? last.v : null,
       lastAt: last ? new Date(last.ms).toISOString().slice(0, 16).replace('T', ' ') : null,
+      lastWrite: g.lastWrite,
       concurrent,
       concurrentBy: concurrentBy(g._seq, concurrent),
     });
@@ -3400,6 +3405,12 @@ export function runRelease(a) {
  * for minutes, not the durable append-only history journal/tasks are — and
  * mesh-sync.sh's plain `git add -A` would otherwise turn every heartbeat
  * across the whole mesh into churned, pushed git history.
+ *
+ * That last decision is right and it had a cost nobody had accounted for: read from another node,
+ * this registry describes a different machine and says nothing about it. See writePresenceSnapshot
+ * below for the 92 hours that cost, and for the one file per node that fixes it without syncing
+ * the directory. The `presence/` gitignore entry carries a trailing slash, which matches only the
+ * DIRECTORY — `presence.<node>.json` sits beside it and does travel.
  */
 export function presencePath(agent) { return path.join(PRESENCE, slugify(agent) + '.json'); }
 export function readPresenceRecord(agent) {
@@ -3418,6 +3429,67 @@ function presenceAlive(rec, nowMs) {
   return nowMs < parseTs(rec.last_seen).getTime() + ttl * 60000;
 }
 
+/* ── One node's registry, published to the mesh ──
+ *
+ * The incident, measured across three nodes: the same role read as 383 minutes since heartbeat on
+ * fedora and 8469 minutes — 5.9 days — on planck. Nothing was stale and nothing had diverged.
+ * `presence/` is node-local by design (see above), the roles run on fedora, the orchestrators run
+ * on planck, so the orchestrator was reading planck's registry as if it were the fleet's. It
+ * escalated "worker is dead, cannot dispatch" four times while the worker was working: **92 hours**
+ * lost to a number that could not mean what it looked like.
+ *
+ * Syncing `presence/` itself is still wrong for the reason the comment above gives — a file per
+ * agent, rewritten every few seconds, would turn every heartbeat in the fleet into pushed git
+ * history. So each node publishes ONE snapshot of its own registry instead: `presence.<node>.json`,
+ * a single small file, written at most once per PRESENCE_SNAPSHOT_MS.
+ *
+ * Two properties make this safe in the mesh where syncing the directory was not:
+ *
+ *   - A node only ever writes the file bearing its OWN name, exactly like `journal.<node>.jsonl`
+ *     and `tasks.<node>.events.jsonl`. Two nodes never touch one file, so there is nothing for a
+ *     merge to resolve — no union rule needed, no conflict possible. JOURNAL_NODE is already
+ *     lowercased and sanitised at the top of this file, so two nodes cannot mint names that differ
+ *     only in case either: that collision is what took one node out of this mesh for 246 commits.
+ *
+ *   - The throttle is deliberately SHORTER than the shortest ttlMin in use (15 minutes by
+ *     default). If it were longer, a live agent could read as expired from another node — the same
+ *     lie in a new place. Five minutes leaves 3x headroom and cuts the write rate to one small
+ *     file per node per five minutes, whatever the heartbeat rate.
+ */
+export const PRESENCE_SNAPSHOT_MS = Math.max(1000, parseInt(process.env.HUBD_PRESENCE_SNAPSHOT_MS || '', 10) || 300000);
+export function presenceSnapshotPath(node = JOURNAL_NODE) { return path.join(HUB, 'presence.' + node + '.json'); }
+
+/** Publish this node's registry. Throttled by the file's own mtime — no extra state to keep in
+ *  sync with, and it survives a process restart, which a counter in memory would not. */
+export function writePresenceSnapshot({ force = false } = {}) {
+  const f = presenceSnapshotPath();
+  if (!force) {
+    try {
+      if (Date.now() - fs.statSync(f).mtimeMs < PRESENCE_SNAPSHOT_MS) return null;
+    } catch {}   // no snapshot yet — write the first one
+  }
+  try { atomicWrite(f, { node: JOURNAL_NODE, written: now(), v: VERSION, agents: loadPresence() }); }
+  catch { return null; }
+  return f;
+}
+
+/** Every OTHER node's published snapshot. Ours is skipped: the live directory is fresher than any
+ *  snapshot of it, and reading both would list this node's agents twice. */
+export function presenceSnapshots() {
+  const out = [];
+  let files = [];
+  try { files = fs.readdirSync(HUB).filter(f => /^presence\..+\.json$/.test(f)); } catch { return out; }
+  for (const f of files) {
+    const node = f.slice('presence.'.length, -'.json'.length);
+    if (node === JOURNAL_NODE) continue;
+    try {
+      const o = JSON.parse(fs.readFileSync(path.join(HUB, f), 'utf8')) || {};
+      out.push({ node, written: o.written || null, v: o.v || null, agents: Array.isArray(o.agents) ? o.agents : [] });
+    } catch { out.push({ node, written: null, v: null, agents: [], unreadable: true }); }
+  }
+  return out.sort((a, b) => (a.node < b.node ? -1 : 1));
+}
+
 export function runHeartbeat(a) {
   const agent = a && a.agent;
   if (!agent) throw new Error('agent required');
@@ -3428,16 +3500,83 @@ export function runHeartbeat(a) {
   };
   fs.mkdirSync(PRESENCE, { recursive: true });
   atomicWrite(presencePath(agent), rec);
-  return { ok: true, agent, presence: presencePath(agent) };
+  const snapshot = writePresenceSnapshot();
+  return { ok: true, agent, presence: presencePath(agent), ...(snapshot ? { snapshot } : {}) };
 }
 
+/**
+ * The fleet as far as it can honestly be seen from here: this node's live registry, plus every
+ * other node's published snapshot, each row saying WHICH node observed it.
+ *
+ * `coverage` is the part that matters and the part that was missing. A role nobody reports is
+ * indistinguishable from a role that is dead, and that is precisely the confusion that cost 92
+ * hours — so every mesh member (taken from who writes journals, which is how membership is
+ * observable at all) is listed with the age of its snapshot, or with `snapshot: null` when it has
+ * published none. "I cannot see fedora" then reads differently from "fedora's agents are gone",
+ * which is the whole point.
+ */
 export function runPresence(a = {}) {
   const nowMs = Date.now();
-  let list = loadPresence().map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs) }));
+  const ageMin = (ts) => {
+    const ms = ts ? parseTs(ts).getTime() : NaN;
+    return Number.isFinite(ms) ? Math.max(0, Math.round((nowMs - ms) / 60000)) : null;
+  };
+  const rows = loadPresence().map(rec => ({ ...rec, observedOn: JOURNAL_NODE, live: true }));
+  const snaps = presenceSnapshots();
+  for (const s of snaps) {
+    for (const rec of s.agents) {
+      rows.push({ ...rec, observedOn: s.node, live: false, reportedBy: s.node, snapshotWritten: s.written });
+    }
+  }
+  /* One agent identity can appear on two nodes — it moved, or the name is reused. Keep the
+   * freshest heartbeat and say where the others were, rather than picking silently: a name used
+   * by two processes is itself worth seeing (the same call the version-skew report makes). */
+  const best = new Map();
+  for (const r of rows) {
+    const cur = best.get(r.agent);
+    if (!cur || String(cur.last_seen || '') < String(r.last_seen || '')) {
+      best.set(r.agent, cur ? { ...r, alsoOn: [...(cur.alsoOn || []), cur.observedOn] } : r);
+    } else if (cur.observedOn !== r.observedOn) {
+      cur.alsoOn = [...(cur.alsoOn || []), r.observedOn];
+    }
+  }
+  let list = [...best.values()].map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs) }));
   if (a.role) list = list.filter(r => r.role === a.role);
   if (a.aliveOnly) list = list.filter(r => r.alive);
   list.sort((x, y) => (x.last_seen < y.last_seen ? 1 : -1));   // freshest first
-  return { agents: list, generated: now() };
+
+  /* Membership is not "ever wrote a journal" — that set never shrinks, and this hub's journals
+   * still carry three retired node names (one of them the same machine under an old hostname).
+   * Listing them as SILENT members would report six blind spots where there are two, and a
+   * warning that cries about the past is one a reader learns to skip. A member is a node that has
+   * written within memberDays; a retired one drops off on its own. */
+  const memberDays = a.memberDays ?? 30;
+  const cutoff = nowMs - memberDays * 86400000;
+  const members = new Set(writerVersions()
+    .filter(g => g.node && g.node !== 'legacy' && g.node !== 'life')
+    .filter(g => { const ms = g.lastWrite ? parseTs(g.lastWrite).getTime() : NaN; return Number.isFinite(ms) && ms >= cutoff; })
+    .map(g => g.node));
+  members.add(JOURNAL_NODE);
+  // A node whose snapshot we are reading is a member whatever its journal says: without this, a
+  // row could name an observedOn that coverage never mentions, which is the same unattributable
+  // absence one level along.
+  for (const s of snaps) members.add(s.node);
+  const byNode = new Map(snaps.map(s => [s.node, s]));
+  const coverage = [...members].sort().map(node => {
+    if (node === JOURNAL_NODE) return { node, self: true, snapshot: 'live', agents: rows.filter(r => r.live).length };
+    const s = byNode.get(node);
+    if (!s) return { node, self: false, snapshot: null, agents: 0 };
+    return { node, self: false, snapshot: s.written, snapshotAgeMin: ageMin(s.written),
+      stale: (ageMin(s.written) ?? Infinity) > PRESENCE_SNAPSHOT_MS / 60000 * 3, agents: s.agents.length,
+      ...(s.unreadable ? { unreadable: true } : {}) };
+  });
+  const blind = coverage.filter(c => !c.self && (c.snapshot === null || c.stale)).map(c => c.node);
+  return {
+    agents: list, coverage,
+    ...(blind.length ? { blindTo: blind,
+      note: 'no current registry from ' + blind.join(', ') + ' — a role running there is invisible here, which is NOT the same as dead' } : {}),
+    generated: now(),
+  };
 }
 
 export function runKanban({ doneWindowHours = 24 } = {}) {

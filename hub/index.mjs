@@ -200,7 +200,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_heartbeat',
-    description: 'Record that an agent is alive — call it each work cycle (right after hub_report, before the next hub_queue_wait) so MCP/headless agents show up in hub_presence the same way screen-scraped ones do, no human bridge needed. Overwrites this agent\'s one presence record; freshness is judged at read time from ttlMin (default 15min), the same pattern hub_claim uses.',
+    description: 'Record that an agent is alive — call it each work cycle (right after hub_report, before the next hub_queue_wait) so MCP/headless agents show up in hub_presence the same way screen-scraped ones do, no human bridge needed. Overwrites this agent\'s one presence record; freshness is judged at read time from ttlMin (default 15min), the same pattern hub_claim uses. Also refreshes this node\'s published snapshot (presence.<node>.json) at most once every 5 minutes, so agents on OTHER nodes can see you at all — the directory itself is node-local and never syncs.',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'your stable identity, e.g. your agent name' },
       role: { type: 'string', description: 'the queue role you work under, e.g. "hubd" — lets hub_brief pair queue depth with who is listening' },
@@ -211,10 +211,11 @@ const TOOLS = [
     }, required: ['agent'] } },
 
   { name: 'hub_presence',
-    description: 'The fleet roster: every agent that has called hub_heartbeat, each flagged alive/stale from its own ttlMin. hub_brief\'s queue section pairs with this ("N queued for role X, agent last-seen T") — visibility into delivery without screen-scraping to check who is even listening.',
+    description: 'The fleet roster as far as it can honestly be seen from here: this node\'s live registry plus every other node\'s published snapshot (presence.<node>.json, one small file per node, refreshed on heartbeat). Each row carries `observedOn` — WHICH node saw that heartbeat — and `alsoOn` when one agent name turns up on several. Read `coverage` before believing any absence: it lists every current mesh member with the age of its snapshot, or null when it has published none, and `blindTo`/`note` say so outright. That distinction is the reason this tool exists in this shape — one role read as 383 minutes since heartbeat on one node and 5.9 days on another, nothing was stale and nothing had diverged, the registries were simply of different machines, and an orchestrator escalated "worker is dead" four times over 92 hours while the worker worked. A role nobody reports is invisible, which is NOT the same as dead.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'filter to agents heartbeating under this role' },
       aliveOnly: { type: 'boolean', description: 'drop stale (TTL-expired) records, default false' },
+      memberDays: { type: 'integer', description: 'a node counts as a mesh member if it wrote within N days, default 30 — retired node names drop out of `coverage` on their own' },
     } } },
 
   { name: 'hub_resource_set',
@@ -310,7 +311,7 @@ const OUTPUT_PLANS = {
   hub_task_list:  [['tasks', 100]],
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
   hub_graph:      [['edges', 200], ['dangling', 50]],
-  hub_presence:   [['agents', 60]],
+  hub_presence:   [['agents', 60], ['coverage', 12]],
   hub_audit:      [['findings', 40]],
   hub_recall:     [['hits', 20]],
   hub_agenda:     [['blocked', 40], ['agentReady', 40], ['dueSoon', 20], ['overdue', 20], ['ownerButtons', 20]],
