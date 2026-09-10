@@ -278,7 +278,12 @@ installed version; **harvest** as an MCP prompt; cwd → project auto-bootstrap
 (`hub_context`: marker file / recorded sync path / folder-name guess, no manual
 `hub_get` needed); a **presence registry** (`hub_heartbeat`/`hub_presence`,
 TTL freshness like claims) so MCP/headless agents show up next to screen-scraped
-ones, with queue depth surfaced in `hub_brief`; and **buttons** — owner-decision
+ones, with queue depth surfaced in `hub_brief` — and, from 0.9.13, a **fleet view that
+admits its blind spots**: `presence/` is node-local, so each node publishes one small
+`presence.<node>.json` and `hub_presence` reports which node observed each row plus a
+`coverage` list naming any member that is reporting nothing. A role nobody reports is
+invisible, not dead — telling those two apart is worth 92 hours, which is what confusing
+them cost once; and **buttons** — owner-decision
 queue items rolled up in `hub_brief` as "N buttons waiting (oldest X days)"
 (`HUB/owner-roles.json` names the human roles).
 

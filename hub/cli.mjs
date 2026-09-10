@@ -506,6 +506,26 @@ if (cmd === 'doctor') {
     }
   }
 
+  /* Whether this node can see the fleet's liveness at all. Belongs beside `writers:` because it
+   * answers the same shape of question one layer up: that block says which hubd wrote here, this
+   * one says whose agents are observable from here. A blind spot is reported as a blind spot -
+   * the alternative is what cost 92 hours, an orchestrator reading a neighbour's absent heartbeat
+   * as a dead worker. */
+  const pres = runPresence({});
+  const covLine = (pres.coverage || []).map(c => c.self
+    ? c.node + ' (here, ' + c.agents + ')'
+    : c.snapshot === null ? c.node + ' SILENT'
+    : c.node + ' ' + c.snapshotAgeMin + 'm' + (c.stale ? ' STALE' : '') + ' (' + c.agents + ')');
+  if (covLine.length) {
+    console.log('  fleet:    ' + covLine.join(' - ') + (pres.blindTo ? '  WARNING' : ''));
+    if (pres.blindTo) {
+      warnings++;
+      console.log('            no current registry from ' + pres.blindTo.join(', ') + ' - a role running there is');
+      console.log('            invisible here, which is NOT the same as dead. Each node publishes');
+      console.log('            presence.<node>.json on heartbeat; a node on hubd < 0.9.13 never will.');
+    }
+  }
+
   // A retrying sync loop looks exactly like a working one from inside the hub. One node's had
   // been failing every 60 seconds for 228 commits of everyone else's history while every hubd
   // report called the hub healthy, so the divergence is counted from git and printed here.
@@ -1056,10 +1076,20 @@ if (cmd === 'heartbeat') {
 if (cmd === 'presence') {
   const roleFlag = getFlag('--role');
   const data = runPresence({ role: (typeof roleFlag === 'string') ? roleFlag : undefined, aliveOnly: args.includes('--alive') });
+  /* Coverage prints even when the agent list is empty, and that is the point: "no presence
+   * records" used to be the whole answer on a machine that simply is not where the fleet runs. */
+  const cov = (data.coverage || []).map(c => c.self
+    ? `${c.node} (here, ${c.agents})`
+    : c.snapshot === null ? `${c.node} SILENT`
+    : `${c.node} ${c.snapshotAgeMin}m${c.stale ? ' STALE' : ''} (${c.agents})`);
+  if (cov.length) console.log('  seen from: ' + cov.join(' · '));
+  if (data.note) console.log('  ⚠ ' + data.note);
   if (!data.agents.length) { console.log('(no presence records)'); done(0); }
   for (const p of data.agents) {
     const mark = p.alive ? '●' : '○';
-    console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}`);
+    const where = p.observedOn ? (p.live ? '' : '←' + p.observedOn) : '';
+    const also = p.alsoOn && p.alsoOn.length ? ' +' + [...new Set(p.alsoOn)].join(',') : '';
+    console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}  ${where}${also}`);
   }
   console.log(`(${data.agents.length} agents, generated ${data.generated})`);
   done(0);

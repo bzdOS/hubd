@@ -396,7 +396,92 @@ fs.writeFileSync(path.join(presRoot2, '.gitignore'), '');   // simulate an older
 const eAgain = core.ensureProtocol();                       // same version -> would NOT rewrite HUBD.md
 ok(eAgain.wrote === false, 'ensureProtocol: still idempotent on HUBD.md (no unnecessary rewrite)');
 ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: re-adds presence/ to .gitignore even when HUBD.md was already current — mesh-sync\'s git-add-A would otherwise churn on every heartbeat');
+/* The entry carries a trailing slash on purpose: gitignore matches the DIRECTORY only, so the
+ * per-node snapshot beside it travels. Get this wrong and the fix below silently does nothing. */
+ok(!/^presence(\.\*)?$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')),
+  'ensureProtocol: ignores the presence DIRECTORY, not the presence.<node>.json beside it');
 fs.rmSync(presRoot2, { recursive: true, force: true });
+
+/* ── PS: the fleet as far as it can honestly be seen from here ──
+ * One role read as 383 minutes since heartbeat on one node and 5.9 days on another. Nothing was
+ * stale and nothing had diverged: `presence/` is node-local, the roles ran on one machine and the
+ * orchestrators on another, so the orchestrator was reading a different machine's registry as the
+ * fleet's. It escalated "worker is dead" four times across 92 hours while the worker worked. */
+const psRoot = mktmp();
+core.setHubBase(psRoot);
+core.runHeartbeat({ agent: 'local-worker', role: 'hubd', ttlMin: 15 });
+const psSnap = core.presenceSnapshotPath();
+ok(fs.existsSync(psSnap) && path.basename(psSnap) === 'presence.' + core.JOURNAL_NODE + '.json',
+  `runHeartbeat: publishes this node's registry as one file named after the node (got ${path.basename(psSnap)})`);
+// Read through a helper: a regression that stops writing the file should FAIL these, not throw and
+// take every assertion after it down with it.
+const psRead = () => { try { return JSON.parse(fs.readFileSync(psSnap, 'utf8')) || {}; } catch { return {}; } };
+const psMtimeOf = () => { try { return fs.statSync(psSnap).mtimeMs; } catch { return null; } };
+ok((psRead().agents || []).some(r => r.agent === 'local-worker'),
+  'writePresenceSnapshot: the snapshot carries the records, not just a timestamp');
+
+// Throttled by the file's own mtime: no counter to lose across a restart, and one small write per
+// node per interval whatever the heartbeat rate.
+const psMtime = psMtimeOf();
+core.runHeartbeat({ agent: 'local-worker', role: 'hubd', ttlMin: 15 });
+ok(psMtime !== null && psMtimeOf() === psMtime, 'writePresenceSnapshot: a second heartbeat inside the window does not rewrite it');
+ok(core.writePresenceSnapshot({ force: true }) === psSnap && (psMtimeOf() ?? -1) >= psMtime,
+  'writePresenceSnapshot: force overrides the throttle');
+ok(core.PRESENCE_SNAPSHOT_MS / 60000 < 15,
+  `the throttle must be SHORTER than the default 15min ttlMin, or a live agent reads as expired from another node (got ${core.PRESENCE_SNAPSHOT_MS / 60000}min)`);
+
+// A neighbour's snapshot is merged in, and every row says which node observed it.
+const psFresh = new Date(Date.now() - 60000).toISOString().slice(0, 16).replace('T', ' ');
+fs.writeFileSync(path.join(psRoot, 'presence.faraway.json'), JSON.stringify({
+  node: 'faraway', written: psFresh,
+  agents: [{ agent: 'remote-worker', role: 'hv', node: 'faraway', last_seen: psFresh, ttlMin: 15 }],
+}));
+const ps1 = core.runPresence({});
+const psRemote = ps1.agents.find(r => r.agent === 'remote-worker');
+ok(psRemote && psRemote.observedOn === 'faraway' && psRemote.alive === true,
+  `runPresence: a neighbour's published record is visible and alive, with the node that saw it (got ${JSON.stringify(psRemote && { o: psRemote.observedOn, a: psRemote.alive })})`);
+ok(ps1.agents.find(r => r.agent === 'local-worker').live === true,
+  'runPresence: this node\'s own rows are marked live — read from the directory, not from a snapshot of it');
+
+/* The part that was missing entirely: a role nobody reports is indistinguishable from a dead one,
+ * so absence has to be attributable to a node that is not reporting. */
+const psCov = Object.fromEntries(ps1.coverage.map(c => [c.node, c]));
+ok(psCov[core.JOURNAL_NODE] && psCov[core.JOURNAL_NODE].self === true && psCov[core.JOURNAL_NODE].snapshot === 'live',
+  'runPresence: coverage names this node as the live one');
+ok(psCov.faraway && psCov.faraway.snapshot === psFresh && psCov.faraway.stale === false,
+  `runPresence: coverage ages each neighbour's snapshot (got ${JSON.stringify(psCov.faraway)})`);
+ok(!ps1.blindTo, 'runPresence: nothing is blind when every member is reporting');
+// Membership includes anyone whose snapshot we are reading, whatever their journal says here:
+// otherwise a row names an observedOn that coverage never mentions — the same unattributable
+// absence one level along. `faraway` has published a registry and no journal.
+ok(!fs.existsSync(path.join(psRoot, 'journal.faraway.jsonl')) && !!psCov.faraway,
+  'runPresence: a node whose registry we read is a member even with no journal here');
+
+// A member that publishes nothing is the blind spot, and it is named.
+fs.writeFileSync(path.join(psRoot, 'journal.silentnode.jsonl'),
+  JSON.stringify({ ts: new Date().toISOString().slice(0, 16).replace('T', ' '), project: 'p', agent: 'a', kind: 'note', text: 'x', v: core.VERSION }) + '\n');
+const ps2 = core.runPresence({});
+ok((ps2.blindTo || []).includes('silentnode') && /NOT the same as dead/.test(ps2.note || ''),
+  `runPresence: a member with no registry is named as a blind spot, in those words (got ${JSON.stringify(ps2.blindTo)})`);
+
+/* Membership is not "ever wrote a journal": that set never shrinks, and a warning about retired
+ * machines is one a reader learns to skip. */
+fs.writeFileSync(path.join(psRoot, 'journal.retired.jsonl'),
+  JSON.stringify({ ts: '2024-01-01 10:00', project: 'p', agent: 'a', kind: 'note', text: 'ancient' }) + '\n');
+ok(!core.runPresence({}).coverage.some(c => c.node === 'retired'),
+  'runPresence: a node that has not written in memberDays is not a blind spot, it is retired');
+ok(core.runPresence({ memberDays: 20000 }).coverage.some(c => c.node === 'retired'),
+  'runPresence: ...and memberDays is the knob, not a hardcoded verdict');
+
+// An unstamped writer is still a member: lastAt can only see stamped entries, and a node running
+// a pre-0.9.4 hubd would otherwise read as one that never wrote at all.
+ok(core.writerVersions().find(g => g.node === 'retired').lastWrite === '2024-01-01 10:00',
+  'writerVersions: lastWrite sees entries with no version stamp, unlike lastAt');
+
+const psDoc = run('doctor', { HUBD_DIR: psRoot, HUBD_TEAM_DIR: psRoot });
+ok(/fleet: .*silentnode SILENT/.test(psDoc.out) && /invisible here, which is NOT the same as dead/.test(psDoc.out),
+  'doctor: reports the fleet blind spot next to the writers block, and says what it does not mean');
+fs.rmSync(psRoot, { recursive: true, force: true });
 
 // ── queue-depth peek: non-consuming, mesh-safe (task #191) ──
 const qRoot1 = mktmp();

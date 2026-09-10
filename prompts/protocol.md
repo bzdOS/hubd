@@ -284,6 +284,18 @@ task_id, cwd, freshness from `ttlMin`, default 15min). `hub_presence` reads the 
 roster back; `hub_brief`'s QUEUES line pairs "N queued for role X" with that role's
 last-seen agent, so a human can tell "is anyone even listening" without screen-peeking.
 
+**`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
+never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat
+in the fleet into git history), so from any one node it describes THAT machine. From 0.9.13 each
+node also publishes one small snapshot, `presence.<node>.json`, refreshed on heartbeat at most
+every 5 minutes, and `hub_presence` merges them: each row carries `observedOn` (which node saw that
+heartbeat) and `coverage` lists every member with the age of its registry — or `snapshot: null`
+when it has published none, plus `blindTo`. **A role nobody reports is invisible, which is not the
+same as dead.** That confusion cost 92 hours once: one role read as 383 minutes since heartbeat on
+one node and 5.9 days on another, and an orchestrator escalated "worker is dead" four times while
+the worker worked. If `blindTo` names a node, ask on that node before concluding anything about
+its agents.
+
 **Duration, not just one task (task #196):** confirmed over one real session — dozens of
 `hub_queue_wait` polls held over an hour, five substantial tasks handled back to back with
 no manual nudge between them. The gotcha isn't the server (`lib/queue.mjs`'s poll loop is a
