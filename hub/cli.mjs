@@ -301,7 +301,7 @@ deviations, test output); the cto appends "## Acceptance".*
 <out of scope; tempting-but-wrong; leave for later>
 `;
 
-const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n';
+const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n.checkins.json\n';
 
 /* Until 0.9.4 there was no way to ask hubd its own version, and the omission had a price: the
  * global `hub` on the machine that develops hubd sat nine releases behind for weeks, and reading

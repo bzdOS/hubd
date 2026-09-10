@@ -396,6 +396,11 @@ fs.writeFileSync(path.join(presRoot2, '.gitignore'), '');   // simulate an older
 const eAgain = core.ensureProtocol();                       // same version -> would NOT rewrite HUBD.md
 ok(eAgain.wrote === false, 'ensureProtocol: still idempotent on HUBD.md (no unnecessary rewrite)');
 ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: re-adds presence/ to .gitignore even when HUBD.md was already current — mesh-sync\'s git-add-A would otherwise churn on every heartbeat');
+/* The whatsnew checkpoints are per-node too, and runWhatsNew's comment had claimed for releases
+ * that this file was gitignored while a real hub had it TRACKED — every node's checkpoint
+ * travelling to every other and overwriting it, in plain JSON with no merge rule. */
+ok(/^\.checkins\.json$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')),
+  'ensureProtocol: .checkins.json is gitignored — a per-agent checkpoint is this node\'s, not the mesh\'s');
 /* The entry carries a trailing slash on purpose: gitignore matches the DIRECTORY only, so the
  * per-node snapshot beside it travels. Get this wrong and the fix below silently does nothing. */
 ok(!/^presence(\.\*)?$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')),
