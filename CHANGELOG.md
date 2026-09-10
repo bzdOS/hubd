@@ -4,6 +4,20 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.15 — 2026-09-10
+
+- **A per-node file was travelling the mesh, and the code comment had said otherwise for
+  releases.** `.checkins.json` holds each agent's `hub_whatsnew` checkpoint. `runWhatsNew`'s own
+  comment described it as "gitignored, per-node like `.qstate/` — never mesh-synced, so it never
+  merge-conflicts"; on the hub it was written against, the file was **tracked**. Every node's
+  checkpoints travelled to every other node and overwrote them — plain JSON, no union rule, no
+  merge driver. `ensureProtocol` now gitignores it (and `hub init` writes the entry), so the
+  comment and the deployment agree. Losing a checkpoint costs one over-long `hub_whatsnew` window
+  per agent, which is the cheapest failure available here.
+
+  Found by adding a fourth node to a mesh: three writers had made the collision merely wrong, and
+  a fourth made it worth fixing.
+
 ## 0.9.14 — 2026-09-10
 
 - **0.9.13 reported two different gaps as one, and running it against the real mesh is what showed

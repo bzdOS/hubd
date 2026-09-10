@@ -2015,6 +2015,13 @@ export function ensureProtocol(force) {
   try {
     fs.mkdirSync(HUB, { recursive: true });
     ensureGitignored('HUBD.md'); ensureGitignored('presence/'); ensureGitignored('.env-state.json');
+    /* The whatsnew checkpoints. The comment on runWhatsNew has claimed since it was written that
+     * this file is gitignored and never mesh-synced — and on the hub it was written against it was
+     * TRACKED, so every node's "what did I miss" checkpoint travelled to every other node and
+     * overwrote it. Plain JSON with no merge rule: adding a fourth node is what made the collision
+     * worth fixing rather than merely wrong. Losing a checkpoint costs one over-long whatsnew
+     * window per agent, which is the cheapest possible failure here. */
+    ensureGitignored('.checkins.json');
   } catch {}
   let body;
   try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
@@ -3097,7 +3104,8 @@ function writeCheckins(obj) { try { atomicWrite(checkinsFile(), JSON.stringify(o
 // Personalized "what did I miss" — delta since THIS agent's own last
 // hub_whatsnew call, backed by journalSince(). A never-seen agent has no prior
 // checkpoint to diff against, so its first call falls back to a plain window
-// (default 24h). Per-agent checkpoints live in .checkins.json (gitignored,
+// (default 24h). Per-agent checkpoints live in .checkins.json (gitignored by
+// ensureProtocol since 0.9.15 — it was tracked in a real hub before that,
 // per-node like .qstate/ — never mesh-synced, so it never merge-conflicts).
 // Checkpoints store full-precision ISO (not now()'s minute-granularity, used
 // for human-facing journal entries) — two hub_whatsnew calls in the same
