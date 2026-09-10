@@ -4,6 +4,66 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.13 — 2026-09-10
+
+- **`hub_presence` answered a fleet question with one machine's answer, and never said so.** The
+  same role read as **383 minutes** since heartbeat on one node and **8469 minutes — 5.9 days** on
+  another. Nothing was stale and nothing had diverged. `presence/` is node-local by design (a file
+  per agent, rewritten every few seconds; syncing it would turn every heartbeat in the fleet into
+  pushed git history), the roles ran on one machine and the orchestrators on another, so the
+  orchestrator was reading a neighbour's registry as if it were the fleet's. It escalated "worker
+  is dead, cannot dispatch" **four times across 92 hours** while the worker was working.
+
+  Two changes, and the second is why the first is not merely cosmetic:
+
+  1. **Every row now says which node observed it** (`observedOn`), and `alsoOn` when one agent name
+     turns up on several — a name used by more than one process is worth seeing, the same call the
+     version-skew report makes.
+
+  2. **`coverage`**, which is the part that was missing entirely. Every current mesh member is
+     listed with the age of its published registry, or `snapshot: null` when it has none, plus
+     `blindTo` and a `note` in as many words: *a role running there is invisible here, which is
+     NOT the same as dead*. A role nobody reports was previously indistinguishable from a role that
+     had died, and that indistinguishability is the entire 92 hours.
+
+- **Each node publishes one snapshot of its own registry: `presence.<node>.json`.** A single small
+  file, not the directory, so cross-node liveness costs one write per node per five minutes
+  whatever the heartbeat rate. Two properties make this safe in a mesh where syncing `presence/`
+  was not:
+
+  - A node only ever writes the file bearing **its own name**, exactly like `journal.<node>.jsonl`
+    and `tasks.<node>.events.jsonl`. Two nodes never touch one file, so there is nothing for a
+    merge to resolve — no union rule needed and no conflict possible. `JOURNAL_NODE` is lowercased
+    and sanitised at its source, so two nodes cannot mint names differing only in case either;
+    that collision is what took one node out of this mesh for 246 commits.
+  - The throttle is deliberately **shorter than the shortest `ttlMin`** in use (15 minutes by
+    default). Longer, and a live agent could read as expired from another node — the same lie in a
+    new place. Five minutes leaves 3× headroom. `HUBD_PRESENCE_SNAPSHOT_MS` overrides it.
+
+  The `presence/` gitignore entry carries a trailing slash, which matches the **directory** only,
+  so the snapshot beside it travels. `hub doctor` grew a `fleet:` line next to `writers:`: the same
+  shape of question one layer up — that block says which hubd wrote here, this one says whose
+  agents are observable from here.
+
+- **Membership is no longer "ever wrote a journal".** That set never shrinks, and this hub's
+  journals still carry three retired node names — one of them the same machine under an old
+  hostname. Reporting six blind spots where there are two is how a warning teaches its reader to
+  skip it. A member is a node that has written within `memberDays` (30); a retired one drops off on
+  its own. `writerVersions()` gained `lastWrite`, the newest entry of any kind, because `lastAt`
+  can only see version-stamped ones — a node still running a pre-0.9.4 hubd reported `lastAt: null`
+  and read as one that had never written at all.
+
+- **The other two thirds of that report had already fixed themselves, and saying so is the finding.**
+  It also measured tasks not replicating (a task created on one node absent from the other two an
+  hour later) and one queue shard living at two different sizes under one name. Re-measured across
+  all three nodes: `tasks.<node>.events.jsonl` identical to the byte, and both named shards
+  identical on all three — 11554 B / 8 blocks and 808603 B / 1650 blocks. The measurements were
+  dated one day before the mesh work in 0.9.5–0.9.11 landed: a node 246 commits behind that could
+  not merge at all (queue files differing only in case, on a case-insensitive filesystem), and an
+  origin that was a working copy rather than a bare mirror. What looked like three defects in
+  replication was two symptoms of one stalled mesh, plus one reporting bug that had nothing to do
+  with replication.
+
 ## 0.9.12 — 2026-09-09
 
 - **The version-skew warning named a cause it could not observe, and the cause was wrong on this
