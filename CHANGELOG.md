@@ -4,6 +4,20 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.14 — 2026-09-10
+
+- **0.9.13 reported two different gaps as one, and running it against the real mesh is what showed
+  it.** A node that has published *no* registry is invisible from here — that is the state the 92
+  hours consisted of. A node whose registry **is** here and was published a while ago is not
+  invisible at all: its rows carry their own `last_seen` and are judged by their own `ttlMin`, so
+  nothing they say is less true; what is missing is only heartbeats made *since*. And since a
+  snapshot refreshes on heartbeat, an old one is exactly what a **quiet** node looks like — so
+  0.9.13 flagged two idle machines as unseen ones, which is the same warning meaning two things
+  that this release exists to stop.
+
+  `blindTo` now means no registry at all and is the only one that warns. `laggingBehind` reports
+  the age with what it actually costs the reader, as a statement rather than a flag.
+
 ## 0.9.13 — 2026-09-10
 
 - **`hub_presence` answered a fleet question with one machine's answer, and never said so.** The

@@ -3570,11 +3570,28 @@ export function runPresence(a = {}) {
       stale: (ageMin(s.written) ?? Infinity) > PRESENCE_SNAPSHOT_MS / 60000 * 3, agents: s.agents.length,
       ...(s.unreadable ? { unreadable: true } : {}) };
   });
-  const blind = coverage.filter(c => !c.self && (c.snapshot === null || c.stale)).map(c => c.node);
+  /* TWO different gaps, and the first version of this reported them as one — caught by running it
+   * against the mesh rather than a fixture, which is the only place the difference shows.
+   *
+   * `blindTo` is a node that has published NOTHING: its agents are unobservable from here, and
+   * that is the state the whole 92-hour incident consisted of.
+   *
+   * `laggingBehind` is a node whose registry IS here and was published a while ago. That is not
+   * blindness and must not read as it. The rows from that node carry their own `last_seen` and are
+   * judged by their own ttlMin, so nothing they say is any less true; what is missing is only
+   * heartbeats made SINCE the snapshot. An idle node refreshes on heartbeat and therefore has an
+   * old snapshot precisely because nothing happened on it — calling that a blind spot would flag a
+   * quiet machine as an unseen one, and then the warning is back to meaning two things at once. */
+  const blind = coverage.filter(c => !c.self && c.snapshot === null).map(c => c.node);
+  const lagging = coverage.filter(c => !c.self && c.snapshot !== null && c.stale)
+    .map(c => ({ node: c.node, ageMin: c.snapshotAgeMin }));
   return {
     agents: list, coverage,
     ...(blind.length ? { blindTo: blind,
-      note: 'no current registry from ' + blind.join(', ') + ' — a role running there is invisible here, which is NOT the same as dead' } : {}),
+      note: 'no registry at all from ' + blind.join(', ') + ' — a role running there is invisible here, which is NOT the same as dead' } : {}),
+    ...(lagging.length ? { laggingBehind: lagging,
+      lagNote: lagging.map(l => l.node + ' published ' + l.ageMin + 'm ago').join(', ') +
+        ' — the rows from there are as good as their own last_seen; only heartbeats made SINCE are missing' } : {}),
     generated: now(),
   };
 }

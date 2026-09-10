@@ -464,6 +464,22 @@ const ps2 = core.runPresence({});
 ok((ps2.blindTo || []).includes('silentnode') && /NOT the same as dead/.test(ps2.note || ''),
   `runPresence: a member with no registry is named as a blind spot, in those words (got ${JSON.stringify(ps2.blindTo)})`);
 
+/* TWO different gaps, reported as one in the first cut of this and caught only by running it
+ * against the real mesh: a node that published NOTHING is invisible; a node whose registry is here
+ * and old is not. An idle node refreshes on heartbeat, so an old snapshot is exactly what a quiet
+ * machine looks like — flagging that as a blind spot puts the warning back to meaning two things. */
+fs.writeFileSync(path.join(psRoot, 'presence.sleepy.json'), JSON.stringify({
+  node: 'sleepy', written: new Date(Date.now() - 60 * 60000).toISOString().slice(0, 16).replace('T', ' '),
+  agents: [{ agent: 'dozing', role: 'hv', node: 'sleepy', last_seen: psFresh, ttlMin: 15 }],
+}));
+const ps3 = core.runPresence({});
+ok(!(ps3.blindTo || []).includes('sleepy') && (ps3.laggingBehind || []).some(l => l.node === 'sleepy'),
+  `runPresence: an old registry is lagging, not blindness (blind=${JSON.stringify(ps3.blindTo)} lag=${JSON.stringify((ps3.laggingBehind||[]).map(l=>l.node))})`);
+ok(/only heartbeats made SINCE are missing/.test(ps3.lagNote || ''),
+  'runPresence: and says what an old registry actually costs the reader');
+ok(ps3.agents.find(r => r.agent === 'dozing')?.alive === true,
+  'runPresence: a row from a lagging node is still judged by its OWN last_seen and ttl, not by the snapshot age');
+
 /* Membership is not "ever wrote a journal": that set never shrinks, and a warning about retired
  * machines is one a reader learns to skip. */
 fs.writeFileSync(path.join(psRoot, 'journal.retired.jsonl'),
