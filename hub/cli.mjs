@@ -520,10 +520,13 @@ if (cmd === 'doctor') {
     console.log('  fleet:    ' + covLine.join(' - ') + (pres.blindTo ? '  WARNING' : ''));
     if (pres.blindTo) {
       warnings++;
-      console.log('            no current registry from ' + pres.blindTo.join(', ') + ' - a role running there is');
+      console.log('            no registry at all from ' + pres.blindTo.join(', ') + ' - a role running there is');
       console.log('            invisible here, which is NOT the same as dead. Each node publishes');
       console.log('            presence.<node>.json on heartbeat; a node on hubd < 0.9.13 never will.');
     }
+    /* Not a warning: an idle node refreshes on heartbeat, so an old snapshot is what a quiet
+     * machine looks like. Stated, not flagged - the rows from it stand on their own last_seen. */
+    if (pres.laggingBehind) console.log('            ' + pres.lagNote);
   }
 
   // A retrying sync loop looks exactly like a working one from inside the hub. One node's had
@@ -1084,6 +1087,7 @@ if (cmd === 'presence') {
     : `${c.node} ${c.snapshotAgeMin}m${c.stale ? ' STALE' : ''} (${c.agents})`);
   if (cov.length) console.log('  seen from: ' + cov.join(' · '));
   if (data.note) console.log('  ⚠ ' + data.note);
+  if (data.lagNote) console.log('  · ' + data.lagNote);
   if (!data.agents.length) { console.log('(no presence records)'); done(0); }
   for (const p of data.agents) {
     const mark = p.alive ? '●' : '○';
