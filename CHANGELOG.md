@@ -6,6 +6,12 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub_search` trimmed its hits without saying so, and `full:true` could not undo it.** The
+  engine sliced to 40 before the server's output cap ran, so the cap saw a list already at its
+  limit, wrote no `truncated`, and had nothing to restore: 106 matches came back as 42 with no
+  sign of the other 64 (task macbook-pro-82). The engine now returns every hit; the per-tool
+  plan in the server is the one place that trims, and it reports `truncated {hits: {shown,
+  hidden}}` with the `full:true` hint like every other list tool.
 - **`hub_report` signed an explicit author's work with the `HUBD_AGENT` floor.** Tools read the
   author under three synonyms — `agent`, `by`, `from` — and the MCP server filled every empty one
   from `HUBD_AGENT`. `hub_report` reads `by ?? agent`, so `hub_report({agent: "paper-auditor@…"})`

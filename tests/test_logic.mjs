@@ -1531,6 +1531,22 @@ ok(JSON.stringify(tiny, null, 1).length <= 2000 && tiny.tasks.length >= 1,
   `budget: an impossible budget empties the first list before gutting the last (tasks left ${tiny.tasks.length})`);
 ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a small payload is passed through untouched');
 
+// ── hub_search: the engine returns every hit; only the server's plan trims, and it says so (task macbook-pro-82) ──
+{
+  const TS = mktmp();
+  core.setHubBase(TS);
+  const lines = Array.from({ length: 106 }, (_, i) => `- needle-82 line ${i}`).join('\n');
+  fs.mkdirSync(path.join(TS, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(TS, 'projects', 'hay.md'), `# hay\n\n## Facts\n\n${lines}\n`);
+  const s = core.runSearch({ query: 'needle-82' });
+  ok(s.total === 106 && s.hits.length === 106, `search: engine returns all hits (hits ${s.hits.length}, total ${s.total})`);
+  const c = core.capOutput(s, [['hits', 40]]);
+  ok(c.hits.length === 40 && c.truncated && c.truncated.hits.shown === 40 && c.truncated.hits.hidden === 66 && /full:true/.test(c.hint),
+    'search: the server plan trims to 40 and reports shown/hidden with the full:true hint');
+  ok(core.capOutput(s, [['hits', 40]], { full: true }).hits.length === 106, 'search: full:true returns every hit');
+  fs.rmSync(TS, { recursive: true, force: true });
+}
+
 // ── writing one section of a card, without touching the rest ──
 const SEC = mktmp();
 core.setHubBase(SEC);

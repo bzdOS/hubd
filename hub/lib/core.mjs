@@ -2544,7 +2544,11 @@ export function runSearch(a) {
     if ((e.text || '').toLowerCase().includes(q))
       hits.push({ where: 'journal ' + e.ts + ' [' + e.project + '/' + e.agent + ']', line: e.text.slice(0, 200) });
   }
-  return { query: a.query, hits: hits.slice(0, 40), total: hits.length };
+  // Every hit, uncut. This used to slice to 40 here, BEFORE the server's capOutput ran — so the
+  // cap saw a list already at its limit, wrote no `truncated`, and `full:true` had nothing to
+  // restore. 106 matches came back as 42 with nothing saying so (task macbook-pro-82). The
+  // per-tool plan in index.mjs is the one place that trims, and the one place that says it did.
+  return { query: a.query, hits, total: hits.length };
 }
 
 /* ── Scope layers: what belongs to a project, to the person, and to nobody but this machine ──
