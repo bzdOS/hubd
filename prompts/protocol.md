@@ -45,7 +45,9 @@ hubd does not know what you are working on — you do. Re-read the ones that tou
 `agent` / `by` is **required** on everything that writes: report, sync, card set, task
 add, task update, resource set, claim, heartbeat, whatsnew — and `from` on queue send,
 because a delivered block says "from <sender>" forever. The journal is append-only,
-so a write that lands unattributed stays unattributable forever.
+so a write that lands unattributed stays unattributable forever. The three are synonyms:
+name yourself under any one of them and every tool reads that name; `HUBD_AGENT` fills in
+only when a call named nobody at all.
 
 Name **the function you are performing** — `dev-hubd`, `reviewer-bsdos`,
 `orchestrator`. Not which model you are: that is recorded in your client's own
