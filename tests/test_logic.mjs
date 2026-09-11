@@ -1793,6 +1793,39 @@ ok(auAttn && auAttn.project === 'hobby' && /90%/.test(auAttn.what),
 ok(au.numbers && au.numbers.attentionShare && !au.findings.some(f => f.id === 'done-rate'),
   'audit: close rates are numbers in the report, never filed as violations');
 ok(au.apply === false && core.runTaskList({ status: 'all' }).count === 0, 'audit: read-only unless asked');
+// ── audit (7)+(8): the end-of-session dump, and commits with no journal (task macbook-pro-80) ──
+{
+  const TE = mktmp();
+  core.setHubBase(TE);
+  const at = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString().slice(0, 16).replace('T', ' ');
+  const line = (agent, kind, text, minAgo) => JSON.stringify({ ts: at(minAgo), project: 'psy', agent, kind, text }) + '\n';
+  // "dumper": one bookkeeping line an hour ago, then three structured lines in the last minute.
+  // "steady": three structured lines spread across the hour. Same day for both, by construction.
+  fs.writeFileSync(path.join(TE, 'journal.t.jsonl'),
+    line('dumper', 'task', '+ task #1: start', 60) + line('dumper', 'decision', 'd1', 1) + line('dumper', 'note', 'n1', 1) + line('dumper', 'done', '#1 x', 0) +
+    line('steady', 'decision', 's1', 50) + line('steady', 'note', 's2', 25) + line('steady', 'done', '#2 y', 1));
+  const a80 = core.runAudit({ days: 1, git: false });
+  const dump = a80.findings.filter(f => f.id === 'report-at-end-only');
+  ok(dump.length === 1 && dump[0].agent === 'dumper' && /3 structured entries/.test(dump[0].what) && /60-min trace|59-min trace|61-min trace/.test(dump[0].what),
+    `audit: the end-of-session dump is found for the dumper only (${dump.map(f => f.agent).join(',')}: ${dump[0] && dump[0].what})`);
+  ok(/moment of the finding/.test(dump[0].law) && /calendar day/.test(a80.notes.join(' ')), 'audit: the finding quotes the law and the notes say the session is approximated by the day');
+  // A heartbeat extends the trace: with the dumper's presence record now, the structured burst is still at the end.
+  core.runHeartbeat({ agent: 'dumper', role: 'auditor' });
+  ok(core.runAudit({ days: 1, git: false }).findings.some(f => f.id === 'report-at-end-only'), 'audit: presence counts as activity in the trace');
+  // (8) a local checkout with five commits today and a project journal with nothing
+  const repo = path.join(TE, 'repo'); fs.mkdirSync(repo, { recursive: true });
+  const git = (c) => execSync(`git ${c}`, { cwd: repo, stdio: 'ignore', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  git('init -q'); for (let i = 0; i < 5; i++) { fs.writeFileSync(path.join(repo, 'f.txt'), String(i)); git('add f.txt'); git(`commit -q -m c${i}`); }
+  fs.writeFileSync(path.join(TE, 'projects', 'silent.md'), `# silent\n\n- slug: silent\n- path: ${repo}\n- synced: ${at(0)} by t\n\n## Digest\n\nquiet\n`);
+  const a80g = core.runAudit({ days: 7 });
+  const wwj = a80g.findings.find(f => f.id === 'work-without-journal');
+  ok(wwj && wwj.project === 'silent' && /5 commit/.test(wwj.what), `audit: five commits and no journal entry is a finding (${wwj && wwj.what})`);
+  fs.appendFileSync(path.join(TE, 'journal.t.jsonl'), JSON.stringify({ ts: at(0), project: 'silent', agent: 'dev', kind: 'note', text: 'learned x' }) + '\n');
+  ok(!core.runAudit({ days: 7 }).findings.some(f => f.id === 'work-without-journal'), 'audit: one journal entry for the project clears it');
+  ok(!core.runAudit({ days: 7, git: false }).notes.some(n => /work-without-journal/.test(n)), 'audit: git:false skips the checkout scan entirely');
+  fs.rmSync(TE, { recursive: true, force: true });
+  core.setHubBase(AUD);
+}
 const applied = core.runAudit({ days: 3650, apply: true, by: 'auditor-t' });
 ok(applied.filed.length === applied.findings.length && applied.filed.length >= 2,
   `audit: apply files one incident per finding (${applied.filed.length}/${applied.findings.length})`);

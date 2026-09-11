@@ -1324,6 +1324,12 @@ export function runLint(a = {}) {
   const gatesHeading = headingFor('gates');
   const restrict = Array.isArray(a.projects) ? a.projects.map(slugify) : null;
 
+  // A declared law that the engine can only check approximately says so here, once, rather than
+  // letting a finding imply a precision it does not have (task macbook-pro-80).
+  if (rulesConfig().laws['report-at-end-only']) {
+    notes.push('report-at-end-only is declared: hub audit checks it per calendar day from journal, task creation, claim and presence timestamps — heartbeats keep no history, so a session is approximated by the day.');
+  }
+
   // (1) A gate with no date cannot expire, so it is not a gate — it is an intention. Only money
   //     bets are held to it (see rulesConfig), and silence here is reported, not implied.
   if (!money.length) {
@@ -1425,6 +1431,8 @@ const AUDIT_DEFAULTS = {
   'card-behind-journal': 'A card that stopped following its own project misinforms every session that reads it next.',
   'task-without-project': 'Work with no project cannot be prioritised against anything.',
   'owner-backlog': 'A decision only the owner can make is either made or withdrawn; carrying it is the third option nobody chose.',
+  'report-at-end-only': 'A finding is written as FACT: at the moment of the finding; a report that lies entirely in the last minutes of a session is the findings that were not.',
+  'work-without-journal': 'Commits without a journal are work nobody else can build on; the repository knows what changed, only the journal knows what was learned.',
 };
 
 /**
@@ -1478,7 +1486,8 @@ export function runAudit(a = {}) {
 
   // (2) Attention x declared MODE. Both directions are wrong in the same way: a card that says
   //     one thing while the journal says another.
-  const windowEntries = journalSince(days * 24).filter(e => e.project);
+  const windowAll = journalSince(days * 24);
+  const windowEntries = windowAll.filter(e => e.project);
   const total = windowEntries.length;
   const share = {};
   for (const e of windowEntries) share[e.project] = (share[e.project] || 0) + 1;
@@ -1543,6 +1552,70 @@ export function runAudit(a = {}) {
         (waiting.overdue ? `, ${waiting.overdue} past its deadline` : '') +
         (waiting.unknownAge ? ` (${waiting.unknownAge} with no created stamp)` : ''),
       fix: 'hub agenda shows them as ownerButtons — decide, delegate or close; an unanswered one decides by default' });
+  }
+
+  /* (7) The end-of-session dump. Two days of audit work, dozens of findings, and not one journal
+   * line until 08:38 on the third morning — not laziness, ritual: the protocol said "ONE report at
+   * session end", and fleet sessions compact rather than end, so the moment never came and the
+   * findings left with the context (task macbook-pro-80). Computable from timestamps alone: an
+   * agent's structured entries for a day all fall within two minutes at the END of a trace that is
+   * at least half an hour long. The trace is every timestamp the hub holds for that agent that
+   * day — journal lines of any kind, tasks it created, claims it took, its presence record.
+   * Heartbeats keep no history, so "session" is approximated by the calendar day; the notes say so.
+   * A thermometer, never a gate: nothing is blocked, and --apply files one incident per (agent, day). */
+  const ACT_KINDS = new Set(['decision', 'done', 'note', 'broken', 'blocked']);
+  const sinceMs = nowMs - days * 86400000;
+  const dayOf = (ts) => String(ts || '').slice(0, 10);
+  const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16);
+  const trace = new Map();
+  let extraSignals = 0;
+  const addPoint = (agent, ts, structured) => {
+    if (!agent || !ts) return;
+    const ms = parseTs(ts).getTime();
+    if (!Number.isFinite(ms) || ms < sinceMs) return;
+    const k = agent + '|' + dayOf(ts);
+    let t = trace.get(k);
+    if (!t) trace.set(k, t = { agent, day: dayOf(ts), points: [], structured: [] });
+    t.points.push(ms);
+    if (structured) t.structured.push(ms); else extraSignals++;
+  };
+  for (const e of windowAll) addPoint(e.agent, e.ts, ACT_KINDS.has(e.kind));
+  for (const ev of readTaskEvents()) if (ev.ev === 'add' && ev.t && ev.t.by) addPoint(ev.t.by, ev.ts, false);
+  for (const c of (loadClaims().claims || [])) addPoint(c.agent, c.since, false);
+  for (const p of loadPresence()) addPoint(p.agent, p.last_seen, false);
+  for (const t of trace.values()) {
+    if (t.structured.length < 3) continue;
+    const s = [...t.structured].sort((x, y) => x - y), p = [...t.points].sort((x, y) => x - y);
+    const spanMin = (p[p.length - 1] - p[0]) / 60000, burstMin = (s[s.length - 1] - s[0]) / 60000;
+    if (spanMin < 30 || burstMin > 2 || s[0] < p[p.length - 1] - 2 * 60000) continue;
+    findings.push({ id: 'report-at-end-only', key: `report-at-end-only:${t.agent}:${t.day}`, severity: 'med', agent: t.agent,
+      what: `${t.agent} on ${t.day}: ${s.length} structured entries, all within ${Math.max(1, Math.ceil(burstMin))} min at the end of a ${Math.round(spanMin)}-min trace (first activity ${hhmm(p[0])}, last ${hhmm(p[p.length - 1])} UTC)`,
+      fix: 'write FACT:/DECIDE: at the moment of the finding — a compacting session never reaches "the end"; after a compaction resume from hub_context, not from memory' });
+  }
+  notes.push(extraSignals
+    ? 'report-at-end-only: traces are journal lines + task creations + claims + presence records; heartbeats keep no history, so a session is approximated by the calendar day.'
+    : `report-at-end-only: no task creations, claims or presence records in ${days}d — traces are journal-only, and a session is approximated by the calendar day.`);
+
+  /* (8) Work that left no journal. The weaker signal: a project whose local checkout gained commits
+   * in the window while its journal gained nothing. Only checkable where the card's recorded
+   * `- path:` exists on THIS node with a .git — elsewhere the check says it checked nothing. */
+  if (a.git !== false) {
+    let checked = 0;
+    const gitDays = Math.max(1, parseInt(days, 10) || 7);
+    for (const c of cards) {
+      const p = (c.text.match(/^- path: (.+)$/m) || [])[1];
+      if (!p || checked >= 20) continue;
+      const dir = p.trim();
+      if (!fs.existsSync(path.join(dir, '.git'))) continue;
+      checked++;
+      const commits = sh(`git log --since="${gitDays} days ago" --format=%h`, dir).split('\n').filter(Boolean).length;
+      if (commits >= 5 && !(share[c.slug] > 0)) {
+        findings.push({ id: 'work-without-journal', key: `work-without-journal:${c.slug}`, severity: 'med', project: c.slug,
+          what: `${c.slug}: ${commits} commit(s) in ${dir} over ${gitDays}d and not one journal entry`,
+          fix: `the work happened — say what was learned: hub report -p ${c.slug} with FACT:/DECIDE: lines, as you go` });
+      }
+    }
+    if (!checked) notes.push('work-without-journal checked nothing: no card records a local `- path:` with a git checkout on this node.');
   }
 
   // The thermometer: reported, never filed. A rate is not a violation, and dressing one up as an

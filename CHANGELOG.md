@@ -6,6 +6,19 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub audit` sees the end-of-session dump.** Two days of audit work, dozens of findings, not one
+  journal line until the third morning — not laziness but ritual: the protocol said "one report at
+  session end" and fleet sessions compact rather than end (task macbook-pro-80). Two checks, both
+  thermometers that block nothing: `report-at-end-only` — an agent's structured entries for a day all
+  within two minutes at the END of a trace at least thirty minutes long, the trace being every
+  timestamp the hub holds for that agent that day (journal lines of any kind, tasks created, claims
+  taken, its presence record); and `work-without-journal` — a card's local `- path:` checkout gained
+  five or more commits in the window while the project's journal gained nothing (only where the
+  checkout exists on this node; `git:false` skips it). Both quote their law from `rules.json → laws`
+  or the engine default, file one keyed incident under `--apply`, and ride into the `review` block
+  of `hub_brief`/`hub_whatsnew` like every other kind. Heartbeats keep no history, so a session is
+  approximated by the calendar day — the audit notes and `hub lint` say so instead of implying a
+  precision the check does not have.
 - **Three places the hub spent an agent's context on nothing** (task macbook-pro-83). A `resource
   set` that changes nothing no longer writes a journal line or rewrites the card (the same resource
   was "set" twice in ten hours with identical content, and both lines sat in the next agent's
