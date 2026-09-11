@@ -6,6 +6,15 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`NEXT:` wiped the owner's next step and said nothing.** A side session's one-line `NEXT:`
+  replaced a step the owner had written in a card; the reply was `{next: true}`, and the old text
+  survived only in the journal (task macbook-pro-76). Replacement is by design — one concrete
+  step — but silent replacement is a lost decision. Now the step is stamped `— set <ts> by <who>`;
+  the replaced step stays as one dated `prev (<ts>, by <who>): …` line (one, not a history); the
+  reply carries `nextReplaced {text, by, at}`, and the CLI prints it; and a step set by an owner
+  role (`owner-roles.json`) is not replaced by a non-owner — the report is refused with the step's
+  text unless `force:true` (`--force`). Owners replace anything without force. Steps written
+  before the stamp existed are still reported as replaced, just without an owner check.
 - **`hub queue send` delivered the name of a flag instead of the message.** The body was read
   as `args[3]`, blindly. `hub queue send hv --from bzdos "text"` delivered a block whose body was
   the word `--from`; `--text "..."` delivered `--text`; `--agent hv "..."` delivered `--agent` —

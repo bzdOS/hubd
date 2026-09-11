@@ -227,6 +227,34 @@ ok(core.runTaskList({ project: 'proj', status: 'open' }).tasks.some(t => /change
 const jp = core.journalTail('proj', 50);
 ok(jp.filter(e => e.kind === 'decision').length === 2, 'report: decisions emit kind:decision journal events');
 ok(jp.some(e => e.kind === 'note' && /distribution session/.test(e.text) && /unprefixed trailing/.test(e.text)), 'report: NOTE + unprefixed → one note entry');
+ok(/- redeploy myvm — set \d{4}-\d{2}-\d{2} \d{2}:\d{2} by test/.test(nextBody), 'report: NEXT carries who set it and when');
+ok(rep.nextReplaced === undefined, 'report: replacing a placeholder reports nothing replaced');
+
+// ── NEXT: never silent, and an owner's step is not overwritten by a non-owner (task macbook-pro-76) ──
+const r2 = core.runReport({ project: 'proj', by: 'test', text: 'NEXT: second step' });
+ok(r2.nextReplaced && r2.nextReplaced.text === 'redeploy myvm' && r2.nextReplaced.by === 'test' && /^\d{4}-/.test(r2.nextReplaced.at || ''),
+  `report: NEXT replacing a step returns nextReplaced {text, by, at} (got ${JSON.stringify(r2.nextReplaced)})`);
+let nb = core.sectionBody(core.readCard('proj'), 'Next step');
+ok(/^- second step — set .* by test$/m.test(nb) && /^- prev \(\d{4}-\d{2}-\d{2} \d{2}:\d{2}, by test\): redeploy myvm$/m.test(nb),
+  'report: the card keeps the new step plus ONE dated prev line');
+core.runReport({ project: 'proj', by: 'test', text: 'NEXT: third step' });
+nb = core.sectionBody(core.readCard('proj'), 'Next step');
+ok((nb.match(/^- prev \(/gm) || []).length === 1 && /prev \(.*\): second step$/m.test(nb) && !/redeploy myvm/.test(nb),
+  'report: a second replacement keeps exactly one prev line (the latest), not a history');
+fs.writeFileSync(path.join(TRP, 'owner-roles.json'), JSON.stringify(['owner-t']));
+core.runReport({ project: 'proj', by: 'owner-t', text: 'NEXT: test the live build by hand first' });
+let refused = null;
+try { core.runReport({ project: 'proj', by: 'test', text: 'NEXT: publish v19' }); } catch (e) { refused = e.message; }
+ok(refused && /owner role "owner-t"/.test(refused) && /test the live build by hand first/.test(refused),
+  `report: non-owner NEXT over an owner step is refused and the error quotes the step (got ${refused})`);
+nb = core.sectionBody(core.readCard('proj'), 'Next step');
+ok(/^- test the live build by hand first — set .* by owner-t$/m.test(nb) && !/publish v19/.test(nb), 'report: refused NEXT left the card untouched');
+const r3 = core.runReport({ project: 'proj', by: 'test', text: 'DECIDE: publish now | owner agreed in chat\nNEXT: publish v19', force: true });
+nb = core.sectionBody(core.readCard('proj'), 'Next step');
+ok(r3.next && r3.nextReplaced && r3.nextReplaced.by === 'owner-t' && /^- publish v19 — set .* by test$/m.test(nb) && /prev \(.*, by owner-t\): test the live build by hand first$/m.test(nb),
+  'report: force replaces the owner step, keeps it as prev, and reports it');
+const r4 = core.runReport({ project: 'proj', by: 'owner-t', text: 'NEXT: owner changes own mind' });
+ok(r4.next && r4.nextReplaced && r4.nextReplaced.text === 'publish v19', 'report: an owner replaces any step without force');
 fs.rmSync(TRP, { recursive: true, force: true });
 
 // ── sections.json: ONE i18n source drives BOTH the scaffold AND report routing (0.2.0) ──

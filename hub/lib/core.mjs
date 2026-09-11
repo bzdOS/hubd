@@ -2307,6 +2307,26 @@ function editSection(text, heading, payload, mode) {
   return text.slice(0, bodyStart) + '\n\n' + next + '\n' + text.slice(end);
 }
 
+/* The current step of a "## Next step" body: its text, and who set it when, read back from the
+ * ` — set <ts> by <who>` stamp runReport writes. A body written before the stamp existed reads
+ * as {by: null, at: null} — it is still reported as replaced, just without an owner check,
+ * because there is nothing to check against. The `prev` line is not part of the current step. */
+const NEXT_STAMP_RE = / — set (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) by (\S+)$/;
+function parseNextStep(body) {
+  if (isPlaceholder(body)) return null;
+  const steps = String(body).split('\n').map(l => l.trim()).filter(l => l && !/^- prev \(/.test(l));
+  if (!steps.length) return null;
+  let by = null, at = null;
+  const texts = steps.map(l => {
+    let t = l.replace(/^[-*+]\s+/, '');
+    const m = t.match(NEXT_STAMP_RE);
+    if (m) { if (!at) { at = m[1]; by = m[2]; } t = t.slice(0, m.index); }
+    return t.trim();
+  }).filter(Boolean);
+  if (!texts.length) return null;
+  return { text: texts.join(' · '), by, at };
+}
+
 export function runReport(a) {
   const project = a.project || 'general';
   const slug = slugify(project);
@@ -2355,7 +2375,26 @@ export function runReport(a) {
     for (const f of b.fact) { text = editSection(text, SEC.fact, `- fact: ${f}`, 'append'); summary.facts++; }
     for (const h of b.hypo) { text = editSection(text, SEC.hypo, `- hypothesis: ${h}`, 'append'); summary.hypos++; }
     for (const c of b.comm) { text = editSection(text, SEC.comm, `- ${now()}: ${c}`, 'append'); summary.comms++; }
-    if (b.next.length) { text = editSection(text, SEC.next, b.next.map(n => '- ' + n).join('\n'), 'set'); summary.next = true; }
+    if (b.next.length) {
+      /* NEXT: replaces the section by design — "one concrete physical step". What it used to do as
+       * well was replace it SILENTLY: a side session's one-line NEXT: wiped a step the owner had
+       * written, the response said {next: true}, and the old text survived only in a journal
+       * nobody reads for that. So the step carries its author and time, the previous step stays
+       * as one dated `prev` line (one, not a history — the journal holds that), the response
+       * says what was replaced, and a step set by an owner role is not replaced by anyone else
+       * without force. */
+      const prev = parseNextStep(sectionBody(text, SEC.next));
+      const owners = new Set(ownerRoles());
+      if (prev && prev.by && owners.has(prev.by) && !owners.has(by) && !a.force) {
+        throw new Error(`NEXT: refused — the current next step was set by owner role "${prev.by}"${prev.at ? ' on ' + prev.at : ''}: "${prev.text}". ` +
+          'Pass force:true (CLI: --force) to replace it, and say why in a DECIDE: line.');
+      }
+      const lines = b.next.map(n => `- ${n} — set ${now()} by ${by}`);
+      if (prev) lines.push(`- prev (${prev.at || 'undated'}${prev.by ? ', by ' + prev.by : ''}): ${prev.text}`);
+      text = editSection(text, SEC.next, lines.join('\n'), 'set');
+      summary.next = true;
+      if (prev) summary.nextReplaced = { text: prev.text, by: prev.by, at: prev.at };
+    }
     fs.mkdirSync(PROJ, { recursive: true });
     atomicWrite(cardPath(project), text);
   }
