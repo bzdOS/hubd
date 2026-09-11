@@ -1169,10 +1169,26 @@ if (cmd === 'card') {
   const slug = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!slug) die('Usage: hub card <slug> -m "<digest>"  |  hub card resolve [slug...]');
   const digest = getFlag('-m') || getFlag('--digest');
-  if (!digest || typeof digest !== 'string') die('Digest required: hub card <slug> -m "<digest>"');
+  // Patch instead of replace: --replace "<old>" --with "<new>" (repeatable, paired in order) and
+  // --append-line "<line>" edit only what is named and leave the rest of the digest byte-for-byte.
+  const froms = [], tos = [];
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === '--replace' && typeof args[i + 1] === 'string') froms.push(args[++i]);
+    else if (args[i] === '--with' && typeof args[i + 1] === 'string') tos.push(args[++i]);
+  }
+  if (froms.length !== tos.length) die(`--replace and --with come in pairs (${froms.length} --replace, ${tos.length} --with)`);
+  const appendLine = getFlag('--append-line');
+  const patching = froms.length || typeof appendLine === 'string';
+  if (!patching && (!digest || typeof digest !== 'string')) die('Usage: hub card <slug> -m "<digest>"\n       hub card <slug> --replace "<old>" --with "<new>" [--replace ... --with ...] [--append-line "<line>"]');
   const by = authorOrDie('--by');
-  const res = runCardSet({ project: slug, digest, by });
-  console.log(`Card set: ${res.project} → ${res.card}`);
+  let res;
+  try {
+    res = runCardSet(patching
+      ? { project: slug, by, replace: froms.map((from, i) => ({ from, to: tos[i] })), appendLine: typeof appendLine === 'string' ? appendLine : undefined }
+      : { project: slug, digest, by });
+  } catch (e) { die(e.message); }
+  console.log(`Card ${res.patched ? 'patched' : 'set'}: ${res.project} → ${res.card}`);
+  if (res.patched) console.log(res.digest.split('\n').map(l => '  ' + l).join('\n'));
   done(0);
 }
 

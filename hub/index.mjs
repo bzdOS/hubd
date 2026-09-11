@@ -30,12 +30,14 @@ const TOOLS = [
     }, required: ['path', 'agent'] } },
 
   { name: 'hub_card_set',
-    description: 'Create or update a project card from just a name and a digest — no folder needed (unlike hub_sync). Use it to capture a project that is not a local git checkout, e.g. when harvesting a dialog. Preserves any hand-written frontmatter and Facts.',
+    description: 'Create or update a project card from just a name and a digest — no folder needed (unlike hub_sync). Use it to capture a project that is not a local git checkout, e.g. when harvesting a dialog. Preserves any hand-written frontmatter and Facts. To fix ONE stale line without touching the owner\'s framing, patch instead of replacing: `replace: [{from, to}]` and/or `appendLine` — a `from` that is not in the digest is an error, not a silent no-op.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'project name or slug' },
-      digest: { type: 'string', description: 'the card digest: 3-6 lines of current state' },
+      digest: { type: 'string', description: 'the card digest: 3-6 lines of current state (replaces the whole text — omit it when patching)' },
+      replace: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }, description: 'patch: exact substrings to swap, each must occur exactly once in the current digest' },
+      appendLine: { type: 'string', description: 'patch: one line to add at the end of the current digest' },
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
-    }, required: ['project', 'digest', 'by'] } },
+    }, required: ['project', 'by'] } },
 
   { name: 'hub_section_add',
     description: 'Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step. For those four, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT: is still the right call; use this for the rest. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).',
@@ -56,6 +58,7 @@ const TOOLS = [
       kind: { type: 'string', enum: ['done', 'broken', 'blocked', 'note'], description: 'default: note' },
       private: { type: 'boolean', description: 'route this entry to the LOCAL-ONLY life braid (journal.life.jsonl — gitignored, never mesh-synced) and stamp it private. Prose only: DECIDE:/FACT:/COMM:/NEXT: write into a card, and cards are synced, so mixing the two would publish what you asked to keep local.' },
       force: { type: 'boolean', description: 'NEXT: replaces the card\'s next step. If the current step was set by an owner role, a non-owner NEXT: is refused with the step\'s text unless force is true. The response always carries nextReplaced {text, by, at} when a step was replaced, and the card keeps one dated `prev` line.' },
+      staleDays: { type: 'integer', description: 'the reply carries digestAgeDays, and digestStale + a hint once the digest trails the project journal by this many days (default 7) — you are the one holding the facts that would fix it' },
     }, required: ['project', 'agent', 'text'] } },
 
   { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',

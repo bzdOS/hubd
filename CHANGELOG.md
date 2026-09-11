@@ -6,6 +6,18 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **A digest could be patched only by rewriting it, so a stale line stayed stale; and nothing said
+  so at the moment the facts were in hand.** A digest braids the owner's strategic frame with a few
+  lines of fact; the facts went stale in a week and the agent who knew better left the whole text
+  alone rather than rewrite the frame — `hub_context` kept handing the next session a four-month-old
+  state (task macbook-pro-81). `hub_card_set` now patches: `replace: [{from, to}]` swaps exact
+  substrings (each must occur exactly once — absent or ambiguous is an error, never a silent no-op)
+  and `appendLine` adds one line; `hub card <slug> --replace "<old>" --with "<new>"
+  [--append-line …]` on the CLI. And `hub_report` — the one call every session makes with fresh
+  facts — returns `digestAgeDays`, plus `digestStale` and a `hint` naming the last set date and
+  the patch route once the digest trails the project's journal (`staleDays`, default 7),
+  measured after the report's own write. The `- set: <ts> by <who>` line the engine already
+  stamps is the digest's "as of"; no second date field was added.
 - **`hub_context` is now a "where am I", not just a slug lookup.** The protocol names it the first
   call of a session, and it was the one read that never warned: it returned a digest four months
   behind the project's own journal with no date and no flag, said nothing about the other

@@ -98,7 +98,11 @@ decisions/facts = many lines (one per line):
 One card per project at `projects/<slug>.md`: `## Digest` plus the sections reports
 route into — Next step / Gates / Metrics / Market / Facts & hypotheses / Decisions /
 Communication. Section headings localise (any language) in ONE file, `sections.json`;
-see `hub sections`. `hub card <slug> -m "<digest>"` sets the digest; `hub get <slug>`
+see `hub sections`. `hub card <slug> -m "<digest>"` sets the digest — and when only one line
+of it went stale, patch instead of rewriting the owner's framing: `hub card <slug> --replace
+"<old>" --with "<new>"` / `hub_card_set({replace:[{from,to}], appendLine})`; a `from` that is
+not in the digest is an error, never a silent no-op. `hub_report` tells you the digest's age
+in every reply and nudges once it trails the journal you just moved. `hub get <slug>`
 reads a project; `hub status` / `hub brief` orient you. Sitting in a project folder
 and don't know its slug? `hub_context({cwd:"<your absolute cwd>"})` resolves it for
 you (`.hubd` marker file → a card's recorded sync path → a folder-name guess, flagged

@@ -2116,15 +2116,45 @@ export function runSync(a) {
 // Unlike runSync (which reads a real git folder), this lets harvest/triage capture
 // projects that are not a local checkout. Preserves hand-written frontmatter and a
 // "## Facts" section; archives a changed digest to history.
+/* Patch a digest instead of replacing it. A digest is typically two things braided together:
+ * the owner's strategic frame ("NEW TRACK — lane A, gate #87 …") and a few lines of fact ("v17",
+ * "156-item instrument"). The facts go stale in a week; the frame is not an agent's to rewrite.
+ * hub_card_set replaced the whole text, so the agent who knew v17 had become v19 left the digest
+ * alone rather than touch the frame — and hub_context kept handing the next session a four-month
+ * old state (task macbook-pro-81). `replace: [{from, to}]` edits exactly the lines named;
+ * `appendLine` adds one. A `from` that is not there is an ERROR, not a no-op: a patch that
+ * silently changed nothing is how a digest stays wrong while its author believes it fixed. */
+function patchDigest(oldDigest, { replace = [], appendLine } = {}) {
+  let text = String(oldDigest || '');
+  if (!text.trim()) throw new Error('nothing to patch: the card has no digest yet — pass digest instead');
+  const applied = [];
+  for (const r of Array.isArray(replace) ? replace : []) {
+    const from = String(r && r.from != null ? r.from : ''), to = String(r && r.to != null ? r.to : '');
+    if (!from) throw new Error('replace: each item needs a non-empty `from`');
+    const at = text.indexOf(from);
+    if (at === -1) throw new Error(`replace: "${from.slice(0, 60)}" is not in the digest — nothing changed. The digest reads:\n${text}`);
+    if (text.indexOf(from, at + 1) !== -1) throw new Error(`replace: "${from.slice(0, 60)}" occurs more than once in the digest — quote more of the line so the patch is unambiguous`);
+    text = text.slice(0, at) + to + text.slice(at + from.length);
+    applied.push({ from, to });
+  }
+  if (appendLine != null && String(appendLine).trim()) { text = text.replace(/\s*$/, '') + '\n' + String(appendLine).trim(); applied.push({ appendLine: String(appendLine).trim() }); }
+  if (!applied.length) throw new Error('patch: pass replace: [{from, to}] and/or appendLine');
+  return { text: text.trim(), applied };
+}
+
 export function runCardSet(a) {
   const author = requireAuthor(a.by, 'by');
   const pname = a.project || a.name;
   if (!pname) throw new Error('project required');
-  if (!a.digest || !String(a.digest).trim()) throw new Error('digest required');
+  const patching = (Array.isArray(a.replace) && a.replace.length) || (a.appendLine != null && String(a.appendLine).trim());
+  if (patching && a.digest && String(a.digest).trim()) throw new Error('pass either digest (replace the whole text) or replace/appendLine (patch it), not both');
+  if (!patching && (!a.digest || !String(a.digest).trim())) throw new Error('digest required (or replace: [{from, to}] / appendLine to patch the existing one)');
   const slug = slugify(pname);
-  const digest = String(a.digest).trim();
   const prev = readCard(pname);
   const oldDigest = digestOf(prev);
+  let digest, patched = null;
+  if (patching) { patched = patchDigest(oldDigest, a); digest = patched.text; }
+  else digest = String(a.digest).trim();
   if (oldDigest && digest !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
@@ -2137,8 +2167,10 @@ export function runCardSet(a) {
     `## Digest\n\n${digest}\n\n` +
     (ownerBody ? ownerBody + '\n' : '');
   atomicWrite(cardPath(pname), card);
-  journalAppend({ ts: now(), project: slug, agent: author, kind: 'note', text: 'card set: ' + digest.split('\n')[0].slice(0, 80) });
-  return { ok: true, project: slug, card: cardPath(pname) };
+  journalAppend({ ts: now(), project: slug, agent: author, kind: 'note',
+    text: (patched ? 'card patched: ' + patched.applied.map(p => p.appendLine ? '+ ' + p.appendLine.slice(0, 40) : `"${p.from.slice(0, 30)}" -> "${p.to.slice(0, 30)}"`).join('; ')
+                   : 'card set: ' + digest.split('\n')[0].slice(0, 80)).slice(0, 160) });
+  return { ok: true, project: slug, card: cardPath(pname), ...(patched ? { patched: patched.applied, digest } : {}) };
 }
 
 /* ── Resources (infra/topology as cards) + typed relationship graph ──
@@ -2423,6 +2455,25 @@ export function runReport(a) {
   // A report of pure FACT:/COMM:/NEXT: lines writes the CARD and never touches the journal, so the
   // choke point inside journalAppend misses it — and filing one is unmistakably somebody acting.
   touchPresenceIfOwner(by);
+  /* The digest's age, said at the one moment the caller has fresh facts in hand. hub_status and
+   * hub_brief flag a stale digest, but nobody calls them while reporting; hub_report is the call
+   * every session makes with the facts that would fix it (task macbook-pro-81). Measured AFTER the
+   * write, so a report that just moved the journal on counts against the digest it left behind. */
+  const cardNow = readCard(project);
+  if (cardNow) {
+    const m = cardNow.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: by ([^\n]+))?/) || [];
+    if (m[1]) {
+      const staleDays = a.staleDays ?? 7;
+      summary.digestAgeDays = Math.max(0, Math.floor((Date.now() - parseTs(m[1]).getTime()) / 86400000));
+      const lag = digestLag(m[1], lastJournalByProject()[slug], staleDays);
+      if (lag) {
+        summary.digestStale = lag;
+        summary.hint = `digest is ${summary.digestAgeDays} day(s) old and ${lag.daysBehind} day(s) behind this project's journal — ` +
+          `last set ${m[1]}${m[2] ? ' by ' + m[2].trim() : ''}. Fix the lines that went stale with hub_card_set({replace:[{from,to}]}) ` +
+          `(\`hub card ${slug} --replace "<old>" --with "<new>"\`), or rewrite it with digest.`;
+      }
+    }
+  }
   return summary;
 }
 

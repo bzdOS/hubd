@@ -136,6 +136,33 @@ ok(/## Decisions[\s\S]*files-first/.test(cs), 'card-set: custom "## Decisions" p
 ok(/owner_kind: mixed/.test(cs), 'card-set: frontmatter preserved');
 ok(!/## Next step/.test(cs), 'card-set: existing card NOT re-scaffolded with the template');
 ok(fs.existsSync(path.join(TC, 'projects', 'history', 'demo.md')), 'card-set: old digest archived to history');
+
+// ── card-set patch mode: fix one line, leave the owner's framing byte-for-byte (task macbook-pro-81) ──
+core.runCardSet({ project: 'demo', by: 'test', digest: 'OWNER FRAME — lane A, gate #87 first\nstatus: article v17, 156-item instrument\nwave-2 deploy pending' });
+const pr = core.runCardSet({ project: 'demo', by: 'test', replace: [{ from: 'v17, 156-item', to: 'v19 (unpublished), 183-item' }], appendLine: 'wave-2 in production since 10.08' });
+ok(pr.patched && pr.patched.length === 2 && pr.digest === 'OWNER FRAME — lane A, gate #87 first\nstatus: article v19 (unpublished), 183-item instrument\nwave-2 deploy pending\nwave-2 in production since 10.08',
+  `card-set patch: one substring swapped, one line appended, everything else intact (got ${JSON.stringify(pr.digest)})`);
+ok(core.digestOf(core.readCard('demo')) === pr.digest && /- set: \d{4}-\d{2}-\d{2} \d{2}:\d{2} by test/.test(core.readCard('demo')), 'card-set patch: the card holds the patched digest and a fresh set-stamp');
+let perr = ''; try { core.runCardSet({ project: 'demo', by: 'test', replace: [{ from: 'not in there', to: 'x' }] }); } catch (e) { perr = e.message; }
+ok(/not in the digest/.test(perr) && /nothing changed/.test(perr) && core.digestOf(core.readCard('demo')) === pr.digest, 'card-set patch: a from that is absent is an error and the digest is untouched');
+perr = ''; try { core.runCardSet({ project: 'demo', by: 'test', replace: [{ from: 'wave-2', to: 'x' }] }); } catch (e) { perr = e.message; }
+ok(/more than once/.test(perr), 'card-set patch: an ambiguous from (two occurrences) is refused rather than guessed');
+perr = ''; try { core.runCardSet({ project: 'demo', by: 'test', digest: 'whole', replace: [{ from: 'a', to: 'b' }] }); } catch (e) { perr = e.message; }
+ok(/not both/.test(perr), 'card-set patch: digest and replace together are refused');
+perr = ''; try { core.runCardSet({ project: 'demo', by: 'test' }); } catch (e) { perr = e.message; }
+ok(/digest required/.test(perr) && /replace/.test(perr), 'card-set: no digest and no patch → the error names both ways in');
+{
+  // hub_report says how old the digest is, and nudges once it trails the journal it just moved.
+  const r0 = core.runReport({ project: 'demo', by: 'test', text: 'NOTE: same-day report' });
+  ok(r0.digestAgeDays === 0 && r0.digestStale === undefined && r0.hint === undefined, 'report: a same-day digest gets its age and no nudge');
+  const cp = path.join(TC, 'projects', 'demo.md');
+  const oldTs = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 16).replace('T', ' ');
+  fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/- set: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, `- set: ${oldTs}`));
+  const r1 = core.runReport({ project: 'demo', by: 'test', text: 'FACT: wave-2 held for a week without incident' });
+  ok(r1.digestAgeDays >= 19 && r1.digestStale && r1.digestStale.daysBehind >= 19 && /replace/.test(r1.hint || '') && /20\d\d-/.test(r1.hint || ''),
+    `report: a digest 20 days behind the journal it just moved gets a nudge naming the last set date and the patch route (${(r1.hint || '').slice(0, 80)})`);
+  ok(core.runReport({ project: 'demo', by: 'test', text: 'NOTE: lenient', staleDays: 60 }).hint === undefined, 'report: staleDays raises the bar');
+}
 core.runSync({ path: TC, name: 'demo', digest: 'synced digest', agent: 'test' });
 const sy = core.readCard('demo');
 ok(/## Roadmap[\s\S]*ship it/.test(sy), 'sync: custom "## Roadmap" preserved');
