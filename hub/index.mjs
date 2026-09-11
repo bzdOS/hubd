@@ -55,6 +55,7 @@ const TOOLS = [
       text: { type: 'string' },
       kind: { type: 'string', enum: ['done', 'broken', 'blocked', 'note'], description: 'default: note' },
       private: { type: 'boolean', description: 'route this entry to the LOCAL-ONLY life braid (journal.life.jsonl — gitignored, never mesh-synced) and stamp it private. Prose only: DECIDE:/FACT:/COMM:/NEXT: write into a card, and cards are synced, so mixing the two would publish what you asked to keep local.' },
+      force: { type: 'boolean', description: 'NEXT: replaces the card\'s next step. If the current step was set by an owner role, a non-owner NEXT: is refused with the step\'s text unless force is true. The response always carries nextReplaced {text, by, at} when a step was replaced, and the card keeps one dated `prev` line.' },
     }, required: ['project', 'agent', 'text'] } },
 
   { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',
