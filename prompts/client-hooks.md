@@ -1,4 +1,44 @@
-# Warning before the edit: `hub claim check` per client
+# Client hooks: `hub whereami` at session start, `hub claim check` before an edit
+
+Two moments an editor can hand the agent hub state without the agent having to remember:
+when a session starts or its context is compacted (`hub whereami`), and right before it
+writes a file (`hub claim check`). Both commands are read-only, need no network, and exit
+in well under three seconds on every host that has hubd. The table says what each client
+can do today; a row that says "works" without having been run is worse than one that says
+"unknown", so fill it in only after running it.
+
+## Session start / after compaction: `hub whereami`
+
+| client | mechanism | status |
+| --- | --- | --- |
+| Claude Code | `SessionStart` + `PostCompact` hooks running `hub whereami`, output goes into context | works — recipe below |
+| Cursor | no documented session-start hook known to us | prose fallback (HUBD.md: first action of a session — `hub whereami`) |
+| OpenCode | no documented session-start hook known to us | prose fallback |
+| CommandCode | no documented session-start hook known to us | prose fallback |
+| GLM-based clients | no documented session-start hook known to us | prose fallback |
+
+`~/.claude/settings.json` — user level, so it covers every repository that carries a `.hubd`
+marker (a repository without one still gets the git inventory and a `(none)` project):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "command -v hub >/dev/null && hub whereami \"$PWD\" 2>/dev/null || true" } ] }
+    ],
+    "PostCompact": [
+      { "hooks": [ { "type": "command", "command": "command -v hub >/dev/null && hub whereami \"$PWD\" 2>/dev/null || true" } ] }
+    ]
+  }
+}
+```
+
+The `.hubd` marker's optional second line names a project-local inventory script
+(`scripts/where_am_i.py`); `hub whereami` runs it last and appends its output, capped at 4 KB
+and 5 seconds. Project-specific registers stay in the project — the engine only knows how to
+call them.
+
+## Before the edit: `hub claim check`
 
 A claim is soft by constitution — it informs, it does not forbid. The point of a hook is
 that the information arrives BEFORE the edit, from whatever editor the agent is using,

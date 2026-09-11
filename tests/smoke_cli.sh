@@ -299,6 +299,21 @@ qbody_last | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$TMP/got.txt"
 cmp -s "$BIG" "$TMP/got.txt"
 check "queue send: 8 KB body with quotes/dollars arrives byte-for-byte" $?
 
+# ── Case 13: hub whereami answers from any directory, fast, read-only ──────
+
+W="$TMP/wrepo"; mkdir -p "$W" && printf 'wsmoke\n' > "$W/.hubd"
+(cd "$W" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "first light") 2>/dev/null
+OUT13=$(cd "$W" && HUBD_AGENT=smoke $CLI whereami 2>&1); RC13=$?
+check "whereami: exit 0" $RC13
+echo "$OUT13" | grep -q "^project:  wsmoke" && echo "$OUT13" | grep -q "first light"
+check "whereami: names the project from the marker and lists the commit subjects" $?
+OUT13J=$(cd "$W" && $CLI whereami --json 2>&1)
+echo "$OUT13J" | grep -q '"project": "wsmoke"' && echo "$OUT13J" | grep -q '"commits"'
+check "whereami --json: machine-readable" $?
+OUT13N=$(cd "$TMP" && $CLI whereami 2>&1); RC13N=$?
+[ "$RC13N" -eq 0 ] && echo "$OUT13N" | grep -q "project:  (none)"
+check "whereami: outside any project it still answers, with (none)" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"
