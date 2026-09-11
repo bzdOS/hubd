@@ -144,7 +144,8 @@ const TOOLS = [
   { name: 'hub_recall',
     description: 'What do we know about X — ranked across project cards, their sections, decisions, the journal and tasks, instead of hub_search\'s flat exact-substring list or hub_get\'s everything-about-one-project. Scoring is deterministic and readable: term coverage first, then where the line lives (a decision outranks a passing note), then recency. EVERY hit carries the date it was true as of and a stale flag — recall\'s real failure mode is handing over a two-month-old fact with this morning\'s confidence.',
     inputSchema: { type: 'object', properties: {
-      query: { type: 'string' },
+      query: { type: 'string', description: 'words that name the thing; stop-words (the, not, и, не, …) are dropped and listed back as `dropped`; a term matches at the start of a word, never inside one' },
+      project: { type: 'string', description: 'only this project — a slug, or several comma-separated' },
       limit: { type: 'integer', description: 'default 20' },
       staleDays: { type: 'integer', description: 'a hit older than this is flagged stale, default 30' },
     }, required: ['query'] } },
@@ -257,6 +258,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
+      project: { type: 'string', description: 'only entries of this project — a slug, or several comma-separated; the checkpoint still moves' },
       reviewLimit: { type: 'integer', description: 'how many finding KINDS to inline, default 3; 0 turns the review block off' },
     }, required: ['agent'] } },
 

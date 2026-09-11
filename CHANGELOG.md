@@ -6,6 +6,17 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub_recall` scored stop-words and matched inside words; neither it nor `hub_whatsnew` could be
+  narrowed to a project.** "IMM not established attention overlap" returned eight hits and none
+  from the project the question was about: the first scored on "not" and "overlap", two more on
+  "not" and an `imm` found inside "committing", five on "not" alone; `hub_whatsnew` in the same
+  session returned six entries from three other projects (task macbook-pro-77). Now a small
+  RU+EN stop-list is dropped from the terms and listed back as `dropped` (a query made only of
+  stop-words is refused, naming them); a term matches at the start of a word — `imm` → IMM,
+  IMM's, immediately — never inside one; and both tools take `project` (a slug or a
+  comma-separated few). The implicit ×1.5 boost for the caller's last `hub_context` project is
+  not done: `hub_context` does not know who is calling, and guessing would be a fourth silent
+  attribution path. Pass `project`.
 - **`hub_search` trimmed its hits without saying so, and `full:true` could not undo it.** The
   engine sliced to 40 before the server's output cap ran, so the cap saw a list already at its
   limit, wrote no `truncated`, and had nothing to restore: 106 matches came back as 42 with no

@@ -2644,11 +2644,44 @@ export function runRules(a = {}) {
  * this morning's. A stale hit says so, in the words a reader needs: it was true THEN, check it. */
 const RECALL_WEIGHT = { decision: 5, digest: 4, section: 3, task: 2, journal: 1 };
 
+/* Words that carry no topic. "IMM not established attention overlap" returned eight hits and
+ * none from the project the question was about: the first was scored on "not" and "overlap",
+ * the next two on "not" and an "imm" found INSIDE "committing", and five more on "not" alone
+ * (task macbook-pro-77). Coverage of a stop-word is not coverage, and a substring is not a word.
+ * Both lists are small on purpose — a term that is not here still counts, and the response says
+ * which ones were dropped so a query that "deflated" shows why. */
+const RECALL_STOP = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'is', 'are', 'was', 'were', 'be',
+  'not', 'no', 'it', 'its', 'this', 'that', 'these', 'those', 'with', 'by', 'as', 'from', 'but', 'if',
+  'then', 'so', 'do', 'does', 'did', 'we', 'you', 'i', 'he', 'she', 'they', 'my', 'our', 'your', 'about',
+  'и', 'не', 'в', 'на', 'для', 'что', 'как', 'это', 'а', 'но', 'или', 'с', 'к', 'по', 'из', 'у', 'о',
+  'об', 'от', 'до', 'за', 'же', 'ли', 'бы', 'то', 'так', 'вот', 'он', 'она', 'они', 'мы', 'вы', 'я',
+  'мой', 'наш', 'ваш', 'его', 'её', 'их', 'ещё', 'еще', 'уже', 'ни', 'да', 'нет', 'при', 'про',
+]);
+/* A term matches at the start of a word — "imm" matches "IMM", "IMM's" and "immediately", never
+ * "committing". Prefix rather than whole-word because the hub is written in two inflecting
+ * languages; infix never, because that is how "not" inside "note" counted as a hit. */
+const termRe = (t) => new RegExp('(^|[^\\p{L}\\p{N}_])' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+/* `project` as a slug, a comma-separated list or an array → a Set of slugs, or null for "all". */
+function projectFilter(p) {
+  const list = Array.isArray(p) ? p : String(p ?? '').split(',');
+  // Blanks go BEFORE slugify: slugify('') is not '' (it names the fallback project), and one
+  // blank would have turned "no filter" into "only the fallback project" — zero hits, silently.
+  const set = new Set(list.map(x => String(x ?? '').trim()).filter(Boolean).map(slugify));
+  return set.size ? set : null;
+}
+
 export function runRecall(a = {}) {
   const raw = String(a.query || '').trim();
   if (!raw) throw new Error('query required: a word or phrase to recall');
-  const terms = [...new Set(raw.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
-  if (!terms.length) throw new Error('query too short');
+  const tokens = [...new Set(raw.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
+  const dropped = tokens.filter(t => RECALL_STOP.has(t));
+  const terms = tokens.filter(t => !RECALL_STOP.has(t));
+  if (!terms.length) throw new Error(tokens.length
+    ? `query is only stop-words (${dropped.join(', ')}) — add a word that names the thing you are asking about`
+    : 'query too short');
+  const res = Object.fromEntries(terms.map(t => [t, termRe(t)]));
+  const only = projectFilter(a.project);
   const staleDays = a.staleDays ?? 30;
   const limit = a.limit ?? 20;
   const nowMs = Date.now();
@@ -2656,7 +2689,7 @@ export function runRecall(a = {}) {
 
   const score = (kind, text, ts) => {
     const low = String(text).toLowerCase();
-    const matched = terms.filter(t => low.includes(t));
+    const matched = terms.filter(t => res[t].test(low));
     if (!matched.length) return null;
     // A whole-phrase hit is worth more than the same words scattered; recency decays slowly
     // (half a point per month) so an old DECISION still outranks a fresh passing note.
@@ -2670,6 +2703,7 @@ export function runRecall(a = {}) {
     return { s: RECALL_WEIGHT[kind] + matched.length * 3 + phrase + recency, matched, ageDays };
   };
   const push = (kind, where, project, text, ts) => {
+    if (only && !only.has(slugify(String(project || '')))) return;
     const r = score(kind, text, ts);
     if (!r) return;
     hits.push({ kind, where, project, text: String(text).trim().slice(0, 300), asOf: ts || null,
@@ -2706,7 +2740,8 @@ export function runRecall(a = {}) {
   const top = hits.slice(0, limit);
   const staleCount = top.filter(h => h.stale).length;
   return {
-    query: raw, terms, total: hits.length, hits: top,
+    query: raw, terms, ...(dropped.length ? { dropped } : {}), ...(only ? { project: [...only] } : {}),
+    total: hits.length, hits: top,
     stale: staleCount,
     hint: staleCount
       ? `${staleCount} of ${top.length} hit(s) are older than ${staleDays}d — each says what it was true as of. Verify before acting on one, or re-state it as a fresh FACT.`
@@ -3171,7 +3206,10 @@ export function runWhatsNew(a = {}) {
   // the previous call already returned. Only guard against negative (clock
   // skew) making the cutoff run ahead of now.
   const hours = lastSeen ? Math.max((Date.now() - parseTs(lastSeen).getTime()) / 3600000, 0) : fallbackHours;
-  const entries = journalSince(hours);
+  // `project` narrows the delta to the projects named; an agent sitting in one project got six
+  // entries from three others and none from its own (task macbook-pro-77).
+  const only = projectFilter(a.project);
+  const entries = journalSince(hours).filter(e => !only || only.has(slugify(String(e.project || ''))));
   checkins[key] = new Date().toISOString();
   writeCheckins(checkins);
   // "What did I miss" is the right place for "and what does this environment need":
@@ -3182,6 +3220,7 @@ export function runWhatsNew(a = {}) {
   ackEnvNotices(a.session);
   return {
     agent: author, since: lastSeen, firstCheckin: !lastSeen,
+    ...(only ? { project: [...only] } : {}),
     windowHours: Math.round(hours * 10) / 10,
     newEntries: entries.length,
     entries: entries.slice(0, 50),

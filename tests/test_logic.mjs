@@ -1792,6 +1792,28 @@ ok(rcl.hits.some(h => h.stale === false), 'recall: a fresh hit is not flagged');
 let rcErr = ''; try { core.runRecall({ query: '  ' }); } catch (e) { rcErr = e.message; }
 ok(/query required/.test(rcErr), 'recall: an empty query is refused, not answered with everything');
 
+// ── recall: stop-words are not coverage, a substring is not a word, project narrows (task macbook-pro-77) ──
+fs.writeFileSync(path.join(RC, 'journal.t.jsonl'),
+  JSON.stringify({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'touched the widget config today' }) + '\n' +
+  JSON.stringify({ ts: core.now(), project: 'other', agent: 'dev-t', kind: 'note', text: 'committing the release; overlap is not a concern' }) + '\n' +
+  JSON.stringify({ ts: core.now(), project: 'psy', agent: 'dev-t', kind: 'fact', text: 'IMM not established: attention overlap explains it' }) + '\n');
+const rc77 = core.runRecall({ query: 'IMM not established attention overlap' });
+ok(rc77.dropped && rc77.dropped.includes('not') && !rc77.terms.includes('not'), `recall: "not" is dropped and reported (dropped=${JSON.stringify(rc77.dropped)})`);
+ok(rc77.hits.length && /IMM not established/.test(rc77.hits[0].text), `recall: the line about the topic is the top hit (top: ${rc77.hits[0] && rc77.hits[0].text.slice(0, 40)})`);
+ok(!rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.includes('imm')), 'recall: "imm" does not match inside "committing"');
+ok(rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.length === 1 && h.matched[0] === 'overlap'),
+  'recall: the other line matches on its real word only, ranked below full coverage');
+ok(core.runRecall({ query: 'immediately' }).total === 0 && core.runRecall({ query: 'imm' }).hits.some(h => /IMM not/.test(h.text)), 'recall: prefix at a word start matches, infix never');
+let rcStop = ''; try { core.runRecall({ query: 'not the и не' }); } catch (e) { rcStop = e.message; }
+ok(/only stop-words/.test(rcStop) && /not, the/.test(rcStop), `recall: a stop-words-only query is refused and names them (${rcStop.slice(0, 60)})`);
+const rcP = core.runRecall({ query: 'overlap', project: 'psy' });
+ok(rcP.total === 1 && rcP.hits[0].project === 'psy' && rcP.project[0] === 'psy', 'recall: project narrows to that project only');
+ok(core.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'recall: project accepts a comma-separated list');
+{
+  const wn = core.runWhatsNew({ agent: 'wn-77', hours: 48, project: 'psy' });
+  ok(wn.entries.length === 1 && wn.entries[0].project === 'psy' && wn.project[0] === 'psy', `whatsnew: project narrows the delta (got ${wn.entries.length})`);
+}
+
 // ── usage: measured and supplied never mix ──
 const US = mktmp();
 core.setHubBase(US);
