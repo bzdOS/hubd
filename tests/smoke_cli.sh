@@ -234,6 +234,19 @@ check "help: output contains init" $?
 echo "$OUT10" | grep -qi "doctor"
 check "help: output contains doctor" $?
 
+# ── Case 11: a flag where the task text belongs is refused, not filed ───────
+# `hub task add -p x --by y` used to create a task whose text was "-p"; that task
+# lives in the append-only event log forever, so the command must die before writing.
+
+OUT11=$($CLI task add -p smoketest --by smoke 2>&1)
+RC11=$?
+[ "$RC11" -ne 0 ]
+check "task add with flag as text: non-zero exit" $?
+echo "$OUT11" | grep -q 'Text required'
+check "task add with flag as text: prints usage" $?
+[ ! -s "$HUBD_DIR/tasks.$(hostname -s | tr 'A-Z' 'a-z').events.jsonl" ] || ! grep -q '"text":"-p"' "$HUBD_DIR"/tasks.*.events.jsonl
+check "task add with flag as text: nothing written" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"

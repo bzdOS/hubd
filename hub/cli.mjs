@@ -971,8 +971,10 @@ if (cmd === 'next') {
 if (cmd === 'task') {
   const sub = args[1];
   if (sub === 'add') {
+    // A flag in the text slot is a misplaced argument, not a task: `hub task add -p x --by y`
+    // once filed a task whose text was "-p", and that task is in the append-only log forever.
     const text = args[2];
-    if (!text) die('Text required: hub task add "<text>" -p <proj>');
+    if (!text || text.startsWith('-')) die('Text required: hub task add "<text>" -p <proj>');
     const proj = getFlag('-p');
     if (!proj || typeof proj !== 'string') die('Project required: -p <proj>');
     const imp = getFlag('-i');

@@ -4,6 +4,14 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## Unreleased
+
+- **`hub task add` filed a flag as a task.** `hub task add -p x --by y` created a task whose text
+  was `-p`, and that task now sits in an append-only event log forever. The text is positional;
+  a value starting with `-` in that slot is a misplaced argument and the command dies with usage
+  before writing anything, the way `hub decide` and `hub task get` already did. Covered by
+  `tests/smoke_cli.sh` case 11.
+
 ## 0.9.15 — 2026-09-10
 
 - **A per-node file was travelling the mesh, and the code comment had said otherwise for
