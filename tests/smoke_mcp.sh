@@ -68,4 +68,35 @@ ok(byId[7] && byId[7].result && Object.keys(byId[7].result).length === 0, "ping 
 
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);
-'
+' || exit 1
+
+# ── Attribution: one explicit author under ANY of agent/by/from beats the HUBD_AGENT floor ──
+# hub_report({agent: X}) used to be journaled under the floor because it reads `by ?? agent`
+# and the floor had filled `by` (task macbook-pro-75). Every write path, one author.
+HUBD_DIR2="$(mktemp -d)"; HUBD_TEAM_DIR="$HUBD_DIR2"; export HUBD_TEAM_DIR
+REQS2=$(cat <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hub_report","arguments":{"project":"attr","agent":"paper-auditor@psyco-29","kind":"done","text":"DECIDE: attribution test | must keep the explicit name\nNOTE: explicit agent, empty by"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_task_add","arguments":{"project":"attr","text":"attribution task","by":"paper-auditor@psyco-29"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"attr-role","text":"sent with agent, not from","agent":"paper-auditor@psyco-29"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_report","arguments":{"project":"attr","text":"NOTE: nobody named — the floor applies"}}}
+EOF
+)
+OUT2=$(printf '%s\n' "$REQS2" | HUBD_DIR="$HUBD_DIR2" HUBD_AGENT=owner-floor node hub/index.mjs 2>/dev/null)
+P2=0; F2=0
+chk() { if [ "$2" -eq 0 ]; then P2=$((P2+1)); echo "PASS $1"; else F2=$((F2+1)); echo "FAIL $1"; fi; }
+echo "$OUT2" | grep -q '"id":2,.*"isError":false' || echo "$OUT2" | grep -q '"id":2'
+chk "attribution: hub_report with agent accepted" $?
+J2=$(cat "$HUBD_DIR2"/journal.*.jsonl 2>/dev/null)
+[ "$(printf '%s\n' "$J2" | grep -c '"agent":"paper-auditor@psyco-29"')" -ge 3 ]
+chk "attribution: decision, done and task lines all carry the explicit agent" $?
+! printf '%s\n' "$J2" | grep -v 'nobody named' | grep -q 'owner-floor'
+chk "attribution: the floor signed nothing that had an explicit author" $?
+printf '%s\n' "$J2" | grep 'nobody named' | grep -q '"agent":"owner-floor'
+chk "attribution: a call that named nobody is signed by the floor" $?
+grep -q 'from paper-auditor@psyco-29' "$HUBD_DIR2"/queues/attr-role.*.queue.md 2>/dev/null
+chk "attribution: hub_queue_send with agent (no from) is sent from that agent" $?
+rm -rf "$HUBD_DIR2"
+printf '\n%d pass, %d fail (attribution)\n' "$P2" "$F2"
+[ "$F2" -eq 0 ] || exit 1

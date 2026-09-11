@@ -431,8 +431,8 @@ let onboarded = false, whatsnewChecked = false;
 //
 // The suffix is short and derived from the same process-resolved session id the queue
 // cursors use, so it is stable for a client's whole life and survives a server
-// respawn. An explicit argument is never touched — a caller that names its own
-// function still writes exactly that.
+// respawn. An explicit author is never touched — a caller that names its own
+// function writes exactly that, whichever of agent/by/from it named it under.
 let floorCache;
 function authorFloor() {
   if (floorCache !== undefined) return floorCache;
@@ -457,11 +457,21 @@ function authorFloor() {
   return (floorCache = `${base}-${h.toString(36).padStart(4, '0').slice(-4)}`);
 }
 
+/* "An explicit argument is never touched" was true of the KEY the caller used and false of
+ * the author: hub_report reads `by ?? agent`, so hub_report({agent: "paper-auditor@psyco-29"})
+ * left `by` empty, the floor filled it, and `by` won — three decisions and a done went into the
+ * append-only journal under "owner-mac-<session>" one minute after hub_task_add with the same
+ * name under `by` was attributed correctly (task macbook-pro-75). Attribution that cannot be
+ * corrected afterwards must not depend on which of three synonyms a tool happens to read. So:
+ * when the caller named ANY author, the empty synonyms take that name; the floor only ever
+ * fills a call that named nobody. */
+const AUTHOR_KEYS = ['agent', 'by', 'from'];
 function withAuthorFloor(args) {
-  const floor = authorFloor();
-  if (!floor) return args;
   const out = { ...args };
-  for (const k of ['agent', 'by', 'from']) if (out[k] == null || String(out[k]).trim() === '') out[k] = floor;
+  const given = AUTHOR_KEYS.map(k => out[k]).find(v => v != null && String(v).trim() !== '');
+  const fill = given != null ? String(given).trim() : authorFloor();
+  if (!fill) return args;
+  for (const k of AUTHOR_KEYS) if (out[k] == null || String(out[k]).trim() === '') out[k] = fill;
   return out;
 }
 

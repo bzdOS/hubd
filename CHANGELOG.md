@@ -6,6 +6,14 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub_report` signed an explicit author's work with the `HUBD_AGENT` floor.** Tools read the
+  author under three synonyms — `agent`, `by`, `from` — and the MCP server filled every empty one
+  from `HUBD_AGENT`. `hub_report` reads `by ?? agent`, so `hub_report({agent: "paper-auditor@…"})`
+  left `by` empty, the floor filled it, and the floor won: three decisions and a `done` landed in
+  the append-only journal under `owner-mac-<session>`, one minute after `hub_task_add` with the
+  same name under `by` was attributed correctly (task macbook-pro-75). Now an author named under
+  ANY of the three fills the other two; the floor only fills a call that named nobody. Covered by
+  the attribution block in `tests/smoke_mcp.sh`, which fails on the old server.
 - **`NEXT:` wiped the owner's next step and said nothing.** A side session's one-line `NEXT:`
   replaced a step the owner had written in a card; the reply was `{next: true}`, and the old text
   survived only in the journal (task macbook-pro-76). Replacement is by design — one concrete
