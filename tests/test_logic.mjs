@@ -445,6 +445,37 @@ ok(Array.isArray(ctxFull.journalTail) && ctxFull.journalTail.length >= 1 && ctxF
     `runPresence: cwd and project filters name the same two sessions (${byCwd.join(',')} / ${byProj.join(',')})`);
   ok(!core.runPresence({ cwd: path.join(ctxFullDir, 'doc') }).agents.some(p => p.agent === 'here-b@s2'), 'runPresence: "doc" does not claim an agent sitting in "docs" (segment boundary)');
 }
+// ── claims as globs + hub claim check (task macbook-pro-79) ──
+{
+  const P = (area, p) => (core.areaPatterns(area) || []).some(re => re.test(p));
+  ok(P('src/**/*.ts', 'src/x/y.ts') && P('src/**/*.ts', 'src/a.ts') && !P('src/**/*.ts', 'lib/a.ts') && !P('src/**/*.ts', 'src/a.tsx'), 'claim glob: ** spans directories, * stays in a segment');
+  ok(P('docs/{a,b}.md', 'docs/b.md') && !P('docs/{a,b}.md', 'docs/c.md'), 'claim glob: brace expansion');
+  ok(P('app', 'app') && P('app', 'app/deep/file.js') && !P('app', 'application.js'), 'claim glob: a bare name covers itself and everything under it, not a prefix of another name');
+  ok(P('sections/{03,04}.tex + LINEAGE.md', 'LINEAGE.md') && P('sections/{03,04}.tex + LINEAGE.md', 'sections/04.tex'), 'claim glob: several patterns joined with " + "');
+  ok(core.areaPatterns('the whole article and its figures') === null, 'claim glob: prose is not matchable');
+  const cA = core.runClaim({ project: 'proj5', area: 'src/**/*.ts', agent: 'agent-a' });
+  ok(cA.matchable === true && cA.hint === undefined, 'claim: a glob area reports matchable');
+  const cP = core.runClaim({ project: 'proj5', area: 'everything about deic', agent: 'agent-p' });
+  ok(cP.matchable === false && /glob/.test(cP.hint), 'claim: a prose area reports matchable:false with a hint');
+  const byB = core.runClaimCheck({ path: path.join(ctxFullDir, 'src', 'x', 'y.ts'), agent: 'agent-b' });
+  ok(byB.project === 'proj5' && byB.free === false && byB.holders.length === 1 && byB.holders[0].agent === 'agent-a' && byB.holders[0].area === 'src/**/*.ts' && byB.rel === 'src/x/y.ts',
+    `claim check: B asking about a file in A's zone gets A (${JSON.stringify(byB.holders)})`);
+  ok(byB.unmatchable.length === 1 && byB.unmatchable[0].agent === 'agent-p', 'claim check: the prose claim is listed as unmatchable, not silently ignored');
+  const byA = core.runClaimCheck({ path: path.join(ctxFullDir, 'src', 'x', 'y.ts'), agent: 'agent-a' });
+  ok(byA.free === true && byA.mine.length === 1, 'claim check: the holder asking about its own zone is free, with the claim under mine');
+  ok(core.runClaimCheck({ path: 'src/x/y.ts', project: 'proj5', root: ctxFullDir, agent: 'agent-b' }).free === false, 'claim check: a relative path with an explicit project works too');
+  ok(core.runClaimCheck({ path: path.join(ctxFullDir, 'docs', 'readme.md'), agent: 'agent-b' }).free === true, 'claim check: a file outside every glob is free');
+  core.runRelease({ id: cA.claim.id });
+  ok(core.runClaimCheck({ path: path.join(ctxFullDir, 'src', 'x', 'y.ts'), agent: 'agent-b' }).free === true, 'claim check: after release the file is free');
+  // "you are already editing someone's zone": a recently modified file under a live glob shows in hub_context
+  core.runClaim({ project: 'proj5', area: 'docs/**', agent: 'agent-d' });
+  fs.mkdirSync(path.join(ctxFullDir, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(ctxFullDir, 'docs', 'fresh.md'), 'x');
+  const ct = core.runContext({ cwd: ctxFullDir, agent: 'agent-e' }).claimsTouched;
+  ok(ct.touched.length === 1 && ct.touched[0].agent === 'agent-d' && ct.touched[0].files.includes('docs/fresh.md'),
+    `runContext: a fresh file under another agent's glob is reported as claimsTouched (${JSON.stringify(ct.touched)})`);
+  ok(core.runContext({ cwd: ctxFullDir, agent: 'agent-d' }).claimsTouched.touched.length === 0, 'runContext: the holder editing its own zone is not warned about itself');
+}
 {
   const gdir = path.join(ctxRoot5, 'guessme'); fs.mkdirSync(gdir, { recursive: true });
   core.runCardSet({ project: 'guessme', digest: 'g', by: 'test' });

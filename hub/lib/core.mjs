@@ -3035,6 +3035,9 @@ export function runContext(a) {
     activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
     presenceHere: presenceHere({ root: ctx.root, project: null }),
     journalTail: journalTail(ctx.project, a.journalTail ?? 5),
+    // "You are already editing somebody's zone": live claims (not the caller's, when it says who
+    // it is) whose glob covers a file changed in this checkout in the last half hour.
+    claimsTouched: claimsTouched({ root: ctx.root, project: ctx.project, agent: a.agent || null, minutes: a.recentMinutes ?? 30 }),
   };
 }
 
@@ -3394,13 +3397,14 @@ export function runOnboarding(a = {}) {
   const channels = protocolSlice(body, body.split('\n').find(l => /^## Channels/.test(l)) || '## Channels', { firstBlockOnly: true });
   const author = protocolSlice(body, '### Say who you are — every write needs an author');
   const ritual = protocolSlice(body, '## Session ritual');
-  const recovering = protocolSlice(body, '## Recovering after compaction').split('\n').slice(0, 6).join('\n');
+  const recovering = protocolSlice(body, '## Recovering after compaction').split('\n').slice(0, 4).join('\n') +
+    '\n(five steps — full manual)';
   const short = [
     '# How to work with this hub — the short version',
     '',
     channels, '', author, '', ritual, '', recovering,
     '',
-    '## The rest of the manual (hub_onboarding({mode:"full"}), or HUBD.md in the hub)',
+    '## The rest of the manual — mode:"full", or HUBD.md',
     '',
     ...sections.map(s => '- ' + s),
   ].join('\n');
@@ -3709,6 +3713,111 @@ export function runAgenda(a = {}) {
   };
 }
 
+/* ── A claim's area as a glob ──
+ * `area` was free text, and a claim was informational in the weakest sense: nothing told an agent
+ * that the file it had just opened was somebody's declared zone. Two sessions edited one checkout
+ * on 2026-09-11; one had claimed, the other did not know claims existed, and the conflict was
+ * avoided by luck (task macbook-pro-79). So an area is READ as a path pattern when it can be —
+ * `src/**\/*.ts`, `docs/{a,b}.md`, a bare directory — relative to the project root, and a path can
+ * be asked about. Free text stays legal; it is simply `matchable:false`, and the claim says so.
+ * `+` and `,` outside braces separate several patterns in one area. */
+function expandBraces(s) {
+  const m = s.match(/\{([^{}]*)\}/);
+  if (!m) return [s];
+  const out = [];
+  for (const alt of m[1].split(',')) out.push(...expandBraces(s.slice(0, m.index) + alt + s.slice(m.index + m[0].length)));
+  return out;
+}
+function globToRe(g) {
+  let re = '';
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === '*') {
+      if (g[i + 1] === '*') { i++; if (g[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*'; }
+      else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  // A pattern with no glob characters names a file or a directory: itself, or anything under it.
+  const plain = !/[*?[{]/.test(g);
+  return new RegExp('^' + re + (plain ? '(?:/.*)?' : '') + '$');
+}
+/** RegExps for a claim area, or null when the area is prose that no path can match. */
+export function areaPatterns(area) {
+  const a = String(area || '').trim();
+  if (!a) return null;
+  const tokens = a.split(/\s*\+\s*|,(?![^{]*\})\s*/).map(t => t.trim()).filter(Boolean);
+  if (!tokens.length || tokens.some(t => /\s/.test(t))) return null;
+  const pats = [];
+  for (const t of tokens) for (const alt of expandBraces(t)) pats.push(globToRe(alt.replace(/^\.\//, '').replace(/\/+$/, '')));
+  return pats;
+}
+const relTo = (root, p) => {
+  const abs = path.isAbsolute(p) ? path.normalize(p) : p;
+  if (root && path.isAbsolute(abs)) {
+    const r = path.resolve(root);
+    if (abs === r) return '.';
+    if (abs.startsWith(r + path.sep)) return abs.slice(r.length + 1).split(path.sep).join('/');
+  }
+  return String(p).replace(/^\.\//, '');
+};
+/** Is `path` inside somebody's live claim? Pure read; exit-code semantics live in the CLI. */
+export function runClaimCheck(a = {}) {
+  const p = String(a.path || '').trim();
+  if (!p) throw new Error('path required: the file you are about to edit');
+  let project = a.project ? slugify(a.project) : null, root = a.root || null;
+  if (!project || !root) {
+    const ctx = resolveContext(path.isAbsolute(p) ? (fs.existsSync(p) && fs.statSync(p).isDirectory() ? p : path.dirname(p)) : process.cwd());
+    project = project || ctx.project; root = root || ctx.root;
+  }
+  if (!project) return { path: p, project: null, free: true, holders: [], mine: [], unmatchable: [], hint: 'no project resolves for this path — pass project, or write a .hubd marker at the repo root' };
+  const rel = relTo(root, p);
+  const holders = [], mine = [], unmatchable = [];
+  for (const c of activeClaims(loadClaims().claims).filter(c => slugify(c.project) === project)) {
+    const pats = areaPatterns(c.area);
+    const row = { agent: c.agent, area: c.area, since: c.since, ttlMin: c.ttlMin ?? 240, ...(c.note ? { note: c.note } : {}) };
+    if (!pats) { unmatchable.push(row); continue; }
+    if (pats.some(re => re.test(rel))) (a.agent && c.agent === a.agent ? mine : holders).push(row);
+  }
+  return { path: p, rel, project, root, free: holders.length === 0, holders, mine, unmatchable };
+}
+/* Files under `root` modified in the last `minutes`, relative, bounded — this runs inside
+ * hub_context, so a monorepo must not turn "where am I" into a filesystem census. */
+function recentFiles(root, minutes, { cap = 3000, maxDepth = 8 } = {}) {
+  const out = [];
+  const since = Date.now() - minutes * 60000;
+  const skip = new Set(['.git', 'node_modules', '.hubd', 'target', 'dist', 'build', '.venv', '__pycache__']);
+  let seen = 0;
+  const walk = (dir, depth) => {
+    if (depth > maxDepth || seen > cap) return;
+    let ents = [];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of ents) {
+      if (seen++ > cap) return;
+      if (d.name.startsWith('.') && d.isDirectory()) continue;
+      if (skip.has(d.name)) continue;
+      const full = path.join(dir, d.name);
+      if (d.isDirectory()) walk(full, depth + 1);
+      else { try { if (fs.statSync(full).mtimeMs >= since) out.push(relTo(root, full)); } catch {} }
+    }
+  };
+  walk(path.resolve(root), 0);
+  return { files: out, capped: seen > cap };
+}
+/** Live claims (optionally not the caller's own) whose area covers a file modified recently. */
+export function claimsTouched({ root, project, agent = null, minutes = 30 } = {}) {
+  if (!root || !project) return { touched: [], recentFiles: 0, capped: false };
+  const { files, capped } = recentFiles(root, minutes);
+  const touched = [];
+  for (const c of activeClaims(loadClaims().claims).filter(c => slugify(c.project) === slugify(project) && c.agent !== agent)) {
+    const pats = areaPatterns(c.area);
+    if (!pats) continue;
+    const hit = files.filter(f => pats.some(re => re.test(f)));
+    if (hit.length) touched.push({ agent: c.agent, area: c.area, since: c.since, files: hit.slice(0, 5), more: Math.max(0, hit.length - 5) });
+  }
+  return { touched, recentFiles: files.length, capped, minutes };
+}
+
 export function runClaim(a) {
   // Name the fields actually missing: this error fired on 4 of 33 real hub_claim
   // calls, the worst rate of any tool, and listing all three told the caller
@@ -3724,7 +3833,9 @@ export function runClaim(a) {
     if (a.note) claim.note = a.note;
     db.claims.push(claim);
     atomicWrite(CLAIMS, db);
-    const result = { ok: true, claim };
+    const matchable = areaPatterns(a.area) !== null;
+    const result = { ok: true, claim, matchable,
+      ...(matchable ? {} : { hint: 'this area is prose, so `hub claim check <path>` cannot match files against it — a glob like "src/**/*.ts" or "docs/{a,b}.md" would' }) };
     if (existing) {
       const exp = new Date(parseTs(existing.since).getTime() + existing.ttlMin * 60000)
         .toISOString().slice(0, 16).replace('T', ' ');

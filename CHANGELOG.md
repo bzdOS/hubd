@@ -6,6 +6,19 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **A claim can now warn before the edit.** `area` was free text and nothing told an agent that the
+  file it had just opened was somebody's declared zone; two sessions edited one checkout and the
+  conflict was avoided by luck (task macbook-pro-79). An area is read as a path glob relative to
+  the project root — `src/**/*.ts`, `docs/{a,b}.md`, a bare directory, several joined with ` + ` —
+  and the claim reply says `matchable`; prose stays legal and is flagged. `hub claim check <path>
+  [-p proj] [--agent you]` exits 0 when free or your own, 1 with one line per holder otherwise;
+  `hub_claim_check({path, agent})` is the tool form, returning holders, `mine`, and the prose
+  claims it could not test (`unmatchable`), never silently ignoring them. `hub_context` gained
+  `claimsTouched`: live claims of other agents whose glob covers a file changed in this checkout
+  in the last 30 minutes (`agent`, `recentMinutes`), bounded so a monorepo does not turn "where am
+  I" into a census. `prompts/claim-check-hooks.md` carries the Claude Code `PreToolUse` recipe and
+  an honest table for the other clients (unknown, prose fallback) — the hook informs, it never
+  blocks, because the lock is soft by constitution.
 - **`hub audit` sees the end-of-session dump.** Two days of audit work, dozens of findings, not one
   journal line until the third morning — not laziness but ritual: the protocol said "one report at
   session end" and fleet sessions compact rather than end (task macbook-pro-80). Two checks, both
