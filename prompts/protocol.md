@@ -171,7 +171,7 @@ existing tasks carry an off-enum category and moves them into tags on `--apply`.
 - **`hub recall "<question>"`** / `hub_recall` — ranked across cards, sections, decisions, journal
   and tasks, where `hub_search` is flat and exact. Every hit carries the date it was true **as of**
   and a stale flag. Treat a stale hit as a lead, not a fact: re-check it, then re-state it as a
-  fresh `FACT:` if it still holds. Stop-words (the, not, и, не, …) carry no topic and are dropped
+  fresh `FACT:` if it still holds. Stop-words (the, not, of, and their Russian counterparts) carry no topic and are dropped
   — the answer lists them as `dropped`, and a query made only of them is refused. A term matches
   at the start of a word (`imm` → IMM, IMM's, immediately), never inside one (not `committing`).
   `project` narrows recall — and `hub_whatsnew` — to one project or a comma-separated few.

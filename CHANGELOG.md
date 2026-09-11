@@ -4,7 +4,7 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
-## Unreleased
+## 0.9.16 — 2026-09-11
 
 - **`hub whereami` — state, not narrative, for the shell.** A compaction hands an agent a summary
   of what happened; work resumes from what exists, and one session re-discovered its own committed
