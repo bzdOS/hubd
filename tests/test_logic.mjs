@@ -476,6 +476,34 @@ ok(Array.isArray(ctxFull.journalTail) && ctxFull.journalTail.length >= 1 && ctxF
     `runContext: a fresh file under another agent's glob is reported as claimsTouched (${JSON.stringify(ct.touched)})`);
   ok(core.runContext({ cwd: ctxFullDir, agent: 'agent-d' }).claimsTouched.touched.length === 0, 'runContext: the holder editing its own zone is not warned about itself');
 }
+// ── hub whereami: state, not narrative — context + git inventory + the project's own script (task macbook-pro-74) ──
+{
+  const repo = path.join(ctxRoot5, 'wrepo'); fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  const g = (c) => execSync(`git ${c}`, { cwd: repo, stdio: 'ignore', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  g('init -q');
+  fs.writeFileSync(path.join(repo, '.hubd'), 'wproj\nscripts/inventory.sh\n');
+  fs.writeFileSync(path.join(repo, 'scripts', 'inventory.sh'), '#!/bin/sh\necho "registry: 3 claims withdrawn"\n'); fs.chmodSync(path.join(repo, 'scripts', 'inventory.sh'), 0o755);
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'one'); g('add .'); g('commit -q -m "empathy: a post-hoc split"');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'two');                                   // modified, uncommitted
+  fs.writeFileSync(path.join(repo, 'scripts', 'audit_items.py'), '"""Recount the 183 active items."""\nprint(1)\n');   // untracked
+  core.runCardSet({ project: 'wproj', digest: 'w digest', by: 'test' });
+  core.runReport({ project: 'wproj', by: 'test', text: 'DECIDE: keep IMM out | overlap explains it' });
+  const t0 = Date.now();
+  const w = core.runWhereAmI({ cwd: path.join(repo, 'scripts'), agent: 'me' });
+  ok(Date.now() - t0 < 3000, `whereami: answers in under 3 s (${Date.now() - t0} ms)`);
+  ok(w.project === 'wproj' && w.via === 'marker' && w.root === repo && w.inventory === 'scripts/inventory.sh', `whereami: resolves the marker and its second line (${w.project}, ${w.inventory})`);
+  ok(w.git && w.git.commits.some(c => /empathy: a post-hoc split/.test(c)), 'whereami: commit subjects are there — the findings live in them');
+  ok(w.git.dirtyFiles.some(f => /a\.txt/.test(f)) && /1 file changed/.test(w.git.dirty), `whereami: uncommitted changes with their stat (${w.git.dirty})`);
+  ok(w.git.untracked.some(u => u.file === 'scripts/audit_items.py' && /Recount the 183/.test(u.firstLine)), `whereami: untracked files carry their first line (${JSON.stringify(w.git.untracked)})`);
+  ok(w.git.recent.includes('a.txt') && w.git.recent.includes('scripts/audit_items.py'), 'whereami: files changed in the last 30 min are listed');
+  ok(w.localInventory && /3 claims withdrawn/.test(w.localInventory.output) && !w.localInventory.missing, 'whereami: the project-local inventory script named in .hubd runs and its output is included');
+  ok(w.journalTail.some(e => /keep IMM out/.test(e.text)) && w.digest === 'w digest', 'whereami: carries the hub side too (journal tail, digest)');
+  fs.writeFileSync(path.join(repo, '.hubd'), 'wproj\nscripts/gone.sh\n');
+  ok(core.runWhereAmI({ cwd: repo }).localInventory.missing === true, 'whereami: a named but missing inventory script is reported, not ignored');
+  const plain = path.join(ctxRoot5, 'plain'); fs.mkdirSync(plain, { recursive: true });
+  const wp = core.runWhereAmI({ cwd: plain });
+  ok(wp.git === null && wp.localInventory === null, 'whereami: outside a git checkout the git block is null and nothing is run');
+}
 {
   const gdir = path.join(ctxRoot5, 'guessme'); fs.mkdirSync(gdir, { recursive: true });
   core.runCardSet({ project: 'guessme', digest: 'g', by: 'test' });

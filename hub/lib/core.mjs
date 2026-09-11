@@ -2940,8 +2940,11 @@ function findHubdMarker(startDir) {
     const marker = path.join(d, '.hubd');
     try {
       if (fs.statSync(marker).isFile()) {
-        const slug = fs.readFileSync(marker, 'utf8').split('\n')[0].trim();
-        if (slug) return { slug: slugify(slug), root: d };
+        const lines = fs.readFileSync(marker, 'utf8').split('\n').map(l => l.trim());
+        const slug = lines[0];
+        // Second line, optional: a project-local inventory script `hub whereami` runs after its own
+        // report — project-specific registers stay in the project, not in the engine.
+        if (slug) return { slug: slugify(slug), root: d, ...(lines[1] && !lines[1].startsWith('#') ? { inventory: lines[1] } : {}) };
       }
     } catch {}
     if (fs.existsSync(path.join(d, '.git'))) break;   // never search above the repo root
@@ -2972,7 +2975,7 @@ export function resolveContext(cwd) {
   const root = findGitRoot(start) || start;
 
   const marker = findHubdMarker(start);
-  if (marker) return { project: marker.slug, via: 'marker', root: marker.root, guessed: false };
+  if (marker) return { project: marker.slug, via: 'marker', root: marker.root, guessed: false, ...(marker.inventory ? { inventory: marker.inventory } : {}) };
 
   const byPath = findProjectByPath(root);
   if (byPath) return { project: byPath, via: 'path', root, guessed: false };
@@ -3039,6 +3042,47 @@ export function runContext(a) {
     // it is) whose glob covers a file changed in this checkout in the last half hour.
     claimsTouched: claimsTouched({ root: ctx.root, project: ctx.project, agent: a.agent || null, minutes: a.recentMinutes ?? 30 }),
   };
+}
+
+/* "Where am I" for a shell: hub_context plus the git-side inventory an agent otherwise rebuilds
+ * by hand after a compaction — and gets wrong. The findings live in commit subjects (a session
+ * re-discovered one committed under a subject that named it); "does this already exist" lives in
+ * the untracked list (a script sat there while a second one was written); another session in the
+ * same tree shows first in fresh mtimes. Read-only, no network, bounded: git calls carry the
+ * 8-second cap `sh` always had, the walk the cap recentFiles has. A project's own registers are
+ * not the engine's business — the second line of the `.hubd` marker names a local script, and it
+ * runs last, with its output capped (task macbook-pro-74). */
+export function runWhereAmI(a = {}) {
+  const cwd = a.cwd || process.cwd();
+  const ctx = runContext({ cwd, agent: a.agent, staleDays: a.staleDays, journalTail: a.journalTail ?? 8, recentMinutes: a.recentMinutes ?? 30 });
+  const root = ctx.root;
+  const out = { ...ctx, git: null, localInventory: null };
+  if (root && fs.existsSync(path.join(root, '.git'))) {
+    const firstLine = (f) => {
+      try { return (fs.readFileSync(path.join(root, f), 'utf8').split('\n').find(l => l.trim()) || '').trim().slice(0, 100); } catch { return ''; }
+    };
+    const untracked = sh('git status --porcelain', root).split('\n').filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
+      .slice(0, 30).map(f => ({ file: f, firstLine: f.endsWith('/') ? '(directory)' : firstLine(f) }));
+    const stat = sh('git diff --stat', root).split('\n').filter(Boolean);
+    out.git = {
+      branch: sh('git rev-parse --abbrev-ref HEAD', root),
+      commits: sh(`git log --format='%h %s' -n ${Math.max(1, parseInt(a.commits ?? 8, 10) || 8)}`, root).split('\n').filter(Boolean),
+      dirty: stat.length ? stat[stat.length - 1].trim() : 'clean',
+      dirtyFiles: stat.slice(0, -1).map(l => l.trim()).slice(0, 20),
+      untracked,
+      recent: recentFiles(root, a.recentMinutes ?? 30).files.slice(0, 20),
+    };
+  }
+  if (ctx.inventory && root) {
+    const script = path.isAbsolute(ctx.inventory) ? ctx.inventory : path.join(root, ctx.inventory);
+    if (fs.existsSync(script)) {
+      let text = '';
+      try { text = execSync(JSON.stringify(script), { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }); }
+      catch (e) { text = String((e && e.stdout) || '') + (e && e.stderr ? '\n[stderr] ' + String(e.stderr).slice(0, 500) : '') + (e && e.killed ? '\n[inventory script exceeded 5 s and was stopped]' : ''); }
+      out.localInventory = { script: ctx.inventory, output: String(text).slice(0, 4000), truncated: String(text).length > 4000 };
+    } else out.localInventory = { script: ctx.inventory, missing: true };
+  }
+  return out;
 }
 
 // Task #194 root-cause fix: bare sequential ids were minted from `db.seq` — THIS

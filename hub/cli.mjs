@@ -22,7 +22,7 @@ import {
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
-  runHeartbeat, runPresence, envChecks, ownerWaiting,
+  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
@@ -926,6 +926,50 @@ if (cmd === 'plan' || cmd === 'trajectory') {
   if (r.layers.length > 1) { console.log('\nUNLOCK ORDER (topo layers):'); r.layers.forEach((l, i) => console.log(`  L${i}: ${l.map(id => '#' + id).join(' ')}`)); }
   if (r.blocked.length) { console.log(`\nBLOCKED (${r.blocked.length}):`); for (const b of r.blocked) console.log(`  #${b.id} ← waiting on ${b.waitingOn.map(id => '#' + id).join(',')} — ${(b.text || '').slice(0, 50)}`); }
   if (r.cycles.length) console.log(`\n⚠ CYCLES (fix these deps): ${r.cycles.map(id => '#' + id).join(' ')}`);
+  done(0);
+}
+
+/* `hub whereami [cwd]` — state, not narrative: the first command after a context compaction, and
+ * the one an editor's session-start hook runs. Everything hub_context returns, plus the git-side
+ * inventory (subjects, diff stat, untracked with their first line, fresh mtimes) and the project's
+ * own inventory script if the .hubd marker names one. Read-only, no network. */
+if (cmd === 'whereami' || cmd === 'where') {
+  const target = args[1] && !args[1].startsWith('-') ? path.resolve(args[1]) : process.cwd();
+  const af = getFlag('--agent');
+  let w;
+  try { w = runWhereAmI({ cwd: target, agent: typeof af === 'string' ? af : (process.env.HUBD_AGENT || undefined) }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(w, null, 1)); done(0); }
+  const L = (s = '') => console.log(s);
+  L(`project:  ${w.project || '(none)'}  via ${w.via}${w.guessed ? '  GUESSED' : ''}   root ${w.root}`);
+  if (w.hint) L(`  hint:   ${w.hint}`);
+  if (w.project) {
+    L(`digest:   ${w.digestSetAt ? `set ${w.digestSetAt}${w.digestSetBy ? ' by ' + w.digestSetBy : ''} (${w.digestAgeDays}d ago)` : 'no set-stamp'}${w.digestStale ? `  STALE: journal moved on ${w.digestStale.daysBehind}d further` : ''}`);
+    for (const l of String(w.digest || '(none)').split('\n')) L('  ' + l);
+    L(`tasks:    ${w.openTasks.length} open` + (w.openTasks.length ? '' : ''));
+    for (const t of w.openTasks.slice(0, 6)) L(`  #${t.id}${t.assignee ? ' @' + t.assignee : ''} ${String(t.text).slice(0, 100)}`);
+    if (w.openTasks.length > 6) L(`  … ${w.openTasks.length - 6} more (hub task list -p ${w.project})`);
+    L(`claims:   ${w.activeClaims.length ? w.activeClaims.map(c => `${c.area} — ${c.agent} since ${c.since}`).join('; ') : 'none'}`);
+    L(`here:     ${w.presenceHere.length ? w.presenceHere.map(p => `${p.agent}${p.status ? ' (' + p.status + ')' : ''} ${p.last_seen}`).join('; ') : 'nobody else heartbeating under this root'}`);
+    if (w.claimsTouched && w.claimsTouched.touched.length) {
+      L(`WARNING:  files changed in the last ${w.claimsTouched.minutes} min inside another agent's claim:`);
+      for (const t of w.claimsTouched.touched) L(`  ${t.area} — ${t.agent}: ${t.files.join(', ')}${t.more ? ` +${t.more}` : ''}`);
+    }
+    L('journal:');
+    for (const e of w.journalTail) L(`  ${e.ts} [${e.agent}] ${e.kind}: ${String(e.text).slice(0, 120)}`);
+    if (!w.journalTail.length) L('  (nothing yet — FACT:/DECIDE: at the moment of the finding, not at the end)');
+  }
+  if (w.git) {
+    L(`git:      ${w.git.branch}  ${w.git.dirty}`);
+    for (const c of w.git.commits) L(`  ${c}`);
+    if (w.git.dirtyFiles.length) { L('  modified:'); for (const f of w.git.dirtyFiles) L(`    ${f}`); }
+    if (w.git.untracked.length) { L('  untracked (does it already exist?):'); for (const u of w.git.untracked) L(`    ${u.file}  ${u.firstLine}`); }
+    if (w.git.recent.length) { L(`  changed in the last 30 min:`); for (const f of w.git.recent) L(`    ${f}`); }
+  } else L('git:      not a git checkout');
+  if (w.localInventory) {
+    if (w.localInventory.missing) L(`inventory: ${w.localInventory.script} named in .hubd but not found`);
+    else { L(`inventory (${w.localInventory.script}):`); for (const l of w.localInventory.output.split('\n')) L('  ' + l); if (w.localInventory.truncated) L('  … output truncated at 4 KB'); }
+  }
   done(0);
 }
 
@@ -1846,6 +1890,7 @@ else if (!cmd) {
     '  brief [-h <hours>]               morning brief',
     '  inbox [--hours <N>]              what needs a decision now (blocked/overdue/unassigned/stale locks)',
     '  plan [project]                   dependency-graph trajectory: ready now · critical path · unlock order · cycles',
+    '  whereami [cwd] [--json]          where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction',
     '  log [project] [-n 20]            journal tail',
     '  report [-p <proj>]               structured report → card sections (no input prints the template)',
     '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
