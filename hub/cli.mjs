@@ -16,7 +16,7 @@ import {
   now, parseTs, slugify, sh, cardPath, readCard, digestOf, projectAliases,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
-  runBrief, runClaim, runRelease, runKanban, runInbox, runTrajectory,
+  runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
@@ -1074,14 +1074,32 @@ if (cmd === 'task') {
   done(0);
 }
 
+/* `hub claim check <path>` — is this file inside somebody's live claim? Exit 0 when free (or the
+ * claim is your own, with --agent), exit 1 with one line per holder when it is not. Meant for an
+ * editor hook that runs before a write, so the warning arrives BEFORE the edit; the claim stays
+ * soft by constitution, so a hook should inform, not block. */
+if (cmd === 'claim' && args[1] === 'check') {
+  const target = args[2] && !args[2].startsWith('-') ? args[2] : null;
+  if (!target) die('Usage: hub claim check <path> [-p <proj>] [--agent <you>]');
+  const pf = getFlag('-p'), af = getFlag('--agent');
+  let r;
+  try { r = runClaimCheck({ path: target, project: typeof pf === 'string' ? pf : undefined, agent: typeof af === 'string' ? af : (process.env.HUBD_AGENT || undefined) }); }
+  catch (e) { die(e.message); }
+  if (!r.project) { console.log(`free (no project resolves for ${target})`); done(0); }
+  for (const h of r.holders) console.log(`${h.area} — ${h.agent} since ${h.since}${h.note ? ' (' + h.note + ')' : ''}`);
+  if (r.holders.length) { console.error(`  ${r.rel} is inside ${r.holders.length} live claim(s) on ${r.project} — coordinate before editing (soft lock, not enforced)`); done(1); }
+  console.log(`free — ${r.rel}` + (r.mine.length ? ` (your own claim: ${r.mine.map(m => m.area).join(', ')})` : '') + (r.unmatchable.length ? `; ${r.unmatchable.length} prose claim(s) on ${r.project} could not be matched: ${r.unmatchable.map(u => u.agent).join(', ')}` : ''));
+  done(0);
+}
+
 if (cmd === 'claim') {
   const proj = args[1], area = args[2];
-  if (!proj || !area) die('Usage: hub claim <proj> <area> [-t min]');
+  if (!proj || !area) die('Usage: hub claim <proj> <area> [-t min]   |   hub claim check <path> [-p <proj>]');
   const ttl = parseInt(getFlag('-t') || '240');
   const agent = authorOrDie('--agent');
   const res = runClaim({ project: proj, area, agent, ttlMin: ttl });
   if (res.warning) console.warn('⚠  ' + res.warning);
-  console.log(`Lock: ${res.claim.id}`);
+  console.log(`Lock: ${res.claim.id}` + (res.matchable ? '' : '  (prose area — `hub claim check` cannot match files against it; a glob would)'));
   done(0);
 }
 
