@@ -111,6 +111,13 @@ typo is how a card grows two nearly identical sections. For Decisions / Facts / 
 Next step, a normal report with `DECIDE:`/`FACT:`/`COMM:`/`NEXT:` is still the right call.
 `provenance` records where a line came from, next to the date it was written.
 
+`NEXT:` replaces the step — one concrete next action, not a list — but never silently. The step
+is stamped with who set it and when; the step it replaced stays as one dated `prev` line in the
+section, and the reply carries `nextReplaced {text, by, at}`, so a side session sees what it
+overwrote and can put it back. A step set by an owner role (`HUB/owner-roles.json`) is not
+replaced by a non-owner: the report is refused with the step's text, unless `force:true`
+(`--force`) — and then a `DECIDE:` line saying why belongs in the same report.
+
 A card can be fresh and still lie. `hub status` / `hub brief` flag one whose digest has
 fallen behind its OWN journal (`digestStale`, `⚠Nd behind`): the project kept moving and
 the card didn't. That flag is a request to re-sync the digest, not a bug — and it never
