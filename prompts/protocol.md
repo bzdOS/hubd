@@ -18,6 +18,14 @@ Report SUBSTANCE, never play-by-play. "I'm on it / in progress" is a **claim**, 
 report. A trivial step is **nothing**. Spamming the journal with progress is the failure
 mode this table exists to prevent.
 
+A claim's `area` is a path glob relative to the project root — `src/**/*.ts`,
+`docs/{a,b}.md`, a bare directory, several joined with ` + ` — so that `hub claim check
+<path>` / `hub_claim_check` can tell the next agent, before its edit, whose zone the file is
+in, and `hub_context` can report `claimsTouched` when a freshly changed file sits in one.
+Prose areas are accepted and flagged `matchable:false`. Editor hooks that run the check
+automatically: `prompts/claim-check-hooks.md` in the hubd repository. The lock stays soft:
+the check informs, it never forbids.
+
 ### When the hub tells you your environment needs work
 
 An upgrade can require something that is **not** in the code: a variable in your
@@ -361,6 +369,7 @@ own 170s default / 540s max; the loop still never stops for input, it just takes
 ## Session ritual
 
 1. Read `AGENTS.md` (team constitution) + this `HUBD.md` (mechanics) + the top of `INBOX.md`.
-2. Before touching a shared area, `hub claim` it.
+2. Before touching a shared area, `hub claim` it, with the area as a path glob; before editing a
+   shared file, `hub claim check <path>` (see Channels for how areas match).
 3. At the end: ONE structured `hub report` (substance only — see Channels) + one INBOX
    handoff line for the humans.
