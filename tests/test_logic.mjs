@@ -1185,10 +1185,10 @@ const floorCall = (sess, args, tool = 'hub_task_add') => {
 const FL = mktmp();
 const flA = floorCall('one', { project: 'p', text: 'from session one' });
 const flB = floorCall('two', { project: 'p', text: 'from session two' });
-ok(flA && /^dev-hubd-/.test(flA.task.by), `floor: an omitted author becomes HUBD_AGENT, not an error (got ${flA && flA.task.by})`);
-ok(flA && flB && flA.task.by !== flB.task.by,
-  `floor: two sessions under one HUBD_AGENT are DIFFERENT authors (${flA && flA.task.by} vs ${flB && flB.task.by})`);
-ok(floorCall('one', { project: 'p', text: 'again' }).task.by === flA.task.by,
+ok(flA && /^dev-hubd-/.test(flA.by), `floor: an omitted author becomes HUBD_AGENT, not an error (got ${flA && flA.by})`);
+ok(flA && flB && flA.by !== flB.by,
+  `floor: two sessions under one HUBD_AGENT are DIFFERENT authors (${flA && flA.by} vs ${flB && flB.by})`);
+ok(floorCall('one', { project: 'p', text: 'again' }).by === flA.by,
   'floor: the same session keeps one author across calls');
 // The consequence that matters: the soft lock still detects a second holder.
 ok(floorCall('one', { project: 'p', area: 'shared' }, 'hub_claim').warning === undefined,
@@ -1196,7 +1196,7 @@ ok(floorCall('one', { project: 'p', area: 'shared' }, 'hub_claim').warning === u
 ok(/already claimed by/.test(floorCall('two', { project: 'p', area: 'shared' }, 'hub_claim').warning || ''),
   'floor: a second session claiming the same area IS warned — the lock still locks');
 // An explicit author is never rewritten by the floor.
-ok(floorCall('one', { project: 'p', text: 'mine', by: 'reviewer-hubd' }).task.by === 'reviewer-hubd',
+ok(floorCall('one', { project: 'p', text: 'mine', by: 'reviewer-hubd' }).by === 'reviewer-hubd',
   'floor: an explicit author wins over the floor untouched');
 // The floor reaches the queue too: hub_queue_send's `from` is an author like any other.
 const flQ = floorCall('one', { role: 'flr', text: 'queued by the floor' }, 'hub_queue_send');
@@ -1896,6 +1896,41 @@ ok(core.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'reca
   ok(iso.sinceMode === 'time' && iso.entries.some(e => /drop IMM/.test(e.text)), 'whatsnew: an ISO since works as a plain window');
   let wErr = ''; try { core.runWhatsNew({ agent: 'wn-84', since: 'yesterday-ish' }); } catch (e) { wErr = e.message; }
   ok(/not "checkpoint", "session" or an ISO time/.test(wErr), 'whatsnew: a malformed since is refused, not silently treated as checkpoint');
+}
+// ── output hygiene (task macbook-pro-83): no-op resource set is not an event; repeats fold; onboarding has a short mode ──
+{
+  const r1 = core.runResourceSet({ slug: 'geo-proxy', type: 'endpoint', address: '127.0.0.1:10809', status: 'live', by: 'fo' });
+  const r2 = core.runResourceSet({ slug: 'geo-proxy', type: 'endpoint', address: '127.0.0.1:10809', status: 'live', by: 'fo' });
+  ok(r1.unchanged === undefined && r2.unchanged === true, 'resource set: a byte-identical second set reports unchanged');
+  const rsLines = core.journalTail(null, 200).filter(e => e.kind === 'resource' && /geo-proxy/.test(e.text));
+  ok(rsLines.length === 1, `resource set: the no-op set wrote no journal line (${rsLines.length} line(s))`);
+  const stamp = (fs.readFileSync(path.join(RC, 'resources', 'geo-proxy.md'), 'utf8').match(/- set: ([^\n]+)/) || [])[1];
+  const r3 = core.runResourceSet({ slug: 'geo-proxy', status: 'planned', by: 'fo' });
+  ok(r3.unchanged === undefined && stamp && /status: planned/.test(fs.readFileSync(path.join(RC, 'resources', 'geo-proxy.md'), 'utf8')),
+    'resource set: a real change is written and reported as a change');
+  // fold identical entries — written minutes apart, because two byte-identical lines in one minute
+  // never reach the reader at all (readLogEntries drops the copy); the real case was ten hours apart.
+  const tsAgo = (min) => new Date(Date.now() - min * 60000).toISOString().slice(0, 16).replace('T', ' ');
+  fs.appendFileSync(path.join(RC, 'journal.t.jsonl'),
+    JSON.stringify({ ts: tsAgo(30), project: 'fold', agent: 'fo', kind: 'resource', text: 'resource set: geo-proxy' }) + '\n' +
+    JSON.stringify({ ts: tsAgo(10), project: 'fold', agent: 'fo', kind: 'resource', text: 'resource set: geo-proxy' }) + '\n' +
+    JSON.stringify({ ts: tsAgo(5), project: 'fold', agent: 'fo', kind: 'note', text: 'a different line' }) + '\n');
+  const wf = core.runWhatsNew({ agent: 'wn-83', hours: 1, project: 'fold' });
+  const folded = wf.entries.filter(e => /resource set: geo-proxy/.test(e.text));
+  ok(folded.length === 1 && folded[0].times === 2 && folded[0].firstTs === tsAgo(30) && folded[0].ts === tsAgo(10) && wf.entries.length === 2,
+    `whatsnew: two identical entries fold into one with times:2 (${wf.entries.length} entries, times ${folded[0] && folded[0].times})`);
+  ok(core.collapseRepeats([]).length === 0 && core.collapseRepeats([{ kind: 'note', text: 'x' }])[0].times === undefined, 'collapseRepeats: a single entry carries no times');
+  // onboarding modes
+  const ob = core.runOnboarding();
+  const words = ob.protocol.split(/\s+/).filter(Boolean).length;
+  ok(ob.mode === 'short' && words <= 600 && /\| you want to say \|/.test(ob.protocol) && /Say who you are/.test(ob.protocol) && /Session ritual/.test(ob.protocol),
+    `onboarding: default is the short mode with the channel table, author rule and ritual (${words} words)`);
+  ok(Array.isArray(ob.sections) && ob.sections.some(s => /Queues/.test(s)) && ob.protocol.includes('- ' + ob.sections[0]) && /mode:"full"/.test(ob.hint),
+    'onboarding short: lists every section of the full manual and says how to get it');
+  const full = core.runOnboarding({ mode: 'full' });
+  ok(full.mode === 'full' && full.protocol.split(/\s+/).length > 3000 && /## Queues/.test(full.protocol), 'onboarding full: the whole manual');
+  let obErr = ''; try { core.runOnboarding({ mode: 'medium' }); } catch (e) { obErr = e.message; }
+  ok(/not "short" or "full"/.test(obErr), 'onboarding: an unknown mode is refused');
 }
 
 // ── usage: measured and supplied never mix ──

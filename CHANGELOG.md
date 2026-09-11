@@ -6,6 +6,18 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **Three places the hub spent an agent's context on nothing** (task macbook-pro-83). A `resource
+  set` that changes nothing no longer writes a journal line or rewrites the card (the same resource
+  was "set" twice in ten hours with identical content, and both lines sat in the next agent's
+  `hub_whatsnew` next to two real entries). Identical journal entries — same kind, project, author
+  and text — fold into one with `times` and `firstTs` in `hub_whatsnew` and `hub_brief`.
+  `hub_task_add` replies `{ok, id, project, importance, cat, textPreview}` instead of echoing the
+  2-3 KB the caller just wrote (`verbose:true` for the whole task; the engine's return is
+  unchanged). `hub_onboarding` defaults to `mode:"short"` — the channel table, the author rule, the
+  session ritual, the start of the recovery section and the list of every other section, under 600
+  words, cut from the same file so it cannot drift; `mode:"full"` is the ~4000-word manual as
+  before. The "`~ task → text` edited" lines the task also named were already gone: attribute
+  maintenance stopped being journaled in 0.9.11.
 - **`hub_whatsnew` was empty for the one return that matters in a fleet — after a context
   compaction — and the server told returning agents to call it.** Its checkpoint is "since my own
   last call"; after a compaction that is the same session, so everything it wrote itself lies before

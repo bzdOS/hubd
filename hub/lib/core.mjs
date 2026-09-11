@@ -1200,8 +1200,30 @@ export function digestLag(cardTouchedAt, lastJournalAt, staleDays) {
   return behind >= staleDays ? { daysBehind: behind, lastJournal: lastJournalAt } : null;
 }
 
-export function journalSince(hours) {
-  const cutoff = Date.now() - hours * 3600000;
+/* Identical entries — same kind, project, author and text — folded into the newest one with
+ * `times` and `firstTs`. Four of six lines in one hub_whatsnew were bookkeeping, two of them the
+ * same "resource set" twice (task macbook-pro-83); an agent's context is the budget this spends.
+ * Lossless for a reader: nothing distinguishes the copies but their timestamps, and both are
+ * kept. Entries stay newest-first, exactly as journalSince returns them. */
+export function collapseRepeats(entries) {
+  const seen = new Map();
+  const out = [];
+  for (const e of entries) {
+    const k = [e.kind, e.project, e.agent, e.text].join(' ');
+    const cur = seen.get(k);
+    if (cur) { cur.times = (cur.times || 1) + 1; cur.firstTs = e.ts; continue; }
+    const copy = { ...e };
+    seen.set(k, copy);
+    out.push(copy);
+  }
+  return out;
+}
+
+export function journalSince(hours) { return journalSinceMs(Date.now() - hours * 3600000); }
+/* Entries at or after an absolute instant. Callers that hold an instant use this rather than
+ * converting to hours and back: the round trip through floating point can land a hair past the
+ * instant and drop the entry written in that very minute. */
+export function journalSinceMs(cutoff) {
   const all = [];
   for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
     if (parseTs(e.ts).getTime() >= cutoff) all.push(e);
@@ -2235,6 +2257,13 @@ export function runResourceSet(a) {
     `- slug: ${slug}\n- set: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (preserved ? preserved + '\n' : '');
+  // A set that changes nothing is not an event. The same resource was "set" twice in ten hours
+  // with byte-identical content, and both lines sat in the next agent's hub_whatsnew where two
+  // real entries were (task macbook-pro-83). Compared with the set-stamp masked, because that is
+  // the only line this write would have changed; the file is left alone too, so the mesh does not
+  // carry a commit whose whole content is a new timestamp.
+  const stripStamp = (s) => String(s || '').replace(/^- set: .*$/m, '- set: <stamp>');
+  if (prev && stripStamp(card) === stripStamp(prev)) return { ok: true, resource: slug, card: resourcePath(name), unchanged: true };
   fs.mkdirSync(RESOURCES, { recursive: true });
   atomicWrite(resourcePath(name), card);
   journalAppend({ ts: now(), project: slug, agent: author, kind: 'resource', text: 'resource set: ' + slug });
@@ -3212,7 +3241,7 @@ export function runBrief(a = {}) {
       return x.created < y.created ? -1 : 1;
     });
 
-  const journalRecent = journalSince(hours);
+  const journalRecent = collapseRepeats(journalSince(hours));
 
   const staleCards = [];
   // Two different silences, deliberately reported apart: staleCards = nobody touched this
@@ -3251,12 +3280,59 @@ export function runBrief(a = {}) {
 // Reuses the shipped protocol.md — the same source ensureProtocol() materializes
 // into HUBD.md — so there is exactly one copy of "how hubd works" to keep in
 // sync, never a duplicate onboarding text that quietly drifts from it.
-export function runOnboarding() {
+/* mode "short" (default): the channel table, the author rule, the session ritual and the list of
+ * everything else — under 600 words. The full manual is ~4000 words and the protocol says to call
+ * this FIRST, so an agent re-orienting after a compaction "just in case" paid the most expensive
+ * call of its day for text it had already read (task macbook-pro-83). Cut from the same file, not
+ * a second copy that would drift: the table is the first table under "## Channels", the author rule
+ * is its own "###", the ritual its own "##". mode "full" is the whole document, as before. */
+function protocolSlice(body, heading, { firstBlockOnly = false } = {}) {
+  const lines = body.split('\n');
+  const start = lines.findIndex(l => l.trim() === heading.trim());
+  if (start === -1) return '';
+  const level = heading.match(/^#+/)[0].length;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^(#+) /);
+    if (m && m[1].length <= level) { end = i; break; }
+  }
+  let sec = lines.slice(start, end);
+  if (firstBlockOnly) {
+    // heading, blank, then the first table plus the paragraph right after it
+    const out = [sec[0], ''];
+    let i = 1; while (i < sec.length && !sec[i].trim()) i++;
+    while (i < sec.length && sec[i].startsWith('|')) out.push(sec[i++]);
+    out.push('');
+    while (i < sec.length && !sec[i].trim()) i++;
+    while (i < sec.length && sec[i].trim()) out.push(sec[i++]);
+    sec = out;
+  }
+  return sec.join('\n').replace(/\s+$/, '');
+}
+export function runOnboarding(a = {}) {
   ensureProtocol();
   let body;
   try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
   catch { return { ok: false, error: 'protocol.md not found in this hubd install' }; }
-  return { ok: true, version: VERSION, protocol: body };
+  const mode = String(a.mode || 'short');
+  if (mode === 'full') return { ok: true, version: VERSION, mode, protocol: body };
+  if (mode !== 'short') throw new Error(`mode: "${mode}" is not "short" or "full"`);
+  const sections = body.split('\n').filter(l => /^## /.test(l)).map(l => l.replace(/^## /, ''));
+  const channels = protocolSlice(body, body.split('\n').find(l => /^## Channels/.test(l)) || '## Channels', { firstBlockOnly: true });
+  const author = protocolSlice(body, '### Say who you are — every write needs an author');
+  const ritual = protocolSlice(body, '## Session ritual');
+  const recovering = protocolSlice(body, '## Recovering after compaction').split('\n').slice(0, 6).join('\n');
+  const short = [
+    '# How to work with this hub — the short version',
+    '',
+    channels, '', author, '', ritual, '', recovering,
+    '',
+    '## The rest of the manual (hub_onboarding({mode:"full"}), or HUBD.md in the hub)',
+    '',
+    ...sections.map(s => '- ' + s),
+  ].join('\n');
+  return { ok: true, version: VERSION, mode, protocol: short, sections,
+    hint: 'This is the short orientation (channels, author rule, ritual, recovery). Everything else is one call away: hub_onboarding({mode:"full"}) — or read HUBD.md in the hub, it is the same text.' };
 }
 
 const checkinsFile = () => path.join(HUB, '.checkins.json');
@@ -3319,7 +3395,8 @@ export function runWhatsNew(a = {}) {
   // `project` narrows the delta to the projects named; an agent sitting in one project got six
   // entries from three others and none from its own (task macbook-pro-77).
   const only = projectFilter(a.project);
-  const entries = journalSince(hours).filter(e => !only || only.has(slugify(String(e.project || ''))));
+  const raw = sinceMode === 'checkpoint' ? journalSince(hours) : journalSinceMs(parseTs(sinceAt).getTime());
+  const entries = collapseRepeats(raw.filter(e => !only || only.has(slugify(String(e.project || '')))));
   checkins[key] = new Date(nowMs).toISOString();
   writeCheckins(checkins);
   // A fresh checkpoint and an empty delta is the compaction signature, not "nothing happened".

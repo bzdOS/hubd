@@ -55,6 +55,13 @@ ok(byId[2] && Array.isArray(byId[2].result.tools), "tools/list returns an array"
 }
 ok(byId[3] && byId[3].result && byId[3].result.isError === false, "hub_status ok");
 ok(byId[4] && byId[4].result && byId[4].result.isError === false, "hub_task_add with >64KB payload ok");
+{
+  // The 70 KB text went in; the reply must not carry it back (task macbook-pro-83).
+  const txt = byId[4] && byId[4].result ? byId[4].result.content[0].text : "";
+  let r = null; try { r = JSON.parse(txt); } catch {}
+  ok(r && r.ok === true && r.id != null && typeof r.textPreview === "string" && r.textPreview.length <= 81 && txt.length < 400,
+    "hub_task_add reply is compact (" + txt.length + " bytes, textPreview, no full echo)");
+}
 ok(byId[5] && byId[5].result && byId[5].result.isError === false, "hub_brief ok");
 ok(byId[5] && byId[5].result.content[0].text.includes("\"buttons\""), "hub_brief includes a buttons rollup");
 ok(byId[8] && byId[8].result && byId[8].result.isError === false, "hub_card_set ok");

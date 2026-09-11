@@ -92,6 +92,7 @@ const TOOLS = [
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on (bare number or a node-scoped id like "planck-3")' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches (host/vm/service/...) — a structured link task → resource, not prose' },
+      verbose: { type: 'boolean', description: 'return the whole task object; by default the reply is {ok, id, project, by, importance, cat, textPreview} — you just wrote the text, it is not echoed back' },
     }, required: ['project', 'text', 'by'] } },
 
   { name: 'hub_task_get',
@@ -257,8 +258,10 @@ const TOOLS = [
     } } },
 
   { name: 'hub_onboarding',
-    description: 'One-time orientation for an agent that has never worked with this hub before: what hubd is, which channel to use for what (claim vs task vs report vs queue — the #1 mistake), how to write a report. Call this FIRST, before anything else, the first time you connect.',
-    inputSchema: { type: 'object', properties: {} } },
+    description: 'Orientation for an agent that has never worked with this hub before: which channel to use for what (claim vs task vs report vs queue — the #1 mistake), the author rule, the session ritual, how to recover after a compaction. Call this FIRST the first time you connect. Default mode "short" is under 600 words and lists the sections of the full manual; mode "full" is the whole manual (~4000 words) — the same text as HUBD.md in the hub.',
+    inputSchema: { type: 'object', properties: {
+      mode: { type: 'string', enum: ['short', 'full'], description: 'default short' },
+    } } },
 
   { name: 'hub_whatsnew',
     description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing.',
@@ -344,7 +347,18 @@ const DISPATCH = {
   hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: (a) => runStatus(a),
   hub_section_add: runSectionAdd,
   hub_get: runGet, hub_search: runSearch, hub_context: runContext,
-  hub_task_add: runTaskAdd, hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
+  // The caller wrote the text a moment ago; echoing 2-3 KB of it back is context spent on nothing
+  // (task macbook-pro-83). Id and the shape of what was filed by default, the whole task on
+  // verbose:true — the engine's return is unchanged for the CLI and the tests.
+  hub_task_add: (a) => {
+    const r = runTaskAdd(a);
+    if (a.verbose) return r;
+    const t = r.task || {};
+    return { ok: true, id: t.id, project: t.project, by: t.by, importance: t.importance, cat: t.cat ?? null,
+      ...(t.assignee ? { assignee: t.assignee } : {}), ...(t.deadline ? { deadline: t.deadline } : {}),
+      textPreview: String(t.text || '').slice(0, 80) + (String(t.text || '').length > 80 ? '…' : '') };
+  },
+  hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
   // queues: HUB captured synchronously here, same reasoning as hub_queue_send/wait below —
   // a plain string value, not a live reference, so a concurrent HTTP request repointing
   // HUB can't retarget an in-flight call.
@@ -379,7 +393,7 @@ const DISPATCH = {
   // session: over HTTP the process-derived session id is the SERVER's own, one value
   // for every remote caller — keying whatsnew checkpoints on it would make the whole
   // team share one "what did I miss". Null there; the agent label becomes the key.
-  hub_onboarding: () => runOnboarding(),
+  hub_onboarding: (a) => runOnboarding(a),
   // queues: same hand-off as hub_brief — the review block rides on this call and its stale-button
   // check needs rows core.mjs cannot read for itself.
   hub_whatsnew: (a) => runWhatsNew({ ...a, queues: queueSummaryForBrief({ root: HUB }),
