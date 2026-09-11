@@ -952,9 +952,10 @@ if (cmd === 'report') {
     done(0);
   }
   let r;
-  try { r = runReport({ project: proj, agent, text, kind, private: args.includes('--private') }); }
+  try { r = runReport({ project: proj, agent, text, kind, private: args.includes('--private'), force: args.includes('--force') }); }
   catch (e) { die(e.message); }   // a strict refusal is a message to read, not a stack trace
   const parts = [];
+  if (r.nextReplaced) console.error(`  next step replaced — was${r.nextReplaced.by ? ' (' + r.nextReplaced.by + (r.nextReplaced.at ? ', ' + r.nextReplaced.at : '') + ')' : ''}: ${r.nextReplaced.text}`);
   if (r.decisions) parts.push(r.decisions + ' decision' + (r.decisions > 1 ? 's' : ''));
   if (r.facts) parts.push(r.facts + ' fact' + (r.facts > 1 ? 's' : ''));
   if (r.hypos) parts.push(r.hypos + ' hypothesis');
@@ -986,8 +987,11 @@ if (cmd === 'next') {
   const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!what) die('Usage: hub next "<the one next action>" -p <proj>');
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
-  const r = runReport({ project: proj, by: authorOrDie('--by'), text: `NEXT: ${what}` });
+  let r;
+  try { r = runReport({ project: proj, by: authorOrDie('--by'), text: `NEXT: ${what}`, force: args.includes('--force') }); }
+  catch (e) { die(e.message); }
   console.log(`Next step set on ${r.project}`);
+  if (r.nextReplaced) console.error(`  replaced — was${r.nextReplaced.by ? ' (' + r.nextReplaced.by + (r.nextReplaced.at ? ', ' + r.nextReplaced.at : '') + ')' : ''}: ${r.nextReplaced.text}`);
   done(0);
 }
 
