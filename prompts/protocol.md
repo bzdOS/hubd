@@ -23,7 +23,7 @@ A claim's `area` is a path glob relative to the project root — `src/**/*.ts`,
 <path>` / `hub_claim_check` can tell the next agent, before its edit, whose zone the file is
 in, and `hub_context` can report `claimsTouched` when a freshly changed file sits in one.
 Prose areas are accepted and flagged `matchable:false`. Editor hooks that run the check
-automatically: `prompts/claim-check-hooks.md` in the hubd repository. The lock stays soft:
+automatically: `prompts/client-hooks.md` in the hubd repository. The lock stays soft:
 the check informs, it never forbids.
 
 ### When the hub tells you your environment needs work
@@ -239,9 +239,14 @@ exists now. Fleet sessions compact often and on purpose, so this is the normal w
 returns, not an edge case. One session re-discovered its own finding (already committed under a
 subject that named it) and re-wrote a script that already sat untracked in `scripts/`.
 
-1. `hub_context({cwd})` first. It answers from state: the digest with its age and `digestStale`,
-   `presenceHere` (who else is in this checkout right now), `journalTail`, open tasks, claims.
-   Then `hub log <slug>` if you need more of the journal.
+1. `hub whereami` in a shell, `hub_context({cwd})` over MCP — the same function. It answers
+   from state: the digest with its age and `digestStale`, `presenceHere` (who else is in this
+   checkout right now), `journalTail`, open tasks, claims, `claimsTouched`; the shell form adds
+   the git inventory — commit subjects (findings live there), diff stat, untracked files with
+   their first line (does it already exist?), files changed in the last half hour — and runs
+   the project's own inventory script if the `.hubd` marker names one on its second line.
+   Editors can run it for you at session start and after a compaction:
+   `prompts/client-hooks.md` in the hubd repository.
 2. `hub_whatsnew({since:"session"})`, not the default. The default checkpoint is "since my last
    call" — the same session, so everything it wrote itself lies before it and the delta is empty;
    the reply says so in `hint` when that is what it sees.
