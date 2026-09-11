@@ -67,9 +67,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
 
   { name: 'hub_context',
-    description: 'Auto-resolve which hub project YOUR working directory belongs to — call this at session start instead of hub_status/hub_get when you already know your cwd. Checks, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (returned with guessed:true — never silently trust a name coincidence). Returns {project, via, root, guessed, digest, openTasks, activeClaims}; project is null with a hint if nothing matched.',
+    description: 'Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, digestAgeDays, digestStale?, openTasks, activeClaims, presenceHere, journalTail}. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.',
     inputSchema: { type: 'object', properties: {
       cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
+      staleDays: { type: 'integer', description: 'digest counts as stale after N days of journal it does not reflect (same rule as hub_status), default 7' },
+      journalTail: { type: 'integer', description: 'how many recent journal entries of the project to include, default 5' },
     }, required: ['cwd'] } },
 
   { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. START HERE whenever you know a keyword, a task id or a name but not which project owns it — searching once beats guessing project × status against hub_task_list, which is how sessions have actually wasted calls. Also the way to find where something was discussed or decided.',
@@ -217,6 +219,8 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'filter to agents heartbeating under this role' },
       aliveOnly: { type: 'boolean', description: 'drop stale (TTL-expired) records, default false' },
+      cwd: { type: 'string', description: 'only agents whose heartbeat cwd is this directory or under it — "who is in this checkout"' },
+      project: { type: 'string', description: 'only agents whose heartbeat cwd resolves to this project (marker, sync path or folder name)' },
       memberDays: { type: 'integer', description: 'a node counts as a mesh member if it wrote within N days, default 30 — retired node names drop out of `coverage` on their own' },
     } } },
 

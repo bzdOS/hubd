@@ -102,8 +102,15 @@ see `hub sections`. `hub card <slug> -m "<digest>"` sets the digest; `hub get <s
 reads a project; `hub status` / `hub brief` orient you. Sitting in a project folder
 and don't know its slug? `hub_context({cwd:"<your absolute cwd>"})` resolves it for
 you (`.hubd` marker file → a card's recorded sync path → a folder-name guess, flagged
-`guessed:true` when it's not certain) and returns the digest in one call — use it
-instead of a manual `hub_get` when you already have a cwd.
+`guessed:true` when it's not certain, with the one-line `.hubd` fix in `hint`) and returns
+the digest in one call — use it instead of a manual `hub_get` when you already have a cwd.
+It is also the call to make after a context compaction, because it answers from STATE, not
+from a summary: `digestSetAt/By/AgeDays` and `digestStale` (the same verdict `hub_status`
+gives — a digest can trail its own journal by months and still read as current),
+`presenceHere` (live heartbeats whose cwd is under this root — who else is editing this
+checkout right now; `hub_presence({cwd})` / `({project})` ask the same question fleet-wide),
+and `journalTail` (the project's last few entries). Read those before re-discovering your own
+findings in git.
 
 To write ONE line into ONE section — `Gates`, `Metrics`, `Market`, or any section a human
 added — use `hub_section_add({project, section, text, by, provenance?})` (`hub section add
