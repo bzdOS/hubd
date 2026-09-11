@@ -6,6 +6,16 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub_context` is now a "where am I", not just a slug lookup.** The protocol names it the first
+  call of a session, and it was the one read that never warned: it returned a digest four months
+  behind the project's own journal with no date and no flag, said nothing about the other
+  session editing the same checkout, and told a guessed project nothing about how to make it
+  certain (task macbook-pro-78). It now returns `digestSetAt`, `digestSetBy`, `digestAgeDays` and
+  the same `digestStale` verdict `hub_status` gives (`staleDays`, default 7); `presenceHere` —
+  live heartbeats whose cwd is this root or under it; `journalTail` — the project's last few
+  entries (`journalTail`, default 5); and, when the project was guessed from the folder name, a
+  `hint` with the one-line `.hubd` fix. `hub_presence` gained `cwd` and `project` filters that use
+  the same predicates, so the two tools cannot name different people.
 - **`hub_recall` scored stop-words and matched inside words; neither it nor `hub_whatsnew` could be
   narrowed to a project.** "IMM not established attention overlap" returned eight hits and none
   from the project the question was about: the first scored on "not" and "overlap", two more on

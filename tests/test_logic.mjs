@@ -384,6 +384,46 @@ ok(Array.isArray(ctxFull.activeClaims) && ctxFull.activeClaims.some(c => c.area 
 let ctxThrew = false;
 try { core.runContext({}); } catch { ctxThrew = true; }
 ok(ctxThrew, "runContext: throws without cwd (never silently falls back to the server's own cwd)");
+
+// ── runContext as "where am I" (task macbook-pro-78): digest age + stale, who is here, journal tail ──
+ok(/^\d{4}-\d{2}-\d{2}/.test(ctxFull.digestSetAt || '') && ctxFull.digestSetBy === 'test' && ctxFull.digestAgeDays === 0,
+  `runContext: digest carries when and by whom it was set (${ctxFull.digestSetAt} by ${ctxFull.digestSetBy}, age ${ctxFull.digestAgeDays})`);
+ok(ctxFull.digestStale === undefined, 'runContext: a digest written today is not stale');
+ok(Array.isArray(ctxFull.journalTail) && ctxFull.journalTail.length >= 1 && ctxFull.journalTail.every(e => e.project === 'proj5'),
+  `runContext: journalTail holds the project's own recent entries (${ctxFull.journalTail.length})`);
+{
+  // Age the card's set-stamp 40 days back while the journal keeps writing → the same verdict hub_status gives.
+  const cp = path.join(ctxRoot5, 'projects', 'proj5.md');
+  const oldTs = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 16).replace('T', ' ');
+  fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/- set: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, `- set: ${oldTs}`));
+  core.runReport({ project: 'proj5', by: 'test', text: 'NOTE: work moved on' });
+  const aged = core.runContext({ cwd: ctxFullDir });
+  ok(aged.digestAgeDays >= 39 && aged.digestStale && aged.digestStale.daysBehind >= 39,
+    `runContext: a digest 40 days behind its journal is flagged digestStale (age ${aged.digestAgeDays}, behind ${aged.digestStale && aged.digestStale.daysBehind})`);
+  ok(core.runContext({ cwd: ctxFullDir, staleDays: 60 }).digestStale === undefined, 'runContext: staleDays raises the bar the same way hub_status does');
+}
+{
+  // Two sessions heartbeat under the same root; a third works elsewhere.
+  const other = path.join(ctxRoot5, 'elsewhere'); fs.mkdirSync(other, { recursive: true });
+  core.runHeartbeat({ agent: 'here-a@s1', role: 'editor', cwd: ctxFullDir, status: 'editing §01' });
+  core.runHeartbeat({ agent: 'here-b@s2', role: 'auditor', cwd: path.join(ctxFullDir, 'docs'), status: 'reading' });
+  core.runHeartbeat({ agent: 'away-c', role: 'editor', cwd: other });
+  const ph = core.runContext({ cwd: ctxFullDir }).presenceHere;
+  const names = ph.map(p => p.agent).sort();
+  ok(names.join(',') === 'here-a@s1,here-b@s2' && ph.every(p => p.cwd && p.last_seen && p.status !== undefined),
+    `runContext: presenceHere lists the live sessions under this root and nobody else (got ${names.join(',')})`);
+  const byCwd = core.runPresence({ cwd: ctxFullDir }).agents.map(p => p.agent).sort();
+  const byProj = core.runPresence({ project: 'proj5' }).agents.map(p => p.agent).sort();
+  ok(byCwd.join(',') === 'here-a@s1,here-b@s2' && byProj.join(',') === 'here-a@s1,here-b@s2',
+    `runPresence: cwd and project filters name the same two sessions (${byCwd.join(',')} / ${byProj.join(',')})`);
+  ok(!core.runPresence({ cwd: path.join(ctxFullDir, 'doc') }).agents.some(p => p.agent === 'here-b@s2'), 'runPresence: "doc" does not claim an agent sitting in "docs" (segment boundary)');
+}
+{
+  const gdir = path.join(ctxRoot5, 'guessme'); fs.mkdirSync(gdir, { recursive: true });
+  core.runCardSet({ project: 'guessme', digest: 'g', by: 'test' });
+  const g = core.runContext({ cwd: gdir });
+  ok(g.guessed === true && /\.hubd/.test(g.hint || '') && /"guessme"/.test(g.hint), `runContext: a guessed project comes with the one-line .hubd fix (${g.hint})`);
+}
 fs.rmSync(ctxRoot5, { recursive: true, force: true });
 
 // ── presence: hub_heartbeat/hub_presence — TTL freshness like activeClaims (task #191) ──

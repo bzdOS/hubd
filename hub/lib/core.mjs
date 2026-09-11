@@ -2836,19 +2836,52 @@ export function resolveContext(cwd) {
 // hubd process's own process.cwd() — the server may be a long-lived daemon
 // serving many agents in many directories, so only the CALLER can say where
 // it is; defaulting here would silently answer for the wrong directory.
+/* Who is working HERE — live heartbeats whose cwd sits under `root`, or resolves to `project`.
+ * Shared by runContext (presenceHere) and runPresence (cwd/project filters) so the two answers
+ * cannot disagree. A record without a cwd cannot be placed and is left out of a cwd question. */
+const underRoot = (cwd, root) => {
+  if (!cwd || !root) return false;
+  const c = path.resolve(String(cwd)), r = path.resolve(String(root));
+  return c === r || c.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+};
+export function presenceHere({ root = null, project = null, aliveOnly = true } = {}) {
+  const slug = project ? slugify(project) : null;
+  let list = runPresence({ aliveOnly }).agents;
+  if (root) list = list.filter(r => underRoot(r.cwd, root));
+  if (slug) list = list.filter(r => r.cwd && resolveContext(r.cwd).project === slug);
+  return list.map(({ agent, role, status, task_id, cwd, last_seen, observedOn, alive }) =>
+    ({ agent, role, status, task_id, cwd, last_seen, observedOn, alive }));
+}
+
+/* hub_context is the call the protocol says to make FIRST, and it was the one read that never
+ * warned: it handed back a digest four months behind the project's own journal with no date and
+ * no flag, while hub_status and hub_brief flagged the same card (task macbook-pro-78). The same
+ * call said nothing about the other session editing the same checkout, which its caller then
+ * found by file mtimes. So: the digest's age and the same stale verdict the other tools use,
+ * a hint for the one-line fix when the project was only guessed, who else is heartbeating under
+ * this root, and the last few journal lines — enough to resume from state after a compaction
+ * without grepping the repository. */
 export function runContext(a) {
   const cwd = a && a.cwd;
   if (!cwd) throw new Error("cwd required — pass the CALLING agent's own absolute working directory (the hubd process's cwd is not reliable)");
   const ctx = resolveContext(cwd);
-  if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [] };
+  if (ctx.guessed) ctx.hint = `guessed from the folder name — write ${path.join(ctx.root, '.hubd')} with one line "${ctx.project}" to make it certain`;
+  if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
   const card = readCard(ctx.project);
   const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
+  const touched = card ? (card.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: by ([^\n]+))?/) || []) : [];
+  const digestSetAt = touched[1] || null, digestSetBy = (touched[2] || '').trim() || null;
+  const digestAgeDays = digestSetAt ? Math.max(0, Math.floor((Date.now() - parseTs(digestSetAt).getTime()) / 86400000)) : null;
+  const digestStale = digestLag(digestSetAt, lastJournalByProject()[ctx.project], a.staleDays ?? 7);
   const claimsDb = loadClaims();
   return {
     ...ctx,
-    digest,
+    digest, digestSetAt, digestSetBy, digestAgeDays,
+    ...(digestStale ? { digestStale } : {}),
     openTasks: runTaskList({ project: ctx.project, status: 'open' }).tasks,
     activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
+    presenceHere: presenceHere({ root: ctx.root, project: null }),
+    journalTail: journalTail(ctx.project, a.journalTail ?? 5),
   };
 }
 
@@ -3633,6 +3666,10 @@ export function runPresence(a = {}) {
   let list = [...best.values()].map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs) }));
   if (a.role) list = list.filter(r => r.role === a.role);
   if (a.aliveOnly) list = list.filter(r => r.alive);
+  // "Who is here" — by working directory or by the project a cwd resolves to. Through the same
+  // predicates runContext's presenceHere uses, so the two never name different people.
+  if (a.cwd) list = list.filter(r => underRoot(r.cwd, a.cwd));
+  if (a.project) { const slug = slugify(a.project); list = list.filter(r => r.cwd && resolveContext(r.cwd).project === slug); }
   list.sort((x, y) => (x.last_seen < y.last_seen ? 1 : -1));   // freshest first
 
   /* Membership is not "ever wrote a journal" — that set never shrinks, and this hub's journals
