@@ -207,7 +207,10 @@ an instance says which is which:
 - **`hub audit [--days N] [--apply --by <you>]`** — declarations against behaviour: a gate date
   that passed with no decision since, a project whose share of the journal contradicts the `MODE:`
   its own card declares, owner buttons nobody pressed, a card that stopped following its journal,
-  tasks with no project. `--apply` turns each finding into an incident task; findings are keyed,
+  tasks with no project, an agent whose day's structured entries all fell in the last two minutes
+  of a half-hour-plus trace (`report-at-end-only` — the findings written at "the end" a compacting
+  session never reaches), a local checkout with commits and a project journal with nothing
+  (`work-without-journal`). `--apply` turns each finding into an incident task; findings are keyed,
   so a weekly run never files the same one twice. Close-rate numbers are printed and never filed —
   a rate is a thermometer, not a violation.
 - Incidents quote **`laws`** — your own rule with the date you wrote it — because an engine's
