@@ -227,6 +227,12 @@ session has its own cursor and sees every message. `hub queue wait '*'` taps EVE
 at once (own offset — does not consume any role's messages), for a supervisor watching
 the fleet; several supervisors may tap at the same time without competing.
 
+Flags may come before or after the text. A body that begins with `-` (a list, a diff) goes
+through `--text "<text>"`; a long or shell-hostile body goes through stdin — `hub queue send
+<role> - --from <you> < file`. A flag the command does not know is refused, and every refusal
+exits non-zero with nothing written: a delivery that "succeeded" with the wrong body is the
+failure this guards against.
+
 Say what a message is ABOUT: `hub queue send <role> "<text>" --from <you> --task <id>` stamps the
 task into the delivered block, and the consumer gets the ids back with the text (`tasks`). Report
 the outcome onto those tasks — a HOLD that lives only in a consumed message leaves the task
