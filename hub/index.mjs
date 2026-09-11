@@ -266,6 +266,7 @@ const TOOLS = [
       agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
       project: { type: 'string', description: 'only entries of this project — a slug, or several comma-separated; the checkpoint still moves' },
+      since: { type: 'string', description: '"checkpoint" (default: since your own last call — right after a night away, empty right after a context compaction), "session" (since this session began: everything it wrote itself included — use this after a compaction), or an ISO time' },
       reviewLimit: { type: 'integer', description: 'how many finding KINDS to inline, default 3; 0 turns the review block off' },
     }, required: ['agent'] } },
 
@@ -523,7 +524,7 @@ async function handleMessage(msg, mode = 'stdio') {
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
     protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     serverInfo: { name: 'hubd', version: VERSION },
-    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning? Call hub_whatsnew instead of re-reading hub_status from scratch. Working a queue in a loop? Call hub_heartbeat after each hub_report so you show up in hub_presence instead of being invisible between waits. hub_brief gives a morning overview. Create work with hub_task_add.' } };
+    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning after time away? Call hub_whatsnew instead of re-reading hub_status from scratch. Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session. Working a queue in a loop? Call hub_heartbeat after each hub_report so you show up in hub_presence instead of being invisible between waits. hub_brief gives a morning overview. Create work with hub_task_add.' } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };
