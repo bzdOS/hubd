@@ -89,6 +89,29 @@ function getFlags(name) {
   return out;
 }
 
+/* Positional arguments from index `from` on, with every flag and its value skipped wherever
+ * they sit. `hub queue send` read its body as args[3] — so `hub queue send hv --from bzdos
+ * "text"` delivered a block whose body was the word "--from", `--text "..."` delivered
+ * "--text", and each reported success. Measured on three roles and two nodes (task
+ * macbook-pro-63); two orchestrators had already declared the queue channel unreliable and
+ * moved to duplicating everything into the journal, which is the architecture bending around
+ * a parser. Flags a command does not know are an error, not a guess: guessing whether an
+ * unknown flag takes a value is how a body gets swallowed as one. */
+function positionals(from, { values = [], booleans = [] } = {}) {
+  const vals = new Set(values), bools = new Set(booleans);
+  const out = [];
+  for (let i = from; i < args.length; i++) {
+    const a = args[i];
+    if (a.length > 1 && a.startsWith('-')) {
+      if (vals.has(a)) { i++; continue; }
+      if (bools.has(a)) continue;
+      throw new Error(`unknown flag ${a} — known here: ${[...values, ...booleans].join(' ') || '(none)'}. If it is text that starts with "-", pass it through --text or stdin.`);
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 // Skeleton printed by `hub report` with no input — make structure the default path.
 const REPORT_TEMPLATE = [
   '# Session report — one item per line, then pipe back in (heredoc) or pass with -m.',
@@ -973,8 +996,12 @@ if (cmd === 'task') {
   if (sub === 'add') {
     // A flag in the text slot is a misplaced argument, not a task: `hub task add -p x --by y`
     // once filed a task whose text was "-p", and that task is in the append-only log forever.
-    const text = args[2];
+    let pos;
+    try { pos = positionals(2, { values: ['-p', '-i', '-d', '--needs', '--resource', '--cat', '--tag', '--assignee', '--by'] }); }
+    catch (e) { die(e.message + '\nUsage: hub task add "<text>" -p <proj> [-i high|med] [-d <date>] [--needs <ids>] [--resource <slug>] [--cat <cat>] [--tag <t>] [--assignee <who>] --by <who>'); }
+    const text = pos[0];
     if (!text || text.startsWith('-')) die('Text required: hub task add "<text>" -p <proj>');
+    if (pos.length > 1) die(`unexpected extra argument ${JSON.stringify(pos[1].slice(0, 40))} — quote the whole text as one argument`);
     const proj = getFlag('-p');
     if (!proj || typeof proj !== 'string') die('Project required: -p <proj>');
     const imp = getFlag('-i');
@@ -1587,9 +1614,20 @@ else if (cmd === '_commit-hook') {
 else if (cmd === 'queue') {
   const sub = args[1];
   if (sub === 'send') {
-    const role = args[2];
-    const text = args[3];
-    if (!role || !text) die('Usage: hub queue send <role> "<text>" --from <who>');
+    const USAGE = 'Usage: hub queue send <role> "<text>" --from <who> [--task <id>]\n' +
+      '       hub queue send <role> --text "<text>" --from <who>     (text may start with "-")\n' +
+      '       hub queue send <role> - --from <who> < file             (text from stdin)';
+    let pos;
+    try { pos = positionals(2, { values: ['--from', '--agent', '--task', '--text'] }); } catch (e) { die(e.message + '\n' + USAGE); }
+    const role = pos[0];
+    const textFlag = getFlag('--text');
+    let text = typeof textFlag === 'string' ? textFlag : pos[1];
+    // A bare body that begins with "-" never gets here: positionals() has already refused it
+    // as an unknown flag, which is what it is far more often than a message. --text and
+    // stdin carry the real ones.
+    if (typeof textFlag !== 'string' && text === '-') { try { text = fs.readFileSync(0, 'utf8'); } catch { text = ''; } }
+    if (pos.length > 2) die(`unexpected extra argument ${JSON.stringify(pos[2].slice(0, 40))} — quote the whole text as one argument.\n${USAGE}`);
+    if (!role || role.startsWith('-') || !text || !text.trim()) die(USAGE);
     // The sender is an author like any other write's (was `--from || 'unknown'`, the
     // one durable channel that skipped the rule) — flag, or the HUBD_AGENT floor.
     // --task ties the message to what it is ABOUT, so the reply is not orphaned from the
@@ -1598,7 +1636,10 @@ else if (cmd === 'queue') {
     let unknownTask = false;
     if (typeof taskRef === 'string') { try { runTaskGet({ id: taskRef }); } catch { unknownTask = true; } }
     let qfile;
-    try { qfile = queueSend(role, text, { from: authorOrDie('--from'), task: typeof taskRef === 'string' ? taskRef : undefined }); }
+    // --agent is what every other write calls its author; senders reached for it and lost
+    // their body to it. Accept it as the same thing.
+    const fromFlag = typeof getFlag('--agent') === 'string' && typeof getFlag('--from') !== 'string' ? '--agent' : '--from';
+    try { qfile = queueSend(role, text, { from: authorOrDie(fromFlag), task: typeof taskRef === 'string' ? taskRef : undefined }); }
     catch (e) { die(e.message); }
     console.log(`→ ${path.basename(qfile)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
     if (unknownTask) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);

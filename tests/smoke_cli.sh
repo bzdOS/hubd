@@ -247,6 +247,58 @@ check "task add with flag as text: prints usage" $?
 [ ! -s "$HUBD_DIR/tasks.$(hostname -s | tr 'A-Z' 'a-z').events.jsonl" ] || ! grep -q '"text":"-p"' "$HUBD_DIR"/tasks.*.events.jsonl
 check "task add with flag as text: nothing written" $?
 
+# ── Case 12: queue send keeps the body whatever the argument order ──────────
+# Measured in production (task macbook-pro-63): bodies that were literally "--from",
+# "--text", "--agent" — the parser took args[3] blindly and reported success.
+
+QDIR="$TMP/team/queues"
+qblocks() { cat "$QDIR"/qs.*.queue.md 2>/dev/null | grep -c '^## '; }
+qbody_last() {   # body of the last block: everything after the last header line
+  cat "$QDIR"/qs.*.queue.md | awk '/^## [0-9]{4}-/{buf=""; next} {buf=buf $0 "\n"} END{printf "%s", buf}'
+}
+
+(cd "$TMP/team" && $CLI queue send qs "$(printf 'line one\nline two')" --from smoke >/dev/null 2>&1)
+check "queue send: multiline positional body accepted" $?
+qbody_last | grep -q '^line one$' && qbody_last | grep -q '^line two$'
+check "queue send: both lines land in the queue" $?
+
+(cd "$TMP/team" && $CLI queue send qs --from smoke "flag before text" >/dev/null 2>&1)
+check "queue send: --from before the text accepted" $?
+qbody_last | grep -q '^flag before text$'
+check "queue send: body is the text, not the word --from" $?
+
+(cd "$TMP/team" && $CLI queue send qs --from smoke --text "- starts with a dash" >/dev/null 2>&1)
+check "queue send: --text carries a body that starts with -" $?
+qbody_last | grep -q '^- starts with a dash$'
+check "queue send: dash body intact via --text" $?
+
+(cd "$TMP/team" && $CLI queue send qs --agent smoke "agent alias" >/dev/null 2>&1)
+check "queue send: --agent accepted as the sender" $?
+qbody_last | grep -q '^agent alias$'
+check "queue send: body intact with --agent" $?
+
+N_BEFORE=$(qblocks)
+OUT12=$(cd "$TMP/team" && $CLI queue send qs "-oops" --from smoke 2>&1); RC12=$?
+[ "$RC12" -ne 0 ] && echo "$OUT12" | grep -q 'unknown flag -oops'
+check "queue send: bare body starting with - is refused with an explicit error" $?
+OUT12b=$(cd "$TMP/team" && $CLI queue send qs "text" --nope x --from smoke 2>&1); RC12b=$?
+[ "$RC12b" -ne 0 ] && echo "$OUT12b" | grep -q 'unknown flag --nope'
+check "queue send: unknown flag is an error, not a swallowed body" $?
+OUT12c=$(cd "$TMP/team" && $CLI queue send qs --from smoke 2>&1); RC12c=$?
+[ "$RC12c" -ne 0 ]
+check "queue send: missing body is non-zero" $?
+[ "$(qblocks)" -eq "$N_BEFORE" ]
+check "queue send: refused sends wrote nothing" $?
+
+BIG="$TMP/big.txt"
+{ i=0; while [ $i -lt 120 ]; do printf 'line %d: "quotes" $dollars `ticks` \\backslash %%percent — юникод\n' $i; i=$((i+1)); done; } > "$BIG"
+[ "$(wc -c < "$BIG")" -gt 8000 ] || fail "queue send: big fixture is under 8 KB"
+(cd "$TMP/team" && $CLI queue send qs - --from smoke < "$BIG" >/dev/null 2>&1)
+check "queue send: stdin body accepted" $?
+qbody_last | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$TMP/got.txt"
+cmp -s "$BIG" "$TMP/got.txt"
+check "queue send: 8 KB body with quotes/dollars arrives byte-for-byte" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"

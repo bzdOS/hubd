@@ -6,6 +6,20 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub queue send` delivered the name of a flag instead of the message.** The body was read
+  as `args[3]`, blindly. `hub queue send hv --from bzdos "text"` delivered a block whose body was
+  the word `--from`; `--text "..."` delivered `--text`; `--agent hv "..."` delivered `--agent` —
+  and each reported success, so the sender saw a delivery and the receiver got a placeholder.
+  Measured on three roles and two nodes (task macbook-pro-63); two orchestrators had already
+  declared the queue channel unreliable and started duplicating everything into the journal.
+  Now positional arguments are collected with every flag and its value skipped wherever they
+  sit; `--text "<text>"` is accepted for bodies that begin with `-`; `-` as the text reads the
+  body from stdin (`hub queue send hv - --from x < file`); `--agent` is accepted as the sender.
+  A flag the command does not know is an error, not a guess — guessing whether an unknown flag
+  takes a value is how a body gets swallowed as one. Every refusal exits non-zero and writes
+  nothing. `hub task add` takes its text through the same parser, so flag-first order works
+  there too. Covered by `tests/smoke_cli.sh` case 12 (multiline, flag-first, `--text`, `--agent`,
+  refusals, an 8 KB body with quotes and dollars arriving byte-for-byte).
 - **`hub task add` filed a flag as a task.** `hub task add -p x --by y` created a task whose text
   was `-p`, and that task now sits in an append-only event log forever. The text is positional;
   a value starting with `-` in that slot is a misplaced argument and the command dies with usage
