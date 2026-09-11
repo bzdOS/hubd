@@ -127,6 +127,8 @@ is a folder you own. They are two separate things — and that is the whole poin
   `npm i -g @bzdos/hubd@latest` (or run one-off with `npx -y @bzdos/hubd`). A new
   version ships the engine ([changelog](CHANGELOG.md)); it never touches your data.
 - **Data** — `HUBD_DIR` (default `~/.hubd`): plain markdown + JSONL, yours to keep.
+  `HUBD_TEAM_DIR` set on its own means the same one directory for everything; set
+  both only when the queues really live somewhere else. `hub doctor` says which won.
 - **Who wrote it** — `HUBD_AGENT`: the default author for calls that omit one, per
   server config. Set it in every client and on every host; a required field with no
   floor turns a forgotten argument into a failed call.
