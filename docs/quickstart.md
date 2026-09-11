@@ -13,7 +13,9 @@ Three things, two of them one npm package:
 - **`hubd`** — the daemon: an MCP server your agents talk to (stdio, zero deps).
 - **`hub`** — the CLI: the same data for you, no LLM required.
 - **data** — a folder you own (`HUBD_DIR`, default `~/.hubd`): markdown + JSONL.
-  Code and data never mix; upgrading the code never touches the data.
+  Code and data never mix; upgrading the code never touches the data. A fleet that
+  hands every role one shared folder sets `HUBD_TEAM_DIR` alone — queues, presence,
+  journal and tasks all live there; `hub doctor` prints which variable won.
 
 ## 1. Install
 

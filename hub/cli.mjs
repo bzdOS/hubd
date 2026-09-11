@@ -12,7 +12,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  HUB, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
+  HUB, HUB_VIA, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
   now, parseTs, slugify, sh, cardPath, readCard, digestOf, projectAliases,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
@@ -453,7 +453,7 @@ if (cmd === 'doctor') {
   if (jc.malformedRecent) warnings++;
 
   console.log('hub base:');
-  console.log('  path:     ' + HUB);
+  console.log('  path:     ' + HUB + '  (via ' + HUB_VIA + ')');
   console.log('  projects: ' + projFiles.length);
   console.log('  resources:' + resFiles.length);
   console.log('  tasks:    ' + openTasks + ' open' + (overdueTasks ? ', ' + overdueTasks + ' overdue' : ''));
@@ -606,7 +606,7 @@ if (cmd === 'doctor') {
   console.log('');
   console.log('team root:');
   console.log('  path: ' + teamRoot + '  (via ' + teamVia + ')');
-  if (teamRoot !== HUB) console.log('  note: team root ≠ hub base (' + HUB + ') — set HUBD_TEAM_DIR to pin it if this is not intended');
+  if (teamRoot !== HUB) console.log('  note: team root ≠ hub base (' + HUB + ') — queues and AGENTS.md here, everything else there. One directory wanted? Set HUBD_TEAM_DIR alone (it is then the base too), or HUBD_DIR alone.');
 
   // presence
   const hasAgents = fs.existsSync(path.join(teamRoot, 'AGENTS.md'));
