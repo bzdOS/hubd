@@ -10,7 +10,7 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 import {
   runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
-  runBrief, runClaim, runRelease, runKanban, setHubBase, HUB,
+  runBrief, runClaim, runClaimCheck, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
@@ -75,6 +75,8 @@ const TOOLS = [
       cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
       staleDays: { type: 'integer', description: 'digest counts as stale after N days of journal it does not reflect (same rule as hub_status), default 7' },
       journalTail: { type: 'integer', description: 'how many recent journal entries of the project to include, default 5' },
+      agent: { type: 'string', description: 'you — so `claimsTouched` (live claims whose glob covers a file changed here in the last recentMinutes) leaves your own claims out' },
+      recentMinutes: { type: 'integer', description: 'window for claimsTouched, default 30' },
     }, required: ['cwd'] } },
 
   { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. START HERE whenever you know a keyword, a task id or a name but not which project owns it — searching once beats guessing project × status against hub_task_list, which is how sessions have actually wasted calls. Also the way to find where something was discussed or decided.',
@@ -194,11 +196,19 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_claim',
-    description: 'Soft-lock a work area so other agents see it (e.g. area="public/index.html"). Not enforced — informational.',
+    description: 'Soft-lock a work area so other agents see it. Not enforced — informational. Write `area` as a path glob relative to the project root ("src/**/*.ts", "docs/{a,b}.md", "public/index.html", a bare directory) and hub_claim_check / hub_context can tell another agent that the file it opened is yours; prose is accepted but comes back `matchable:false`.',
     inputSchema: { type: 'object', properties: {
-      project: { type: 'string' }, area: { type: 'string' }, agent: { type: 'string' },
+      project: { type: 'string' }, area: { type: 'string', description: 'a path glob relative to the project root; several joined with " + "' }, agent: { type: 'string' },
       ttlMin: { type: 'integer', description: 'default 240' }, note: { type: 'string' },
     }, required: ['project', 'area', 'agent'] } },
+
+  { name: 'hub_claim_check',
+    description: 'Before editing a file: is it inside somebody\'s live claim? Returns {free, holders:[{agent, area, since, note}], mine, unmatchable} — `mine` are your own claims covering it (pass agent), `unmatchable` the prose claims on the project that no path can be tested against. Pure read. The lock is soft by constitution: this informs, it does not forbid — coordinate with the holder.',
+    inputSchema: { type: 'object', properties: {
+      path: { type: 'string', description: 'the file (absolute, or relative to the project root)' },
+      project: { type: 'string', description: 'slug; resolved from the path (marker / sync path / folder name) when omitted' },
+      agent: { type: 'string', description: 'you — so your own claims are reported as `mine`, not as holders' },
+    }, required: ['path'] } },
 
   { name: 'hub_release',
     description: 'Release a soft-lock. Pass id, or project+area+agent.',
@@ -387,7 +397,7 @@ const DISPATCH = {
   hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall,
   hub_usage: runUsage, hub_usage_add: runUsageAdd,
   hub_rules: (a) => runRules({ ...a, teamRoot: HUB }), hub_operator: () => runOperatorGet(),
-  hub_kanban: runKanban, hub_claim: runClaim, hub_release: runRelease,
+  hub_kanban: runKanban, hub_claim: runClaim, hub_claim_check: runClaimCheck, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
   // session: over HTTP the process-derived session id is the SERVER's own, one value
