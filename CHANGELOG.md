@@ -6,6 +6,17 @@ a version here never migrates or deletes data.
 
 ## Unreleased
 
+- **`hub_whatsnew` was empty for the one return that matters in a fleet — after a context
+  compaction — and the server told returning agents to call it.** Its checkpoint is "since my own
+  last call"; after a compaction that is the same session, so everything it wrote itself lies before
+  the checkpoint and the delta is zero on its own topic (task macbook-pro-84). Now `since` takes
+  `"checkpoint"` (default), `"session"` — since this session began, own writes included; the start
+  is the earlier of this key's first check-in and the author's first journal line today, because
+  heartbeats keep no history — or an ISO time. A fresh checkpoint with an empty delta carries a
+  `hint` naming `since:"session"` and `hub_context`. The server instructions and a new protocol
+  section, "Recovering after compaction", say to read state first (`hub_context`, the card, the
+  journal tail) and to write `FACT:` at the moment of the finding, not at a session end that a
+  compacting session never reaches.
 - **A digest could be patched only by rewriting it, so a stale line stayed stale; and nothing said
   so at the moment the facts were in hand.** A digest braids the owner's strategic frame with a few
   lines of fact; the facts went stale in a week and the agent who knew better left the whole text

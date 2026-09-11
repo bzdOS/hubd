@@ -1880,6 +1880,23 @@ ok(core.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'reca
   const wn = core.runWhatsNew({ agent: 'wn-77', hours: 48, project: 'psy' });
   ok(wn.entries.length === 1 && wn.entries[0].project === 'psy' && wn.project[0] === 'psy', `whatsnew: project narrows the delta (got ${wn.entries.length})`);
 }
+// ── whatsnew after a compaction: since:"session" returns the session's own writes; the default says why it is empty (task macbook-pro-84) ──
+{
+  const first = core.runWhatsNew({ agent: 'wn-84', hours: 1 });          // session begins; checkpoint set
+  ok(first.sinceMode === 'checkpoint' && first.firstCheckin === true, 'whatsnew: first call is a checkpoint call');
+  core.runReport({ project: 'psy', by: 'wn-84', text: 'DECIDE: drop IMM as the central result | attention overlap explains it' });
+  core.runWhatsNew({ agent: 'wn-84' });                                    // moves the checkpoint past the decision
+  const dflt = core.runWhatsNew({ agent: 'wn-84' });                       // "after compaction": same key, fresh checkpoint
+  ok(dflt.entries.length === 0 && /since:"session"/.test(dflt.hint || '') && /hub_context/.test(dflt.hint || ''),
+    `whatsnew: a fresh checkpoint with an empty delta carries the compaction hint (${(dflt.hint || '').slice(0, 60)})`);
+  const sess = core.runWhatsNew({ agent: 'wn-84', since: 'session' });
+  ok(sess.sinceMode === 'session' && sess.entries.some(e => e.agent === 'wn-84' && /drop IMM/.test(e.text)) && sess.hint === undefined,
+    `whatsnew: since:"session" returns the session's own decision (${sess.entries.length} entries since ${sess.since})`);
+  const iso = core.runWhatsNew({ agent: 'wn-84', since: new Date(Date.now() - 3600000).toISOString() });
+  ok(iso.sinceMode === 'time' && iso.entries.some(e => /drop IMM/.test(e.text)), 'whatsnew: an ISO since works as a plain window');
+  let wErr = ''; try { core.runWhatsNew({ agent: 'wn-84', since: 'yesterday-ish' }); } catch (e) { wErr = e.message; }
+  ok(/not "checkpoint", "session" or an ISO time/.test(wErr), 'whatsnew: a malformed since is refused, not silently treated as checkpoint');
+}
 
 // ── usage: measured and supplied never mix ──
 const US = mktmp();

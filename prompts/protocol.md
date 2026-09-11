@@ -221,6 +221,27 @@ an instance says which is which:
   `NOTE:` still lands). Off unless asked: nothing here starts refusing writes because it was
   upgraded.
 
+## Recovering after compaction
+
+A context compaction hands you a NARRATIVE of what happened; work resumes from STATE — what
+exists now. Fleet sessions compact often and on purpose, so this is the normal way a session
+returns, not an edge case. One session re-discovered its own finding (already committed under a
+subject that named it) and re-wrote a script that already sat untracked in `scripts/`.
+
+1. `hub_context({cwd})` first. It answers from state: the digest with its age and `digestStale`,
+   `presenceHere` (who else is in this checkout right now), `journalTail`, open tasks, claims.
+   Then `hub log <slug>` if you need more of the journal.
+2. `hub_whatsnew({since:"session"})`, not the default. The default checkpoint is "since my last
+   call" — the same session, so everything it wrote itself lies before it and the delta is empty;
+   the reply says so in `hint` when that is what it sees.
+3. Write `FACT:` at the moment of the finding, not at the end of the session. A session that
+   compacts never reaches "the end", and the finding leaves with the context.
+4. Before "finding" a defect — `hub_recall`, then `git log -S<the number>`; before writing a
+   script — the untracked files. Before editing a shared file — `hub claim`; if `presenceHere`
+   shows someone else, ask.
+5. Name yourself function@session (`paper-auditor@psyco-29`) so two sessions of one function do
+   not collapse into one presence record.
+
 ## Reading a big hub without drowning
 
 Every list-shaped tool answer is capped by default so it fits your context, and it TELLS

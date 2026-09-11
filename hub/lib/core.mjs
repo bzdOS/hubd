@@ -3289,13 +3289,44 @@ export function runWhatsNew(a = {}) {
   // new entries, not get padded back out to a 36s+ floor that re-delivers what
   // the previous call already returned. Only guard against negative (clock
   // skew) making the cutoff run ahead of now.
-  const hours = lastSeen ? Math.max((Date.now() - parseTs(lastSeen).getTime()) / 3600000, 0) : fallbackHours;
+  const nowMs = Date.now();
+  const hoursBack = (iso) => Math.max((nowMs - parseTs(iso).getTime()) / 3600000, 0);
+  /* since: "checkpoint" (default) | "session" | an ISO time.
+   * The checkpoint answers "what did I miss since my last call" — right after a night away and
+   * useless right after a context compaction, which is the way a fleet session actually returns:
+   * the same session, the same checkpoint, and everything it wrote itself lies BEFORE it. The
+   * server's own instruction sent returning agents here and they got zero on their own topic
+   * (task macbook-pro-84). "session" starts at the earliest of this key's first check-in and the
+   * author's first journal line today — heartbeats keep no history, so that is the honest
+   * approximation of "since this session began". */
+  const sinceArg = String(a.since || 'checkpoint').trim();
+  const firstKey = 'first:' + key;
+  if (!checkins[firstKey]) checkins[firstKey] = new Date(nowMs).toISOString();
+  let hours, sinceMode = 'checkpoint', sinceAt = lastSeen;
+  if (sinceArg === 'session') {
+    sinceMode = 'session';
+    const today = new Date(nowMs).toISOString().slice(0, 10);
+    const firstToday = journalSince(hoursBack(today + 'T00:00:00Z')).filter(e => e.agent === author).map(e => e.ts).sort()[0] || null;
+    const starts = [checkins[firstKey], firstToday].filter(Boolean).map(t => parseTs(t).getTime());
+    sinceAt = new Date(Math.min(...starts)).toISOString();
+    hours = hoursBack(sinceAt);
+  } else if (sinceArg !== 'checkpoint') {
+    if (!Number.isFinite(parseTs(sinceArg).getTime())) throw new Error(`since: "${sinceArg}" is not "checkpoint", "session" or an ISO time`);
+    sinceMode = 'time'; sinceAt = sinceArg; hours = hoursBack(sinceArg);
+  } else {
+    hours = lastSeen ? hoursBack(lastSeen) : fallbackHours;
+  }
   // `project` narrows the delta to the projects named; an agent sitting in one project got six
   // entries from three others and none from its own (task macbook-pro-77).
   const only = projectFilter(a.project);
   const entries = journalSince(hours).filter(e => !only || only.has(slugify(String(e.project || ''))));
-  checkins[key] = new Date().toISOString();
+  checkins[key] = new Date(nowMs).toISOString();
   writeCheckins(checkins);
+  // A fresh checkpoint and an empty delta is the compaction signature, not "nothing happened".
+  const compactionHint = sinceMode === 'checkpoint' && lastSeen && hours < 1 && entries.length === 0
+    ? `your checkpoint is ${Math.round(hours * 60)} min old and nothing is new since it — if you are resuming after a context compaction, ` +
+      `call again with since:"session" for everything this session wrote, or read the card: hub_context({cwd}) / hub log <slug>`
+    : undefined;
   // "What did I miss" is the right place for "and what does this environment need":
   // it is the tool a returning agent calls, and the protocol tells it to. Acknowledged
   // per session, so a protocol change is announced once and not on every check-in —
@@ -3303,11 +3334,12 @@ export function runWhatsNew(a = {}) {
   const env = envChecks({ session: a.session, transport: a.transport });
   ackEnvNotices(a.session);
   return {
-    agent: author, since: lastSeen, firstCheckin: !lastSeen,
+    agent: author, since: sinceAt, sinceMode, firstCheckin: !lastSeen,
     ...(only ? { project: [...only] } : {}),
     windowHours: Math.round(hours * 10) / 10,
     newEntries: entries.length,
     entries: entries.slice(0, 50),
+    ...(compactionHint ? { hint: compactionHint } : {}),
     ...(env.items.length ? { environment: env.items, environmentTotal: env.total } : {}),
     // Same passenger as in runBrief: an agent that returns to work sees what the hub's own rules
     // say is wrong, without anyone having to remember to ask (see runReview).
