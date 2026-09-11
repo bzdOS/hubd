@@ -107,3 +107,28 @@ chk "attribution: hub_queue_send with agent (no from) is sent from that agent" $
 rm -rf "$HUBD_DIR2"
 printf '\n%d pass, %d fail (attribution)\n' "$P2" "$F2"
 [ "$F2" -eq 0 ] || exit 1
+
+# ── One directory: a server declared with HUBD_TEAM_DIR alone writes EVERYTHING there ──
+# Presence, journal and queues. Until 0.9.17 the queues went to HUB (the server ignored the
+# variable) and the base itself stayed ~/.hubd (task macbook-pro-88).
+D3="$(mktemp -d)"
+REQS3=$(cat <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hub_heartbeat","arguments":{"agent":"fleet-role","role":"fleet-role","status":"waiting"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"fleet-orchestrator","text":"escalation","from":"fleet-role"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_report","arguments":{"project":"onedir","agent":"fleet-role","text":"FACT: one directory"}}}
+EOF
+)
+printf '%s\n' "$REQS3" | env -u HUBD_DIR -u HUBD_QUEUE_DIR HUBD_TEAM_DIR="$D3" node hub/index.mjs >/dev/null 2>&1
+P3=0; F3=0
+chk3() { if [ "$2" -eq 0 ]; then P3=$((P3+1)); echo "PASS $1"; else F3=$((F3+1)); echo "FAIL $1"; fi; }
+ls "$D3"/presence/*.json >/dev/null 2>&1
+chk3 "one dir: heartbeat lands in HUBD_TEAM_DIR/presence" $?
+ls "$D3"/queues/fleet-orchestrator.*.queue.md >/dev/null 2>&1
+chk3 "one dir: queue message lands in HUBD_TEAM_DIR/queues" $?
+grep -q 'one directory' "$D3"/projects/onedir.md 2>/dev/null
+chk3 "one dir: the report's FACT lands on the card under HUBD_TEAM_DIR" $?
+rm -rf "$D3"
+printf '\n%d pass, %d fail (one directory)\n' "$P3" "$F3"
+[ "$F3" -eq 0 ] || exit 1

@@ -13,8 +13,14 @@ export const VERSION = (() => {
 
 // resolveHub:start
 //   purpose: choose the hub base dir — the SINGLE source of truth for where data lives.
-//   output: absolute path. Order: HUBD_DIR | PROJECT_HUB_DIR (env) wins; else ~/.hubd; else the
-//     legacy ~/.project-hub if it exists and ~/.hubd does not (graceful rebrand — never orphan an old base).
+//   output: absolute path. Order: HUBD_DIR | PROJECT_HUB_DIR (env) wins; else HUBD_TEAM_DIR (or the
+//     legacy HUBD_QUEUE_DIR) — a harness that names ONE directory means one directory, for the queues
+//     AND for presence, journal and tasks; else ~/.hubd; else the legacy ~/.project-hub if it exists
+//     and ~/.hubd does not (graceful rebrand — never orphan an old base).
+//   why HUBD_TEAM_DIR counts: until 0.9.17 it moved only the queues. A fleet that set it to
+//     /srv/fleet/hubd for every role saw the roles' heartbeats, reports and 11 unread escalations land
+//     in each role's own ~/.hubd for a day, while the orchestrator read /srv/fleet/hubd and concluded no
+//     role was alive (task macbook-pro-88). HUB_VIA says which rule won, for `hub doctor`.
 //   INVARIANT: this is the ONLY place the hub location is decided. `os.homedir()` + '.hubd'/'.project-hub'
 //     may appear ONLY inside this function. Every other reference to hub paths goes through the exported
 //     HUB / PROJ / HISTORY / JOURNAL / TASKS / CLAIMS / TASK_EVENTS (set by setHubBase) — never rebuild a
@@ -22,12 +28,15 @@ export const VERSION = (() => {
 //   why: HUBD_DIR override, the multi-tenant per-request setHubBase(tenant) repoint, and the legacy base
 //     each break the instant a path is hardcoded — a stray ~/.hubd then SHADOWS the real hub. This is the
 //     exact bug that was in `hub doctor` / `hub serve` (a hardcoded ~/.hubd/AGENTS.md candidate); fixed.
+export let HUB_VIA = 'default';
 function resolveHub() {
   const env = process.env.HUBD_DIR || process.env.PROJECT_HUB_DIR;
-  if (env) return env;
+  if (env) { HUB_VIA = 'env HUBD_DIR'; return env; }
+  const team = process.env.HUBD_TEAM_DIR || process.env.HUBD_QUEUE_DIR;
+  if (team) { HUB_VIA = 'env HUBD_TEAM_DIR'; return team; }
   const fresh = path.join(os.homedir(), '.hubd');
   const legacy = path.join(os.homedir(), '.project-hub');
-  if (!fs.existsSync(fresh) && fs.existsSync(legacy)) return legacy;
+  if (!fs.existsSync(fresh) && fs.existsSync(legacy)) { HUB_VIA = 'legacy ~/.project-hub'; return legacy; }
   return fresh;
 }
 // resolveHub:end

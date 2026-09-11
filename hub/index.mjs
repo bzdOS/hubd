@@ -369,11 +369,11 @@ const DISPATCH = {
       textPreview: String(t.text || '').slice(0, 80) + (String(t.text || '').length > 80 ? '…' : '') };
   },
   hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
-  // queues: HUB captured synchronously here, same reasoning as hub_queue_send/wait below —
+  // queues: teamRoot() captured synchronously here, same reasoning as hub_queue_send/wait below —
   // a plain string value, not a live reference, so a concurrent HTTP request repointing
   // HUB can't retarget an in-flight call.
   hub_brief: (a) => {
-    const queues = queueSummaryForBrief({ root: HUB });
+    const queues = queueSummaryForBrief({ root: teamRoot() });
     // Queue DEPTH says how much is pending; it cannot say whether replication is
     // converging, and a quiet queue reads exactly like a stopped transport. Both
     // transports leave an observable artefact, so report both ages here — see
@@ -382,21 +382,21 @@ const DISPATCH = {
     // stale-button check needs the rows, which core.mjs cannot read for itself.
     const b = runBrief({ ...a, queues });
     return {
-      ...b, queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: HUB }),
+      ...b, queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: teamRoot() }),
       // Two different waits, deliberately apart: a package addressed to the owner and not yet
       // answered, vs a decision sitting on the board that only the owner may move. See
       // ownerQueueItems / ownerWaiting.
-      buttonItems: ownerQueueItems({ root: HUB }),
+      buttonItems: ownerQueueItems({ root: teamRoot() }),
       ownerWaiting: ownerWaiting(b.tasksOpen),
     };
   },
   // queues are read HERE and handed in: lib/queue.mjs imports core, so core cannot read them
   // itself without closing an import cycle (see runAudit).
-  hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: HUB }) }),
+  hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }) }),
   hub_lint: runLint,
   hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall,
   hub_usage: runUsage, hub_usage_add: runUsageAdd,
-  hub_rules: (a) => runRules({ ...a, teamRoot: HUB }), hub_operator: () => runOperatorGet(),
+  hub_rules: (a) => runRules({ ...a, teamRoot: teamRoot() }), hub_operator: () => runOperatorGet(),
   hub_kanban: runKanban, hub_claim: runClaim, hub_claim_check: runClaimCheck, hub_release: runRelease,
   hub_heartbeat: runHeartbeat, hub_presence: runPresence,
   hub_resource_set: runResourceSet, hub_resource_list: runResourceList, hub_resource_get: runResourceGet, hub_graph: runGraph,
@@ -406,10 +406,10 @@ const DISPATCH = {
   hub_onboarding: (a) => runOnboarding(a),
   // queues: same hand-off as hub_brief — the review block rides on this call and its stale-button
   // check needs rows core.mjs cannot read for itself.
-  hub_whatsnew: (a) => runWhatsNew({ ...a, queues: queueSummaryForBrief({ root: HUB }),
+  hub_whatsnew: (a) => runWhatsNew({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }),
     session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE }),
   hub_inbox: runInbox, hub_trajectory: runTrajectory,
-  // root: HUB is captured HERE, synchronously, at call time — a plain string value,
+  // root: teamRoot() is captured HERE, synchronously, at call time — a plain string value,
   // not a live reference — so it stays correct even if a later concurrent request
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   // from: required like every other author (was `|| 'mcp'` — a transport name, i.e. a
@@ -419,15 +419,26 @@ const DISPATCH = {
     // mistyped id is a warning the caller can act on immediately.
     let taskKnown;
     if (a.task != null && a.task !== '') { try { runTaskGet({ id: a.task }); taskKnown = true; } catch { taskKnown = false; } }
-    return { file: queueSend(a.role, a.text, { from: a.from, root: HUB, task: a.task }),
+    return { file: queueSend(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task }),
       ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }) };
   },
   // subscriber: resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown
   // client, and then the cursor stays shared per node exactly as before.
-  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: HUB, subscriber: sessionId() }),
-  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: HUB, subscriber: sessionId() }),
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: sessionId() }),
+  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: sessionId() }),
 };
+
+// Where the queues and AGENTS.md live for THIS server. The CLI resolves the team root as
+// HUBD_TEAM_DIR, then a walk-up from cwd, then the hub base; the server has no meaningful cwd
+// (the client picks it), so the walk-up is skipped, but the env var must count here exactly as it
+// does in the CLI — until 0.9.17 the server used HUB unconditionally, and a client config that
+// declared HUBD_TEAM_DIR for its hubd server got queues in ~/.hubd anyway (task macbook-pro-88).
+// Over HTTP the per-request tenant dir is the whole world: one env var cannot name many tenants.
+function teamRoot() {
+  if (SERVE_MODE === 'http') return HUB;
+  return process.env.HUBD_TEAM_DIR || process.env.HUBD_QUEUE_DIR || HUB;
+}
 
 // Tools that touch the server's own filesystem / run subprocesses, or block for a
 // long time. Safe when the daemon runs locally for one owner (stdio); a hole (or a

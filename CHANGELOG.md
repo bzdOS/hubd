@@ -4,6 +4,22 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.17 — 2026-09-11
+
+- **`HUBD_TEAM_DIR` names the whole hub, not just the queues.** The variable moved only the team
+  root (queues, `AGENTS.md`), and the MCP server ignored it even for those, writing queues under
+  the hub base. A fleet that set `HUBD_TEAM_DIR=/srv/fleet/hubd` for every role therefore had the
+  roles' heartbeats, reports and eleven unread escalations in each role's own `~/.hubd` for a day,
+  while the orchestrator read `/srv/fleet/hubd` and concluded no role was alive (task
+  macbook-pro-88). Now: `HUBD_DIR` wins when set; otherwise `HUBD_TEAM_DIR` (or the legacy
+  `HUBD_QUEUE_DIR`) is the hub base as well, so one variable means one directory. The stdio server
+  resolves its team root exactly as the CLI does (env first, then the base; no cwd walk-up, the
+  client owns the cwd); over HTTP the tenant directory stays the whole world. `hub doctor` prints
+  `hub base: <path> (via env HUBD_DIR | env HUBD_TEAM_DIR | default)` so a misrouted role is one
+  line to diagnose, and the team-root note explains the split instead of only naming it. Smoke
+  cases: CLI doctor and task under `HUBD_TEAM_DIR` alone, both set (`HUBD_DIR` wins), and an MCP
+  server declared with `HUBD_TEAM_DIR` alone landing heartbeat, queue message and report there.
+
 ## 0.9.16 — 2026-09-11
 
 - **`hub whereami` — state, not narrative, for the shell.** A compaction hands an agent a summary

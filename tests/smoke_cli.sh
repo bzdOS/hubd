@@ -330,6 +330,21 @@ OUT14D=$(cd "$TMP/team" && $CLI task done --by smoke "$TID" 2>&1); RC14D=$?
 [ "$RC14D" -eq 0 ] && echo "$OUT14D" | grep -q "closed"
 check "task done: --by before the id closes the id, not the word --by" $?
 
+# ── Case 15: HUBD_TEAM_DIR alone names the whole hub, not just the queues ──
+# A fleet that passes one directory to every role expects presence, journal and tasks there
+# too; until 0.9.17 they went to the role's own ~/.hubd (task macbook-pro-88).
+
+ONLY="$TMP/only"; mkdir -p "$ONLY"
+OUT15=$(cd "$ONLY" && env -u HUBD_DIR -u HUBD_QUEUE_DIR HUBD_TEAM_DIR="$ONLY" node "$REPO/hub/cli.mjs" doctor 2>&1)
+echo "$OUT15" | grep -q "path:     $ONLY  (via env HUBD_TEAM_DIR)"
+check "team dir: HUBD_TEAM_DIR without HUBD_DIR is the hub base, and doctor says so" $?
+(cd "$ONLY" && env -u HUBD_DIR -u HUBD_QUEUE_DIR HUBD_TEAM_DIR="$ONLY" node "$REPO/hub/cli.mjs" task add "one dir" -p onlyproj --by smoke >/dev/null 2>&1)
+ls "$ONLY"/tasks.*.events.jsonl >/dev/null 2>&1
+check "team dir: a task filed under HUBD_TEAM_DIR lands in that directory" $?
+OUT15B=$($CLI doctor 2>&1)
+echo "$OUT15B" | grep -q "path:     $HUBD_DIR  (via env HUBD_DIR)"
+check "team dir: HUBD_DIR still wins when both are set" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"
