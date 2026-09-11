@@ -291,7 +291,7 @@ check "queue send: missing body is non-zero" $?
 check "queue send: refused sends wrote nothing" $?
 
 BIG="$TMP/big.txt"
-{ i=0; while [ $i -lt 120 ]; do printf 'line %d: "quotes" $dollars `ticks` \\backslash %%percent — юникод\n' $i; i=$((i+1)); done; } > "$BIG"
+{ i=0; while [ $i -lt 120 ]; do printf 'line %d: "quotes" $dollars `ticks` \\backslash %%percent -- ünïcødé\n' $i; i=$((i+1)); done; } > "$BIG"
 [ "$(wc -c < "$BIG")" -gt 8000 ] || fail "queue send: big fixture is under 8 KB"
 (cd "$TMP/team" && $CLI queue send qs - --from smoke < "$BIG" >/dev/null 2>&1)
 check "queue send: stdin body accepted" $?
@@ -313,6 +313,22 @@ check "whereami --json: machine-readable" $?
 OUT13N=$(cd "$TMP" && $CLI whereami 2>&1); RC13N=$?
 [ "$RC13N" -eq 0 ] && echo "$OUT13N" | grep -q "project:  (none)"
 check "whereami: outside any project it still answers, with (none)" $?
+
+# ── Case 14: the other positional commands read past flags too ─────────────
+
+OUT14=$(cd "$TMP/team" && $CLI claim --agent smoke -t 5 smokeproj 'src/**' 2>&1); RC14=$?
+[ "$RC14" -eq 0 ] && echo "$OUT14" | grep -q "^Lock: "
+check "claim: flags before the positionals still claim the right area" $?
+(cd "$TMP/team" && $CLI claim check src/a.ts -p smokeproj --agent other >/dev/null 2>&1); RC14B=$?
+[ "$RC14B" -eq 1 ]
+check "claim: the area claimed was 'src/**', not '--agent' (check finds it)" $?
+OUT14C=$(cd "$TMP/team" && $CLI claim smokeproj 'x' --bogus 1 --agent smoke 2>&1); RC14C=$?
+[ "$RC14C" -ne 0 ] && echo "$OUT14C" | grep -q "unknown flag --bogus"
+check "claim: an unknown flag is refused, not swallowed as the area" $?
+TID=$(cd "$TMP/team" && $CLI task add "close me" -p smokeproj --by smoke 2>&1 | sed -n 's/^Task #\([^ ]*\) added.*/\1/p')
+OUT14D=$(cd "$TMP/team" && $CLI task done --by smoke "$TID" 2>&1); RC14D=$?
+[ "$RC14D" -eq 0 ] && echo "$OUT14D" | grep -q "closed"
+check "task done: --by before the id closes the id, not the word --by" $?
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 

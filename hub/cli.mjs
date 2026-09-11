@@ -1070,8 +1070,11 @@ if (cmd === 'task') {
       + ((t.task.tags || []).length ? `  #${t.task.tags.join(' #')}` : '')
       + (moved ? `  (cat "${cat}" is not one of ${TASK_CATS.join('/')} — kept as a tag)` : ''));
   } else if (sub === 'done') {
-    const id = args[2];   // bare number or node-scoped string (task #194) — runTaskUpdate compares by String()
-    if (!id || id.startsWith('-')) die('Id required: hub task done <id>');
+    // bare number or node-scoped string (task #194) — runTaskUpdate compares by String();
+    // read past flags in any order, so `hub task done --by x 42` closes 42, not "--by".
+    let pos; try { pos = positionals(2, { values: ['--by'] }); } catch (e) { die(e.message + '\nUsage: hub task done <id> --by <you>'); }
+    const id = pos[0];
+    if (!id) die('Id required: hub task done <id>');
     const r = runTaskUpdate({ id, status: 'done', by: authorOrDie('--by') });
     console.log(r.noop === 'already-done'
       ? `Task #${id} was already closed${r.closedAt ? ' ' + r.closedAt : ''} — nothing changed`
@@ -1091,8 +1094,9 @@ if (cmd === 'task') {
     }
     console.log(`(${data.count} tasks)`);
   } else if (sub === 'get') {
-    const id = args[2];
-    if (!id || id.startsWith('-')) die('Id required: hub task get <id>');
+    let pos; try { pos = positionals(2, { booleans: ['--json'] }); } catch (e) { die(e.message + '\nUsage: hub task get <id> [--json]'); }
+    const id = pos[0];
+    if (!id) die('Id required: hub task get <id>');
     let r; try { r = runTaskGet({ id }); } catch (e) { die(e.message); }
     const t = r.task;
     console.log(`#${t.id} [${t.project}] ${t.status}${t.importance ? ' · ' + t.importance : ''}${t.deadline ? ' · ⏰' + t.deadline : ''}${t.assignee ? ' · @' + t.assignee : ''}`);
@@ -1137,18 +1141,23 @@ if (cmd === 'claim' && args[1] === 'check') {
 }
 
 if (cmd === 'claim') {
-  const proj = args[1], area = args[2];
-  if (!proj || !area) die('Usage: hub claim <proj> <area> [-t min]   |   hub claim check <path> [-p <proj>]');
+  const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>   |   hub claim check <path> [-p <proj>]';
+  let pos;
+  try { pos = positionals(1, { values: ['-t', '--agent', '--note'] }); } catch (e) { die(e.message + '\n' + CU); }
+  const [proj, area] = pos;
+  if (!proj || !area) die(CU);
+  if (pos.length > 2) die(`unexpected extra argument ${JSON.stringify(pos[2].slice(0, 40))} — quote the area as one argument.\n${CU}`);
   const ttl = parseInt(getFlag('-t') || '240');
   const agent = authorOrDie('--agent');
-  const res = runClaim({ project: proj, area, agent, ttlMin: ttl });
+  const note = getFlag('--note');
+  const res = runClaim({ project: proj, area, agent, ttlMin: ttl, note: typeof note === 'string' ? note : undefined });
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Lock: ${res.claim.id}` + (res.matchable ? '' : '  (prose area — `hub claim check` cannot match files against it; a glob would)'));
   done(0);
 }
 
 if (cmd === 'release') {
-  const id = args[1];
+  const id = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!id) die('Usage: hub release <id>');
   const res = runRelease({ id });
   console.log(`Locks released: ${res.removed}`);
@@ -1389,9 +1398,12 @@ if (cmd === 'graph') {
 if (cmd === 'section') {
   // `hub section add <proj> <section> "<text>"` — one line into one section, everything else
   // in the card untouched. Sits next to `hub sections` (which lists the vocabulary).
-  if (args[1] !== 'add') die('Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]');
-  const [, , project, section, text] = args;
-  if (!project || !section || !text) die('Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]');
+  const SU = 'Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]';
+  if (args[1] !== 'add') die(SU);
+  let pos; try { pos = positionals(2, { values: ['--by', '--src'], booleans: ['--set'] }); } catch (e) { die(e.message + '\n' + SU); }
+  const [project, section, text] = pos;
+  if (!project || !section || !text) die(SU);
+  if (pos.length > 3) die(`unexpected extra argument ${JSON.stringify(pos[3].slice(0, 40))} — quote the text as one argument.\n${SU}`);
   const src = getFlag('--src');
   let r;
   try {
