@@ -162,6 +162,23 @@ is a folder you own. They are two separate things — and that is the whole poin
   Upgrading a package on disk does not reach a process that already imported it. This whole
   block exists because the machine that develops hubd ran a CLI nine releases old for weeks
   and nothing anywhere could have said so.
+- **Resuming after a context compaction** — a compaction hands an agent a summary of what
+  happened; work resumes from what exists. `hub whereami` (shell) and `hub_context` (MCP) answer
+  from state: the project, its digest with age and a `digestStale` verdict, open tasks, who else
+  is heartbeating in this checkout, the journal tail — plus, in the shell, the git inventory
+  (commit subjects, diff stat, untracked files with their first line, files changed in the last
+  half hour). `hub_whatsnew({since:"session"})` returns what the session itself wrote, which the
+  default "since my last call" checkpoint cannot. Editor hooks that run `hub whereami` at session
+  start and after a compaction: [prompts/client-hooks.md](prompts/client-hooks.md).
+- **Claims that warn before the edit** — a claim's `area` is a path glob relative to the project
+  root (`src/**/*.ts`, `docs/{a,b}.md`, a directory). `hub claim check <path>` /
+  `hub_claim_check` says whose zone a file is in before you write it, and `hub_context` reports
+  `claimsTouched` when a freshly changed file sits in somebody's. The lock stays soft: it
+  informs, it never forbids. Prose areas are still accepted, flagged `matchable:false`.
+- **Patching a digest** — `hub card <slug> --replace "<old>" --with "<new>"` (or
+  `hub_card_set({replace:[{from,to}], appendLine})`) fixes one stale line without rewriting the
+  owner's framing; a `from` that is not there is an error, never a silent no-op. `hub_report`
+  tells you the digest's age in every reply and nudges once it trails the journal you just moved.
 - **What an upgrade needs from you** — sometimes a new version wants something outside
   the code: a variable in a client's config, a role declared in the hub, a protocol
   section worth re-reading. hubd works that out and tells the agents itself:

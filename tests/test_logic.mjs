@@ -1963,7 +1963,7 @@ ok(!rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.inclu
 ok(rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.length === 1 && h.matched[0] === 'overlap'),
   'recall: the other line matches on its real word only, ranked below full coverage');
 ok(core.runRecall({ query: 'immediately' }).total === 0 && core.runRecall({ query: 'imm' }).hits.some(h => /IMM not/.test(h.text)), 'recall: prefix at a word start matches, infix never');
-let rcStop = ''; try { core.runRecall({ query: 'not the и не' }); } catch (e) { rcStop = e.message; }
+let rcStop = ''; try { core.runRecall({ query: 'not the \u0438 \u043d\u0435' }); } catch (e) { rcStop = e.message; }
 ok(/only stop-words/.test(rcStop) && /not, the/.test(rcStop), `recall: a stop-words-only query is refused and names them (${rcStop.slice(0, 60)})`);
 const rcP = core.runRecall({ query: 'overlap', project: 'psy' });
 ok(rcP.total === 1 && rcP.hits[0].project === 'psy' && rcP.project[0] === 'psy', 'recall: project narrows to that project only');

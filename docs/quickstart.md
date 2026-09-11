@@ -126,6 +126,18 @@ EOF
 back as `doneMissed`, check it. "What changed" is read from git, never listed
 by hand.
 
+Two habits that pay for themselves the first week:
+
+- **Write `FACT:` at the moment of the finding, not at the end.** Agent sessions get their
+  context compacted, and a compacted session never reaches "the end" — the finding leaves
+  with the context. `hub audit` notices a day whose whole report landed in its last two minutes.
+- **Resume from state.** After a compaction (or a night away) run `hub whereami` — project,
+  digest age, open tasks, who else is in this checkout, the journal tail, and the git
+  inventory — instead of trusting the summary. Claim areas as globs (`hub claim myproject
+  'src/**/*.ts' --agent dev-myproject`) and run `hub claim check <path>` before editing a
+  shared file; editor hooks that do both automatically are in
+  [prompts/client-hooks.md](../prompts/client-hooks.md).
+
 ## 6. Watch it
 
 ```bash

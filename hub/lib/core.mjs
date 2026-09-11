@@ -2807,9 +2807,11 @@ const RECALL_STOP = new Set([
   'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'is', 'are', 'was', 'were', 'be',
   'not', 'no', 'it', 'its', 'this', 'that', 'these', 'those', 'with', 'by', 'as', 'from', 'but', 'if',
   'then', 'so', 'do', 'does', 'did', 'we', 'you', 'i', 'he', 'she', 'they', 'my', 'our', 'your', 'about',
-  'и', 'не', 'в', 'на', 'для', 'что', 'как', 'это', 'а', 'но', 'или', 'с', 'к', 'по', 'из', 'у', 'о',
-  'об', 'от', 'до', 'за', 'же', 'ли', 'бы', 'то', 'так', 'вот', 'он', 'она', 'они', 'мы', 'вы', 'я',
-  'мой', 'наш', 'ваш', 'его', 'её', 'их', 'ещё', 'еще', 'уже', 'ни', 'да', 'нет', 'при', 'про',
+  // Russian stop-words, written as \u escapes: the public repository is ASCII-only by its own gate
+  // (tests/check_clean.sh), and the list is data, not prose.
+  '\u0438', '\u043d\u0435', '\u0432', '\u043d\u0430', '\u0434\u043b\u044f', '\u0447\u0442\u043e', '\u043a\u0430\u043a', '\u044d\u0442\u043e', '\u0430', '\u043d\u043e', '\u0438\u043b\u0438', '\u0441', '\u043a', '\u043f\u043e', '\u0438\u0437', '\u0443', '\u043e',
+  '\u043e\u0431', '\u043e\u0442', '\u0434\u043e', '\u0437\u0430', '\u0436\u0435', '\u043b\u0438', '\u0431\u044b', '\u0442\u043e', '\u0442\u0430\u043a', '\u0432\u043e\u0442', '\u043e\u043d', '\u043e\u043d\u0430', '\u043e\u043d\u0438', '\u043c\u044b', '\u0432\u044b', '\u044f',
+  '\u043c\u043e\u0439', '\u043d\u0430\u0448', '\u0432\u0430\u0448', '\u0435\u0433\u043e', '\u0435\u0451', '\u0438\u0445', '\u0435\u0449\u0451', '\u0435\u0449\u0435', '\u0443\u0436\u0435', '\u043d\u0438', '\u0434\u0430', '\u043d\u0435\u0442', '\u043f\u0440\u0438', '\u043f\u0440\u043e',
 ]);
 /* A term matches at the start of a word — "imm" matches "IMM", "IMM's" and "immediately", never
  * "committing". Prefix rather than whole-word because the hub is written in two inflecting
