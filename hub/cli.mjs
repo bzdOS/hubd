@@ -22,7 +22,7 @@ import {
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
-  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI,
+  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
@@ -1208,6 +1208,35 @@ if (cmd === 'presence') {
  * prose hunks are left alone and named, because if both sides rewrote a digest, one of them
  * meant to replace the other and choosing would be inventing a decision. Exits non-zero while
  * anything is left, so a script cannot mistake a partial resolution for a finished one. */
+// absorb: fold a hub base written in isolation into this one, as a new node. Dry run by default —
+// the plan (id map, unread queue blocks, cards kept aside) is the thing to read before --apply.
+if (cmd === 'absorb') {
+  let pos;
+  try { pos = positionals(1, { values: ['--as', '--by'], booleans: ['--apply', '--force', '--json'] }); } catch (e) { die(e.message); }
+  if (!pos[0]) die('usage: hub absorb <dir> --as <node-label> [--apply --by <you>] [--force] [--json]');
+  let r;
+  try { r = runAbsorb({ from: pos[0], as: getFlag('--as'), by: getFlag('--by') || process.env.HUBD_AGENT || null, apply: args.includes('--apply'), force: args.includes('--force') }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(r, null, 1)); done(0); }
+  console.log((r.apply ? 'Absorbed ' : 'Would absorb ') + r.from + ' as node ' + r.as + (r.apply ? '' : '  (dry run - add --apply --by <you>)'));
+  for (const w of r.warnings) console.log('  WARNING forced past: ' + w);
+  console.log('  tasks:    ' + r.tasks.added + ' added in ' + r.tasks.events + ' event(s) from ' + (r.tasks.files.join(', ') || 'no file') +
+    (r.apply ? '  -> ' + r.tasksVisible + ' visible after fold' : ''));
+  const ids = Object.entries(r.tasks.idMap);
+  if (ids.length) console.log('  ids:      ' + ids.slice(0, 6).map(([o, n]) => o + ' -> ' + n).join(', ') + (ids.length > 6 ? ', ... (' + ids.length + ' total, all in the manifest)' : ''));
+  console.log('  journal:  ' + r.journal.entries + ' entr(y/ies) from ' + (r.journal.files.join(', ') || 'no file'));
+  if (r.usage.entries) console.log('  usage:    ' + r.usage.entries + ' entr(y/ies)');
+  if (r.malformed) console.log('  malformed lines dropped: ' + r.malformed);
+  console.log('  queues:   ' + r.queues.length + ' file(s) kept under absorbed/' + r.as + '/queues/ - never re-delivered');
+  for (const u of r.unread) console.log('    UNREAD  ' + u.file + ': ' + u.blocks + ' block(s), ' + u.bytes + ' B' + (u.everRead ? '' : ' (never had a reader here)') + '  -> re-send on purpose if it still matters');
+  for (const c of r.cards) console.log('  card      ' + c.slug + ' -> ' + c.kept + (c.kept.startsWith('absorbed/') ? '  (slug exists here; fold the digest by hand)' : ''));
+  for (const c of r.resources) console.log('  resource  ' + c.slug + ' -> ' + c.kept);
+  if (r.skipped.length) console.log('  not absorbed (node-local or generated): ' + r.skipped.join(', '));
+  console.log((r.apply ? 'Wrote ' : 'Would write ') + r.writes.length + ' new file(s); nothing here is rewritten.' +
+    (r.apply ? ' Next mesh-sync carries them to every peer. Move the source away so nothing falls back to it.' : ''));
+  done(0);
+}
+
 if (cmd === 'card' && args[1] === 'resolve') {
   const targets = args.slice(2).filter(a => !a.startsWith('-'));
   const files = targets.length
@@ -1913,6 +1942,7 @@ else if (!cmd) {
     '  task list [-p proj] [--status open|done|all] [--json]',
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
+    '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
     '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
     '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
     '  resource get <slug>              one resource + its in/out relationships',

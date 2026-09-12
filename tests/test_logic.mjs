@@ -2689,7 +2689,88 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC]) fs.rmSync(d, { recursive: true, force: true });
+// ── absorb: a hub base written in isolation joins this one as a new node ──
+// Real incident (task maple-96): roles wrote to a private ~/.hubd for a day; its pine-1..23
+// collided with the shared hub's own pine-1..23, naming different work.
+const AB = mktmp(); const ABSRC = mktmp();
+core.setHubBase(AB);
+fs.writeFileSync(path.join(AB, 'tasks.pine.events.jsonl'),
+  JSON.stringify({ ts: '2026-08-01 10:00', node: 'pine', ev: 'add', id: 'pine-1', t: { id: 'pine-1', project: 'kestrel', text: 'shared old work', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(AB, 'journal.pine.jsonl'), JSON.stringify({ ts: '2026-08-01 10:01', project: 'kestrel', agent: 'x', kind: 'note', text: 'shared entry' }) + '\n');
+fs.mkdirSync(path.join(AB, 'projects'), { recursive: true });
+fs.writeFileSync(path.join(AB, 'projects', 'kestrel.md'), '# kestrel\n\n## Digest\n\nshared digest\n');
+for (const d of ['projects', 'queues', '.qstate', 'presence']) fs.mkdirSync(path.join(ABSRC, d), { recursive: true });
+fs.writeFileSync(path.join(ABSRC, 'tasks.pine.events.jsonl'),
+  JSON.stringify({ ts: '2026-09-10 18:09', node: 'pine', ev: 'add', id: 'pine-1', t: { id: 'pine-1', project: 'kestrel', text: 'private T5.3 snapshots', status: 'open' } }) + '\n' +
+  JSON.stringify({ ts: '2026-09-10 19:00', node: 'pine', ev: 'set', id: 'pine-1', patch: { status: 'done' }, keyed: 'origin' }) + '\n' +
+  JSON.stringify({ ts: '2026-09-11 12:00', node: 'pine', ev: 'add', id: 'pine-12', t: { id: 'pine-12', project: 'kestrel', text: 'batch5 after pine-1 done', status: 'open', depends_on: ['pine-1'] } }) + '\n');
+fs.writeFileSync(path.join(ABSRC, 'journal.pine.jsonl'),
+  JSON.stringify({ ts: '2026-09-11 12:05', project: 'kestrel', agent: 'kestrel-dev', kind: 'note', text: 'took pine-12, see #pine-1 and pine-120' }) + '\n' +
+  JSON.stringify({ ts: '2026-09-11 13:00', project: 'kestrel', agent: 'kestrel-dev', kind: 'done', text: 'done' }) + '\n');
+const qBlock1 = '\n## 2026-09-11 12:10 · from kestrel-orch · task #pine-12\ndo batch5\n';
+const qBlock2 = '\n## 2026-09-11 14:00 · from kestrel-orch\nunread order\n';
+fs.writeFileSync(path.join(ABSRC, 'queues', 'kestrel-dev.Pine.queue.md'), qBlock1 + qBlock2);
+fs.writeFileSync(path.join(ABSRC, '.qstate', 'kestrel-dev.Pine.queue.md.offset'), String(Buffer.byteLength(qBlock1)) + '\n');
+fs.writeFileSync(path.join(ABSRC, '.qstate', 'kestrel-dev.waiter'), JSON.stringify({ pid: 999999, since: '2026-09-11T21:26:09Z' }));
+fs.writeFileSync(path.join(ABSRC, 'projects', 'kestrel.md'), '# kestrel\n\n## Digest\n\nprivate digest about pine-1\n');
+fs.writeFileSync(path.join(ABSRC, 'projects', 'newproj.md'), '# newproj\n\n## Digest\n\nonly here\n');
+fs.writeFileSync(path.join(ABSRC, 'presence', 'kestrel-dev.json'), '{}');
+fs.writeFileSync(path.join(ABSRC, 'claims.json'), '{"claims":[]}');
+fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
+{
+  const plan = core.runAbsorb({ from: ABSRC, as: 'pine-agent' });
+  ok(plan.apply === false && !fs.existsSync(path.join(AB, 'tasks.pine-agent.events.jsonl')), 'absorb: without apply nothing is written');
+  ok(plan.tasks.added === 2 && plan.tasks.idMap['pine-1'] === 'pine-agent-1' && plan.tasks.idMap['pine-12'] === 'pine-agent-12',
+    `absorb: ids are renamed <label>-<n> keeping their number (got ${JSON.stringify(plan.tasks.idMap)})`);
+  ok(plan.unread.length === 1 && plan.unread[0].blocks === 1 && plan.unread[0].file === 'kestrel-dev.Pine.queue.md',
+    `absorb: the plan names the one queue block nobody read (got ${JSON.stringify(plan.unread)})`);
+  ok(plan.cards.find(c => c.slug === 'kestrel').kept.startsWith('absorbed/pine-agent/') && plan.cards.find(c => c.slug === 'newproj').kept === 'projects/newproj.md',
+    'absorb: an existing slug is kept aside, a new slug joins the hub');
+  ok(plan.skipped.includes('presence/') && plan.skipped.includes('claims.json') && plan.skipped.includes('tasks.json'), 'absorb: node-local and generated files are listed as not absorbed');
+  let thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true }); } catch (e) { thrown = e.message; }
+  ok(/by required/.test(thrown || ''), 'absorb: apply without an author is refused');
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'Pine Agent' }); } catch (e) { thrown = e.message; }
+  ok(/as required/.test(thrown || ''), 'absorb: a label with spaces or capitals is refused');
+  fs.writeFileSync(path.join(ABSRC, '.qstate', 'kestrel-dev.waiter'), JSON.stringify({ pid: process.pid }));
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  ok(/live waiter/.test(thrown || ''), 'absorb: a waiter still alive in the source refuses the copy');
+  ok(core.runAbsorb({ from: ABSRC, as: 'pine-agent', force: true }).warnings.length === 1, 'absorb: force passes the live waiter as a warning');
+  fs.writeFileSync(path.join(ABSRC, '.qstate', 'kestrel-dev.waiter'), JSON.stringify({ pid: 999999 }));
+  fs.mkdirSync(path.join(ABSRC, '.git'));
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  ok(/git repository/.test(thrown || ''), 'absorb: a source that is itself a mesh node is refused');
+  fs.rmdirSync(path.join(ABSRC, '.git'));
+  thrown = null; try { core.runAbsorb({ from: AB, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  ok(/itself/.test(thrown || ''), 'absorb: the hub base cannot absorb itself');
+
+  const done = core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'head-orchestrator' });
+  ok(done.tasksVisible === 2, `absorb: both absorbed tasks are visible after the fold (got ${done.tasksVisible})`);
+  const db2 = core.foldTasks();
+  const t = (id) => db2.tasks.find(x => x.id === id);
+  ok(db2.tasks.length === 3 && t('pine-1') && t('pine-1').text === 'shared old work', 'absorb: the shared pine-1 is untouched and still pine-1');
+  ok(t('pine-agent-1') && t('pine-agent-1').status === 'done', 'absorb: the absorbed set event followed its add to the renamed id');
+  ok(t('pine-agent-12') && t('pine-agent-12').text === 'batch5 after pine-agent-1 done' && t('pine-agent-12').depends_on[0] === 'pine-agent-1',
+    `absorb: ids inside text and depends_on are renamed (got ${t('pine-agent-12') && t('pine-agent-12').text})`);
+  const j = fs.readFileSync(path.join(AB, 'journal.pine-agent.jsonl'), 'utf8');
+  ok(/took pine-agent-12, see #pine-agent-1 and pine-120/.test(j), 'absorb: journal text renames pine-1 and pine-12 but not pine-120');
+  ok(fs.readFileSync(path.join(AB, 'journal.pine.jsonl'), 'utf8').split('\n').filter(Boolean).length === 1, 'absorb: the shared journal file gained nothing (only new files are written)');
+  const qcopy = fs.readFileSync(path.join(AB, 'absorbed', 'pine-agent', 'queues', 'kestrel-dev.Pine.queue.md'), 'utf8');
+  ok(/task #pine-agent-12/.test(qcopy) && !fs.existsSync(path.join(AB, 'queues', 'kestrel-dev.Pine.queue.md')), 'absorb: queue history is kept aside with renamed refs, not placed where a waiter would re-read it');
+  ok(fs.existsSync(path.join(AB, 'absorbed', 'pine-agent', 'projects', 'kestrel.md')) && fs.readFileSync(path.join(AB, 'projects', 'kestrel.md'), 'utf8').includes('shared digest')
+    && fs.existsSync(path.join(AB, 'projects', 'newproj.md')), 'absorb: existing card untouched and kept aside, new card joined');
+  const man = JSON.parse(fs.readFileSync(path.join(AB, 'absorbed', 'pine-agent', 'manifest.json'), 'utf8'));
+  ok(man.by === 'head-orchestrator' && man.tasks.idMap['pine-12'] === 'pine-agent-12' && man.unread.length === 1, 'absorb: the manifest records author, id map and unread blocks');
+  ok(core.journalTail('hub', 5).some(e => /absorbed .* as node pine-agent: 2 task/.test(e.text) && e.agent === 'head-orchestrator'), 'absorb: the absorb itself is journaled under the author');
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'x', force: true }); } catch (e) { thrown = e.message; }
+  ok(/label already used/.test(thrown || ''), 'absorb: a second absorb under the same label is refused, even forced');
+  const cli = run(`absorb ${ABSRC} --as pine-agent2`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
+  ok(cli.code === 0 && /Would absorb .* as node pine-agent2/.test(cli.out) && /UNREAD  kestrel-dev.Pine.queue.md: 1 block/.test(cli.out) && /pine-1 -> pine-agent2-1/.test(cli.out),
+    `absorb CLI: dry run prints the plan, the unread block and the id map (code ${cli.code})`);
+  const cliBad = run(`absorb ${ABSRC} --as pine-agent2 --bogus`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
+  ok(cliBad.code !== 0 && /unknown flag --bogus/.test(cliBad.out), 'absorb CLI: an unknown flag is refused');
+}
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
