@@ -152,6 +152,12 @@ is a folder you own. They are two separate things — and that is the whole poin
   code from npm; your data travels in your own git. Two separate tracks: code from
   the package, data in your folder. Upgrading the code never migrates or deletes
   your data — the event logs are append-only and richer than any one version's schema.
+- **A hub that was written in isolation** — a misrouted env var, a private `~/.hubd`, a
+  laptop that never joined — is folded in with `hub absorb <dir> --as <label>`: its logs
+  become that label's per-node files here, its task ids are renamed `<label>-<n>` in every
+  field and every text so they stop colliding with yours, its queue history is kept aside
+  and never re-delivered, and the plan (id map, unread blocks, cards kept for a human)
+  prints before anything is written. Nothing already in your hub is rewritten.
 - **Which version is actually running** — `hub version` prints the number *and the path
   of the copy that printed it*, because on a real machine those are one question: a stale
   global install and a live source checkout are both called `hub`. From 0.9.4 each journal

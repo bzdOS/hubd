@@ -2689,7 +2689,88 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC]) fs.rmSync(d, { recursive: true, force: true });
+// ── absorb: a hub base written in isolation joins this one as a new node ──
+// Real incident (task macbook-pro-96): roles wrote to a private ~/.hubd for a day; its planck-1..23
+// collided with the shared hub's own planck-1..23, naming different work.
+const AB = mktmp(); const ABSRC = mktmp();
+core.setHubBase(AB);
+fs.writeFileSync(path.join(AB, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-08-01 10:00', node: 'planck', ev: 'add', id: 'planck-1', t: { id: 'planck-1', project: 'barechat', text: 'shared old work', status: 'open' } }) + '\n');
+fs.writeFileSync(path.join(AB, 'journal.planck.jsonl'), JSON.stringify({ ts: '2026-08-01 10:01', project: 'barechat', agent: 'x', kind: 'note', text: 'shared entry' }) + '\n');
+fs.mkdirSync(path.join(AB, 'projects'), { recursive: true });
+fs.writeFileSync(path.join(AB, 'projects', 'barechat.md'), '# barechat\n\n## Digest\n\nshared digest\n');
+for (const d of ['projects', 'queues', '.qstate', 'presence']) fs.mkdirSync(path.join(ABSRC, d), { recursive: true });
+fs.writeFileSync(path.join(ABSRC, 'tasks.planck.events.jsonl'),
+  JSON.stringify({ ts: '2026-09-10 18:09', node: 'planck', ev: 'add', id: 'planck-1', t: { id: 'planck-1', project: 'barechat', text: 'private T5.3 snapshots', status: 'open' } }) + '\n' +
+  JSON.stringify({ ts: '2026-09-10 19:00', node: 'planck', ev: 'set', id: 'planck-1', patch: { status: 'done' }, keyed: 'origin' }) + '\n' +
+  JSON.stringify({ ts: '2026-09-11 12:00', node: 'planck', ev: 'add', id: 'planck-12', t: { id: 'planck-12', project: 'barechat', text: 'batch5 after planck-1 done', status: 'open', depends_on: ['planck-1'] } }) + '\n');
+fs.writeFileSync(path.join(ABSRC, 'journal.planck.jsonl'),
+  JSON.stringify({ ts: '2026-09-11 12:05', project: 'barechat', agent: 'barechat-dev', kind: 'note', text: 'took planck-12, see #planck-1 and planck-120' }) + '\n' +
+  JSON.stringify({ ts: '2026-09-11 13:00', project: 'barechat', agent: 'barechat-dev', kind: 'done', text: 'done' }) + '\n');
+const qBlock1 = '\n## 2026-09-11 12:10 · from barechat-orch · task #planck-12\ndo batch5\n';
+const qBlock2 = '\n## 2026-09-11 14:00 · from barechat-orch\nunread order\n';
+fs.writeFileSync(path.join(ABSRC, 'queues', 'barechat-dev.Planck.queue.md'), qBlock1 + qBlock2);
+fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.Planck.queue.md.offset'), String(Buffer.byteLength(qBlock1)) + '\n');
+fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.waiter'), JSON.stringify({ pid: 999999, since: '2026-09-11T21:26:09Z' }));
+fs.writeFileSync(path.join(ABSRC, 'projects', 'barechat.md'), '# barechat\n\n## Digest\n\nprivate digest about planck-1\n');
+fs.writeFileSync(path.join(ABSRC, 'projects', 'newproj.md'), '# newproj\n\n## Digest\n\nonly here\n');
+fs.writeFileSync(path.join(ABSRC, 'presence', 'barechat-dev.json'), '{}');
+fs.writeFileSync(path.join(ABSRC, 'claims.json'), '{"claims":[]}');
+fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
+{
+  const plan = core.runAbsorb({ from: ABSRC, as: 'planck-agent' });
+  ok(plan.apply === false && !fs.existsSync(path.join(AB, 'tasks.planck-agent.events.jsonl')), 'absorb: without apply nothing is written');
+  ok(plan.tasks.added === 2 && plan.tasks.idMap['planck-1'] === 'planck-agent-1' && plan.tasks.idMap['planck-12'] === 'planck-agent-12',
+    `absorb: ids are renamed <label>-<n> keeping their number (got ${JSON.stringify(plan.tasks.idMap)})`);
+  ok(plan.unread.length === 1 && plan.unread[0].blocks === 1 && plan.unread[0].file === 'barechat-dev.Planck.queue.md',
+    `absorb: the plan names the one queue block nobody read (got ${JSON.stringify(plan.unread)})`);
+  ok(plan.cards.find(c => c.slug === 'barechat').kept.startsWith('absorbed/planck-agent/') && plan.cards.find(c => c.slug === 'newproj').kept === 'projects/newproj.md',
+    'absorb: an existing slug is kept aside, a new slug joins the hub');
+  ok(plan.skipped.includes('presence/') && plan.skipped.includes('claims.json') && plan.skipped.includes('tasks.json'), 'absorb: node-local and generated files are listed as not absorbed');
+  let thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent', apply: true }); } catch (e) { thrown = e.message; }
+  ok(/by required/.test(thrown || ''), 'absorb: apply without an author is refused');
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'Planck Agent' }); } catch (e) { thrown = e.message; }
+  ok(/as required/.test(thrown || ''), 'absorb: a label with spaces or capitals is refused');
+  fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.waiter'), JSON.stringify({ pid: process.pid }));
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent' }); } catch (e) { thrown = e.message; }
+  ok(/live waiter/.test(thrown || ''), 'absorb: a waiter still alive in the source refuses the copy');
+  ok(core.runAbsorb({ from: ABSRC, as: 'planck-agent', force: true }).warnings.length === 1, 'absorb: force passes the live waiter as a warning');
+  fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.waiter'), JSON.stringify({ pid: 999999 }));
+  fs.mkdirSync(path.join(ABSRC, '.git'));
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent' }); } catch (e) { thrown = e.message; }
+  ok(/git repository/.test(thrown || ''), 'absorb: a source that is itself a mesh node is refused');
+  fs.rmdirSync(path.join(ABSRC, '.git'));
+  thrown = null; try { core.runAbsorb({ from: AB, as: 'planck-agent' }); } catch (e) { thrown = e.message; }
+  ok(/itself/.test(thrown || ''), 'absorb: the hub base cannot absorb itself');
+
+  const done = core.runAbsorb({ from: ABSRC, as: 'planck-agent', apply: true, by: 'fleet-orchestrator' });
+  ok(done.tasksVisible === 2, `absorb: both absorbed tasks are visible after the fold (got ${done.tasksVisible})`);
+  const db2 = core.foldTasks();
+  const t = (id) => db2.tasks.find(x => x.id === id);
+  ok(db2.tasks.length === 3 && t('planck-1') && t('planck-1').text === 'shared old work', 'absorb: the shared planck-1 is untouched and still planck-1');
+  ok(t('planck-agent-1') && t('planck-agent-1').status === 'done', 'absorb: the absorbed set event followed its add to the renamed id');
+  ok(t('planck-agent-12') && t('planck-agent-12').text === 'batch5 after planck-agent-1 done' && t('planck-agent-12').depends_on[0] === 'planck-agent-1',
+    `absorb: ids inside text and depends_on are renamed (got ${t('planck-agent-12') && t('planck-agent-12').text})`);
+  const j = fs.readFileSync(path.join(AB, 'journal.planck-agent.jsonl'), 'utf8');
+  ok(/took planck-agent-12, see #planck-agent-1 and planck-120/.test(j), 'absorb: journal text renames planck-1 and planck-12 but not planck-120');
+  ok(fs.readFileSync(path.join(AB, 'journal.planck.jsonl'), 'utf8').split('\n').filter(Boolean).length === 1, 'absorb: the shared journal file gained nothing (only new files are written)');
+  const qcopy = fs.readFileSync(path.join(AB, 'absorbed', 'planck-agent', 'queues', 'barechat-dev.Planck.queue.md'), 'utf8');
+  ok(/task #planck-agent-12/.test(qcopy) && !fs.existsSync(path.join(AB, 'queues', 'barechat-dev.Planck.queue.md')), 'absorb: queue history is kept aside with renamed refs, not placed where a waiter would re-read it');
+  ok(fs.existsSync(path.join(AB, 'absorbed', 'planck-agent', 'projects', 'barechat.md')) && fs.readFileSync(path.join(AB, 'projects', 'barechat.md'), 'utf8').includes('shared digest')
+    && fs.existsSync(path.join(AB, 'projects', 'newproj.md')), 'absorb: existing card untouched and kept aside, new card joined');
+  const man = JSON.parse(fs.readFileSync(path.join(AB, 'absorbed', 'planck-agent', 'manifest.json'), 'utf8'));
+  ok(man.by === 'fleet-orchestrator' && man.tasks.idMap['planck-12'] === 'planck-agent-12' && man.unread.length === 1, 'absorb: the manifest records author, id map and unread blocks');
+  ok(core.journalTail('hub', 5).some(e => /absorbed .* as node planck-agent: 2 task/.test(e.text) && e.agent === 'fleet-orchestrator'), 'absorb: the absorb itself is journaled under the author');
+  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent', apply: true, by: 'x', force: true }); } catch (e) { thrown = e.message; }
+  ok(/label already used/.test(thrown || ''), 'absorb: a second absorb under the same label is refused, even forced');
+  const cli = run(`absorb ${ABSRC} --as planck-agent2`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
+  ok(cli.code === 0 && /Would absorb .* as node planck-agent2/.test(cli.out) && /UNREAD  barechat-dev.Planck.queue.md: 1 block/.test(cli.out) && /planck-1 -> planck-agent2-1/.test(cli.out),
+    `absorb CLI: dry run prints the plan, the unread block and the id map (code ${cli.code})`);
+  const cliBad = run(`absorb ${ABSRC} --as planck-agent2 --bogus`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
+  ok(cliBad.code !== 0 && /unknown flag --bogus/.test(cliBad.out), 'absorb CLI: an unknown flag is refused');
+}
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

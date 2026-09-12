@@ -217,6 +217,22 @@ peer. It aborts a conflicted merge instead of leaving conflict markers inside yo
 hub, and a failed push is just a retry next run, because the commit is already
 local. Exit codes: `2` merge, `3` push, `4` append-only refusal.
 
+If a machine (or a set of agents) turns out to have been writing to a folder that
+was never the shared hub, do not copy files across by hand — task ids from the same
+hostname collide, and a copied queue file gets re-delivered to whoever is waiting on
+that role. Stop the writers, then:
+
+```bash
+hub absorb /home/agent/.hubd --as planck-agent              # dry run: the plan, nothing written
+hub absorb /home/agent/.hubd --as planck-agent --apply --by owner-alex
+```
+
+The isolated folder joins as a new node: its logs become `*.planck-agent.*` files here,
+its ids become `planck-agent-<n>` everywhere they are mentioned, queue history is kept
+under `absorbed/planck-agent/` with what was never read listed for you to re-send on
+purpose, and cards whose slug already exists are kept aside verbatim. The next
+mesh-sync carries the new files to every peer. Then move the old folder away.
+
 One cron-specific trap: an ssh key with a passphrase cannot work unattended there
 (no agent). `launchd` and systemd user services inherit one; cron does not.
 

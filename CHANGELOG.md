@@ -4,6 +4,31 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.18 — 2026-09-12
+
+- **`hub absorb <dir> --as <label>` — a hub base written in isolation joins this one as a new
+  node.** The sequel to 0.9.17: for a day the fleet's roles wrote to a private `~/.hubd` (23
+  tasks, ~190 journal entries, 8 queue files) while the shared base carried on, and the two now
+  had to become one (task macbook-pro-96). Copying by hand fails twice over: the private
+  `planck-1..23` collide with the shared `planck-1..23` (the fold would remap the newcomers to
+  bare numbers, and every "see planck-4" in their reports would point at a stranger's task), and
+  a copied queue file is re-delivered wholesale to the live waiter on that role. So the isolated
+  base is absorbed as a NEW node — the model the fold already has: its logs become
+  `tasks.<label>.events.jsonl`, `journal.<label>.jsonl`, `usage.<label>.jsonl`, and every id it
+  minted is renamed `<label>-<n>` (own number kept) in every field and every text of the copies —
+  events, journal, queue blocks, cards. Queue history is kept under `absorbed/<label>/queues/`
+  with the delivered offset recorded, never placed where a waiter would read it; blocks nobody
+  read are listed so the operator re-sends them on purpose. Cards and resources whose slug already
+  exists are kept aside verbatim (two digests a day apart are not a list to union); new slugs
+  join. Presence, cursors, claims, the task cache and `HUBD.md` are named as not absorbed. Dry run
+  by default; `--apply --by <you>` writes only new files (the mesh-sync guard watches removed
+  lines, never new files), rebuilds the fold, reports how many absorbed tasks are visible, and
+  journals the absorb under the author; a manifest with the full id map sits next to the copies.
+  Refuses while a waiter pid recorded in the source is alive, when the source is itself a git
+  repository (a mesh node syncs, it is not absorbed), when the label is already a node here, and
+  when it would overwrite anything. CLI only: it reads another directory on the server's disk,
+  the class of tool that stays off the network transport.
+
 ## 0.9.17 — 2026-09-11
 
 - **`HUBD_TEAM_DIR` names the whole hub, not just the queues.** The variable moved only the team
