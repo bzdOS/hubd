@@ -4,6 +4,16 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.19 — 2026-09-12
+
+- **`hub absorb` is all-or-nothing.** Its first field run stopped half-way with `EACCES`: the
+  `absorbed/` directory had arrived on that node through a root `git pull`, without group write,
+  so the logs were already on disk when the queue copies failed — and the label then counted as
+  used while the manifest and the queue history were missing. Every directory to be written is now
+  probed for write access first, the logs are written last, and a failure removes everything the
+  run created before surfacing, so the same label works again once the permission is fixed. The
+  error says what to fix.
+
 ## 0.9.18 — 2026-09-12
 
 - **`hub absorb <dir> --as <label>` — a hub base written in isolation joins this one as a new
