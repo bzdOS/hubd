@@ -2727,6 +2727,30 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
+/* ── a broadcast role has no single "pending", so no single number is printed ──
+ * The shared cursor of a fan-out role is never advanced by anyone — every reader keeps its own —
+ * so the arithmetic against it only grows. It was read as a delivery failure and quoted as
+ * evidence for one, about a role that was working all day (task macbook-pro-98). */
+{
+  const FL = mktmp();
+  fs.mkdirSync(path.join(FL, 'queues'), { recursive: true });
+  fs.writeFileSync(path.join(FL, 'subscriber-roles.json'), JSON.stringify(['head']));
+  core.setHubBase(FL);
+  q.queueSend('head', 'one', { from: 'orch', root: FL, node: 'n1' });
+  q.queueSend('head', 'two', { from: 'orch', root: FL, node: 'n1' });
+  await q.queueWait('head', { timeout: 1, root: FL, subscriber: 'reader-a' });    // reads both
+  q.queueSend('head', 'three', { from: 'orch', root: FL, node: 'n1' });
+  const row = q.queueLedger({ root: FL }).roles.find(r => r.role === 'head');
+  ok(row.fanout && row.pending === null && row.delivered === null,
+    `fanout ledger: no shared delivered/pending is reported (got ${row.delivered}/${row.pending})`);
+  ok(row.total === 3 && row.sharedCursorPending === 3,
+    `fanout ledger: the shared-cursor arithmetic is kept for forensics, out of the headline (got ${row.sharedCursorPending})`);
+  const ra = row.readers.find(x => x.subscriber === 'reader-a');
+  ok(ra && ra.delivered === 2 && ra.behind === 1,
+    `fanout ledger: each reader's own position and how far behind it is (got ${ra && ra.delivered}/${ra && ra.behind})`);
+  fs.rmSync(FL, { recursive: true, force: true });
+}
+
 /* ── in a SHARED hub, a file hubd creates is writable by the group ──
  * Measured on bsdos-x86 2026-09-14: the role ran as `freebsd`, its cursor had been created by
  * `agent` with the default umask (rw-r--r--), and nine orders could not be delivered because the

@@ -929,6 +929,19 @@ export function queueLedger({ root, role } = {}) {
       if (found) found.delivered += rd.delivered; else agg.readers.push({ ...rd });
     }
   }
+  /* A broadcast role has no shared cursor: every reader keeps its own, and nothing ever advances
+   * the one this ledger read. Reporting its arithmetic as "delivered / pending" produced a number
+   * that is true for nobody and only ever grows — and it was quoted as evidence of a delivery
+   * failure that was happening somewhere else entirely (task macbook-pro-98: "barechat, 26896 bytes
+   * pending" for a head that was working all day). So say who the readers are and how far each one
+   * is behind, and refuse to print a single number that cannot exist. */
+  for (const agg of byRole.values()) {
+    if (!agg.fanout) continue;
+    agg.sharedCursorPending = agg.pending;      // kept for forensics, never the headline
+    agg.delivered = null; agg.pending = null;
+    for (const rd of agg.readers) rd.behind = agg.total - rd.delivered;
+    agg.readers.sort((a, b) => b.behind - a.behind);
+  }
   return { roles: [...byRole.values()].sort((a, b) => (a.role < b.role ? -1 : 1)) };
 }
 

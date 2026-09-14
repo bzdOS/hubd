@@ -4,6 +4,16 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.21 — 2026-09-14
+
+- **A broadcast role no longer reports a "pending" that is true for nobody.** Every reader of a
+  fan-out role keeps its own cursor, so the shared one is never advanced and the arithmetic against
+  it only climbs. `hub queue status` printed that number as the headline, and it was quoted as
+  evidence of a delivery failure — about a project head that had been working all day, while the
+  real stall was on another node entirely (task macbook-pro-98). `hub_brief` had refused to print it
+  since 0.9.5; the ledger now agrees: readers with how far each is behind, the shared-cursor
+  arithmetic kept as `sharedCursorPending` for forensics only.
+
 ## 0.9.20 — 2026-09-14
 
 One theme: a hub that cannot do its job must say so, instead of looking idle.
