@@ -4353,15 +4353,35 @@ export function runAbsorb(a = {}) {
   if (!a.apply) return plan;
 
   for (const w of plan.writes) if (fs.existsSync(path.join(HUB, w))) throw new Error('refused: would overwrite ' + w);
-  const write = (rel, text) => { const p = path.join(HUB, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text, 'utf8'); };
-  if (outEvents.length) write(`tasks.${label}.events.jsonl`, outEvents.join('\n') + '\n');
-  if (outJournal.length) write(`journal.${label}.jsonl`, outJournal.join('\n') + '\n');
-  if (outUsage.length) write(`usage.${label}.jsonl`, outUsage.join('\n') + '\n');
-  for (const q of queues) write(`absorbed/${label}/queues/${q.file}`, renameText(q.text));
-  for (const c of cards) write(c.exists ? `absorbed/${label}/projects/${c.file}` : `projects/${c.file}`, renameText(c.text));
-  for (const r of resources) write(r.exists ? `absorbed/${label}/resources/${r.file}` : `resources/${r.file}`, renameText(r.text));
-  const manifest = { ...plan, absorbedAt: now(), by: a.by, hubdVersion: VERSION };
-  write(`absorbed/${label}/manifest.json`, JSON.stringify(manifest, null, 1) + '\n');
+  // All or nothing. The first field run hit EACCES half-way: absorbed/ had arrived by a root git
+  // pull without group write, the logs were already on disk, and the label counted as used while
+  // the queues and manifest were missing. Every path that will be written is probed first; if a
+  // write still fails, everything written so far is removed before the error surfaces.
+  const written = [];
+  const write = (rel, text) => {
+    const p = path.join(HUB, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text, 'utf8');
+    written.push(p);
+  };
+  try {
+    for (const dir of new Set(plan.writes.map(w => path.dirname(path.join(HUB, w))))) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+    }
+    for (const q of queues) write(`absorbed/${label}/queues/${q.file}`, renameText(q.text));
+    for (const c of cards) write(c.exists ? `absorbed/${label}/projects/${c.file}` : `projects/${c.file}`, renameText(c.text));
+    for (const r of resources) write(r.exists ? `absorbed/${label}/resources/${r.file}` : `resources/${r.file}`, renameText(r.text));
+    if (outEvents.length) write(`tasks.${label}.events.jsonl`, outEvents.join('\n') + '\n');
+    if (outJournal.length) write(`journal.${label}.jsonl`, outJournal.join('\n') + '\n');
+    if (outUsage.length) write(`usage.${label}.jsonl`, outUsage.join('\n') + '\n');
+    const manifest = { ...plan, absorbedAt: now(), by: a.by, hubdVersion: VERSION };
+    write(`absorbed/${label}/manifest.json`, JSON.stringify(manifest, null, 1) + '\n');
+  } catch (e) {
+    for (const p of written.reverse()) { try { fs.unlinkSync(p); } catch {} }
+    try { fs.rmSync(path.join(HUB, 'absorbed', label), { recursive: true, force: true }); } catch {}
+    throw new Error('absorb aborted, nothing kept: ' + (e && e.message ? e.message : e) + ' - fix the permission (the hub dir must be writable by you, including directories a git pull created) and run it again');
+  }
 
   const db = rebuildTaskCache();
   plan.tasksVisible = db.tasks.filter(t => t._origin && t._origin.node === label).length;
