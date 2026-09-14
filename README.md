@@ -140,6 +140,14 @@ is a folder you own. They are two separate things — and that is the whole poin
   no commit can ever clean, and they stop a merge permanently. Since 0.9.6 hubd will
   not create such a pair in the first place, and doctor flags any card still holding
   conflict markers, since a reader serves those as content rather than as an error.
+- **A queue that answers "nothing new" but is not empty.** Delivery advances a per-file cursor,
+  so a cursor this user cannot write stops delivery dead — and it used to look exactly like an
+  idle queue, on both sides: the wait said nothing new, the send said sent. Four live roles held
+  a day of orders that way. Now the wait fails with the file and the fix, `hub doctor` lists such
+  cursors, and a send reports the depth now waiting so a climbing backlog is visible to the sender.
+- **Before you rewrite the hub folder** — `hub freeze "<why>" --by <you>` stops this node's
+  mesh-sync whatever schedules it, `hub unfreeze` releases it, and `hub doctor` will not let you
+  forget it is on.
 - **When a queue conflicts** — append-only by contract, but without union merge two
   sides that both appended do collide. `hub queue resolve` keeps ours in place and
   appends theirs at the end, which leaves every byte cursor in the hub valid.
