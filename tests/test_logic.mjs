@@ -2763,6 +2763,17 @@ fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
   ok(core.journalTail('hub', 5).some(e => /absorbed .* as node planck-agent: 2 task/.test(e.text) && e.agent === 'fleet-orchestrator'), 'absorb: the absorb itself is journaled under the author');
   thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent', apply: true, by: 'x', force: true }); } catch (e) { thrown = e.message; }
   ok(/label already used/.test(thrown || ''), 'absorb: a second absorb under the same label is refused, even forced');
+  // A write that fails half-way leaves nothing behind: the label stays free and no log is on disk.
+  // (Field run: absorbed/ arrived by a root git pull without group write; the logs landed, the queues did not.)
+  if (process.getuid && process.getuid() !== 0) {
+    fs.chmodSync(path.join(AB, 'absorbed'), 0o555);          // as a root git pull leaves it: no group write
+    thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'planck-agent3', apply: true, by: 'x' }); } catch (e) { thrown = e.message; }
+    ok(/aborted, nothing kept/.test(thrown || ''), `absorb: a failed write aborts with a clear message (got ${thrown})`);
+    ok(!fs.existsSync(path.join(AB, 'journal.planck-agent3.jsonl')) && !fs.existsSync(path.join(AB, 'tasks.planck-agent3.events.jsonl')),
+      'absorb: no log of the failed label is left on disk');
+    fs.chmodSync(path.join(AB, 'absorbed'), 0o755);
+    ok(core.runAbsorb({ from: ABSRC, as: 'planck-agent3', apply: true, by: 'x' }).tasksVisible === 2, 'absorb: the same label works once the permission is fixed');
+  }
   const cli = run(`absorb ${ABSRC} --as planck-agent2`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
   ok(cli.code === 0 && /Would absorb .* as node planck-agent2/.test(cli.out) && /UNREAD  barechat-dev.Planck.queue.md: 1 block/.test(cli.out) && /planck-1 -> planck-agent2-1/.test(cli.out),
     `absorb CLI: dry run prints the plan, the unread block and the id map (code ${cli.code})`);
