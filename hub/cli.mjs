@@ -19,7 +19,7 @@ import {
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, caseCollisions,
+  journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb,
@@ -567,6 +567,19 @@ if (cmd === 'doctor') {
       warnings++;
       console.log('            this hub is not receiving the other nodes\' work - the sync is not completing');
       if (mesh.lastError) console.log('            sync says: ' + mesh.lastError);
+    }
+    /* The half only a PEER can see. A node whose pull keeps aborting knows it — its own doctor says
+     * so — and nobody is running its doctor; from here it simply stops appearing in the shared
+     * history. One node sat 77 commits behind on a single card conflict that way. */
+    const quiet = meshNodes();
+    if (quiet.length) {
+      warnings++;
+      console.log('  peers:    ' + quiet.length + ' node(s) have stopped appearing in the mesh  WARNING');
+      for (const n of quiet.slice(0, 5))
+        console.log('            ' + n.node + ': last commit ' + n.lastCommit.slice(0, 16).replace('T', ' ') + ' (' + n.ageHours + 'h ago)');
+      if (quiet.length > 5) console.log('            ... and ' + (quiet.length - 5) + ' more');
+      console.log('            that node is writing locally and not reaching anyone. On it: hub doctor');
+      console.log('            (a conflicted card or queue aborts every pull until a human resolves it)');
     }
   }
   /* Conflict markers are not a broken file to a reader — they are content. A card gets read; a

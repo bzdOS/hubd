@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.22 — 2026-09-14
+
+- **`hub doctor` names the peers that have stopped appearing in the mesh.** Found by running the
+  0.9.21 checks across the fleet: one node had been 77 commits behind for hours because a single
+  card conflict aborted every pull. Its own doctor said so precisely — and nobody runs another
+  machine's doctor. From any other node the evidence was already in the shared history and unread:
+  mesh-sync commits as the node it runs on, so a peer that stops pushing stops appearing. Only real
+  participants are judged (a node that never committed here is an absorbed log or a legacy name, not
+  a machine gone quiet), and only while the mesh itself is moving, so a week nobody worked does not
+  light up every row. Hostname case is matched across the two spellings mesh-sync and the file names
+  use.
+
 ## 0.9.21 — 2026-09-14
 
 - **A broadcast role no longer reports a "pending" that is true for nobody.** Every reader of a
