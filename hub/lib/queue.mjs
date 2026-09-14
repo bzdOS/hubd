@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, touchPresenceIfOwner, withLock } from './core.mjs';
+import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -189,8 +189,10 @@ const readCursor = (offFile) => {
     return { off: parseInt(raw.trim(), 10) || 0, mark: nl === -1 ? null : (raw.slice(nl + 1).trim() || null) };
   } catch { return { off: 0, mark: null }; }
 };
-const writeCursor = (offFile, off, mark) =>
+const writeCursor = (offFile, off, mark) => {
   fs.writeFileSync(offFile, mark ? `${off}\n${mark}\n` : String(off), 'utf8');
+  shareMode(offFile);   // a cursor in a shared hub belongs to the group, or the next user stalls
+};
 
 const BLOCK_HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm;
 const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[m.length - 1] : null; };
@@ -331,6 +333,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
+  shareMode(qfile);          // a queue file another user must append to as well
   // A queue reply is the one write that never touches the journal, and it is exactly how an
   // owner answers a button — so presence would miss the human's most characteristic act.
   touchPresenceIfOwner(sender);
@@ -377,7 +380,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
   // resolveQueueFile, so a waiter never creates a second spelling of a file already here — the
   // other half of the deadlock, and the easier half to miss, since waiting looks read-only.
   const ownFile = resolveQueueFile(qdir, role, nodeName());
-  if (!fs.existsSync(ownFile)) fs.writeFileSync(ownFile, '', 'utf8');
+  if (!fs.existsSync(ownFile)) { fs.writeFileSync(ownFile, '', 'utf8'); shareMode(ownFile); }
 
   // Match <role>.queue.md (legacy) and <role>.<node>.queue.md (per-host). Node
   // names have no dots, so a single optional [^.]+ segment is exact per role.
@@ -402,7 +405,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
       const off = path.join(stateDir, `${f}.offset`);
       if (!fs.existsSync(off)) {
         let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
-        fs.writeFileSync(off, String(size), 'utf8');
+        fs.writeFileSync(off, String(size), 'utf8'); shareMode(off);
       }
     }
   }
@@ -418,6 +421,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
   }
   function writeWaiter() {
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
+    shareMode(waiterFile);
   }
 
   // A marker whose process is gone is litter, not a competitor: the `finally` below only runs on a
@@ -532,6 +536,7 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
   }
   function writeWaiter() {
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
+    shareMode(waiterFile);
   }
 
   try {
