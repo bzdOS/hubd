@@ -1926,12 +1926,17 @@ else if (cmd === 'queue') {
     if (args.includes('--json')) { console.log(JSON.stringify({ roles })); done(0); }
     for (const r of roles) {
       const tag = (r.isButton ? ' 🔘' : '') + (r.fanout ? ' (broadcast)' : '');
-      console.log(`${r.role}${tag}: ${r.total} message(s) — ${r.delivered} delivered, ${r.pending} pending`);
+      console.log(`${r.role}${tag}: ${r.total} message(s) — ` + (r.fanout
+        ? 'delivered PER READER; a broadcast role has no shared position'
+        : `${r.delivered} delivered, ${r.pending} pending`));
       for (const f of r.files) {
-        console.log(`    ${f.node || '(legacy, no node)'}: ${f.total} total, ${f.delivered} delivered, ${f.pending} pending` +
+        console.log(`    ${f.node || '(legacy, no node)'}: ${f.total} total` +
+          (r.fanout ? '' : `, ${f.delivered} delivered, ${f.pending} pending`) +
           (f.cursor === null ? '   no cursor — nobody has ever consumed this file' : `   cursor ${f.cursor}/${f.bytes}B`));
       }
-      for (const rd of r.readers) console.log(`    reader ${rd.subscriber}: ${rd.delivered} delivered`);
+      for (const rd of r.readers)
+        console.log(`    reader ${rd.subscriber}: ${rd.delivered} delivered` +
+          (rd.behind ? `, ${rd.behind} behind` : ''));
     }
     done(0);
   } else if (sub === 'resolve') {
