@@ -12,7 +12,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  HUB, HUB_VIA, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase,
+  HUB, HUB_VIA, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase, JOURNAL_NODE,
   now, parseTs, slugify, sh, cardPath, readCard, digestOf, projectAliases,
   runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
@@ -324,7 +324,10 @@ deviations, test output); the cto appends "## Acceptance".*
 <out of scope; tempting-but-wrong; leave for later>
 `;
 
-const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n.checkins.json\n';
+const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n.checkins.json\n.mesh-freeze\n';
+// Defined here, not next to the freeze command below: `hub doctor` reads it, and a const declared
+// after its reader is a temporal dead zone — doctor crashed on exactly that while this was written.
+const FREEZE_FILE = path.join(HUB, '.mesh-freeze');
 
 /* Until 0.9.4 there was no way to ask hubd its own version, and the omission had a price: the
  * global `hub` on the machine that develops hubd sat nine releases behind for weeks, and reading
@@ -601,6 +604,21 @@ if (cmd === 'doctor') {
     console.log('            committing or stashing cannot clear it - one of each pair must leave the mesh.');
   }
 
+  // A freeze somebody forgot looks exactly like a mesh that works: local writes succeed, nothing
+  // errors, and peers simply never hear from this node again. Stated always, warned about once it
+  // has outlived any plausible operation.
+  if (fs.existsSync(FREEZE_FILE)) {
+    let info = {}; try { info = JSON.parse(fs.readFileSync(FREEZE_FILE, 'utf8')); } catch {}
+    const ageH = info.since ? Math.floor((Date.now() - parseTs(info.since).getTime()) / 3600000) : null;
+    const stale = ageH !== null && ageH >= 6;
+    if (stale) warnings++;
+    console.log('');
+    console.log('mesh: FROZEN' + (stale ? '  WARNING' : '') + ' — this node neither sends nor receives');
+    console.log('  since ' + (info.since || '?') + (ageH !== null ? ' (' + ageH + 'h)' : '') +
+      ' by ' + (info.by || '?') + ': ' + (info.why || 'no reason recorded'));
+    console.log('  hub unfreeze' + (stale ? '   — longer than any operation should take; if the work is done, unfreeze' : ''));
+  }
+
   // team root
   const { root: teamRoot, via: teamVia } = resolveQueueRootInfo();
   console.log('');
@@ -687,6 +705,21 @@ if (cmd === 'doctor') {
        * The caveat is printed, not implied. Cursors and presence are both node-local and never
        * mesh-synced, so this says "nothing HERE took these" — a consumer on another machine is
        * invisible from this one. */
+      /* A cursor this user cannot write: delivery is stopped and every other reading looks fine.
+       * Four live roles held 12-43 KB of undelivered orders for a day this way, while each wait
+       * answered NO_CHANGES and each send answered "delivered" (task macbook-pro-98). First in the
+       * block because it is the only queue condition that is losing work right now. */
+      const stalledQ = queueInventory({ root: teamRoot }).filter(x => x.stalled);
+      if (stalledQ.length) {
+        warnings++;
+        console.log('  ' + stalledQ.length + ' queue cursor(s) THIS USER CANNOT WRITE — delivery is stopped  WARNING');
+        for (const s of stalledQ.slice(0, 6))
+          console.log('    ' + s.file + ' (' + s.stalled + ')' + (s.messages ? ': ' + s.messages + ' message(s) in the file' : ''));
+        if (stalledQ.length > 6) console.log('    ... and ' + (stalledQ.length - 6) + ' more');
+        console.log('    a wait on these roles can only answer NO_CHANGES; nothing sent to them will ever arrive.');
+        console.log('    hint: fix ownership of ' + path.join(teamRoot, '.qstate') + ' — on a fleet node the hub dir is shared,');
+        console.log('          so: chgrp -R <group> "' + teamRoot + '" && chmod -R g+rwX "' + teamRoot + '"');
+      }
       /* Queue files trimmed outside hubd. Legitimate — the files had grown past fifteen thousand
        * lines and hubd offers no compaction — but until 0.9.9 a trim silently re-delivered
        * everything that survived it, because a shrunken file reset the cursor to zero. The
@@ -1198,6 +1231,7 @@ if (cmd === 'presence') {
     const where = p.observedOn ? (p.live ? '' : '←' + p.observedOn) : '';
     const also = p.alsoOn && p.alsoOn.length ? ' +' + [...new Set(p.alsoOn)].join(',') : '';
     console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}  ${where}${also}`);
+    if (p.elsewhere) console.log(`      ⚠ writes into ${p.elsewhere}, not this hub — same machine, two hubs`);
   }
   console.log(`(${data.agents.length} agents, generated ${data.generated})`);
   done(0);
@@ -1208,6 +1242,48 @@ if (cmd === 'presence') {
  * prose hunks are left alone and named, because if both sides rewrote a digest, one of them
  * meant to replace the other and choosing would be inventing a decision. Exits non-zero while
  * anything is left, so a script cannot mistake a partial resolution for a finished one. */
+/* freeze/unfreeze: the stop-cock for the mesh on THIS node.
+ *
+ * Every dangerous operation on a hub directory — a purge, a history rewrite, an absorb, a restore —
+ * starts with "stop the sync first", and until now that meant remembering which of launchd, cron and
+ * two systemd timers this particular node uses, under time pressure. Twice it was not remembered,
+ * and a sync mid-operation spread a half-finished state to every peer.
+ *
+ * Node-local and gitignored on purpose: you freeze the machine you are about to work on. A
+ * mesh-wide freeze would have to travel by sync, and unfreezing would then need the sync it just
+ * stopped. The marker records who, when and why, because a freeze somebody forgot is itself a
+ * silent stall — `hub doctor` reports it, and after six hours calls it a warning. */
+if (cmd === 'freeze' || cmd === 'unfreeze') {
+  if (cmd === 'unfreeze') {
+    if (!fs.existsSync(FREEZE_FILE)) { console.log('Not frozen — mesh-sync on this node is running normally.'); done(0); }
+    let info = {}; try { info = JSON.parse(fs.readFileSync(FREEZE_FILE, 'utf8')); } catch {}
+    fs.unlinkSync(FREEZE_FILE);
+    console.log('Unfrozen. mesh-sync runs again on its next tick' +
+      (info.since ? ' (was frozen since ' + info.since + (info.by ? ' by ' + info.by : '') + ')' : '') + '.');
+    console.log('Run it once now to catch up:  sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"');
+    done(0);
+  }
+  let pos; try { pos = positionals(1, { values: ['--by'], booleans: [] }); } catch (e) { die(e.message); }
+  const why = pos.join(' ').trim();
+  if (!why) die('say why: hub freeze "purging duplicate queue blocks" --by dev-hubd\n' +
+    '  the reason is what tells the next person (or the next you) whether it is safe to unfreeze.');
+  const by = getFlag('--by') || process.env.HUBD_AGENT || null;
+  if (!by) die('--by required (or set HUBD_AGENT): a freeze stops every peer from receiving this node\'s work.');
+  if (fs.existsSync(FREEZE_FILE)) {
+    let info = {}; try { info = JSON.parse(fs.readFileSync(FREEZE_FILE, 'utf8')); } catch {}
+    console.log('Already frozen since ' + (info.since || '?') + ' by ' + (info.by || '?') + ': ' + (info.why || '?'));
+    console.log('Leaving that one in place — hub unfreeze when the work is done.');
+    done(0);
+  }
+  fs.writeFileSync(FREEZE_FILE, JSON.stringify({ by, why, since: now(), node: JOURNAL_NODE, pid: process.pid }, null, 1) + '\n', 'utf8');
+  console.log('Frozen: mesh-sync on this node will skip every run until you unfreeze.');
+  console.log('  ' + FREEZE_FILE);
+  console.log('Local writes still work and stay local. Back up before you touch anything:');
+  console.log('  tar czf ~/hub-backup-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.tgz -C "' + path.dirname(HUB) + '" "' + path.basename(HUB) + '"');
+  console.log('Other writers on this directory are NOT stopped by this — check them too:  hub doctor');
+  done(0);
+}
+
 // absorb: fold a hub base written in isolation into this one, as a new node. Dry run by default —
 // the plan (id map, unread queue blocks, cards kept aside) is the thing to read before --apply.
 if (cmd === 'absorb') {
@@ -1943,6 +2019,8 @@ else if (!cmd) {
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
     '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
+    '  freeze "<why>" --by <you>        stop mesh-sync on THIS node before operating on the hub dir',
+    '  unfreeze                         let it sync again',
     '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
     '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
     '  resource get <slug>              one resource + its in/out relationships',

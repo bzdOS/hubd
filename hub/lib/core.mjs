@@ -2072,6 +2072,24 @@ export function envChecks({ session, transport } = {}) {
     }
   }
 
+  /* Can this process write its own hub at all. A shared fleet hub is written by several users
+   * (roles under one account, mesh-sync under root), and a directory that arrives through a git
+   * pull carries the puller's ownership — so an agent can find itself able to READ everything and
+   * write nothing, which every command then reports as an empty, healthy hub. Cheap: one access
+   * check per top-level directory, and only the unwritable ones are named. */
+  const unwritable = [];
+  for (const d of [HUB, PROJ, RESOURCES, PRESENCE, path.join(HUB, 'queues'), path.join(HUB, '.qstate')]) {
+    if (!fs.existsSync(d)) continue;
+    try { fs.accessSync(d, fs.constants.W_OK); } catch { unwritable.push(d); }
+  }
+  if (unwritable.length) {
+    out.push({
+      id: 'hub-not-writable', severity: 'high', actor: 'operator',
+      what: `This process cannot write ${unwritable.length === 1 ? 'a directory' : 'directories'} of its own hub: ${unwritable.join(', ')}. Reads succeed, so the hub looks healthy while nothing you write is kept — and a queue whose cursor cannot be advanced answers "nothing new" forever.`,
+      remedy: `Fix the ownership of the hub directory for the user this process runs as. On a shared fleet node: chgrp -R <group> "${HUB}" && chmod -R g+rwX "${HUB}". Directories created by a git pull as another user are the usual source.`,
+    });
+  }
+
   const st = readEnvState();
   const conflicted = ((st.observations || {})['cursor-conflict'] || {}).values || [];
   if (conflicted.length) {
@@ -4015,10 +4033,21 @@ export function presenceSnapshots() {
 export function runHeartbeat(a) {
   const agent = a && a.agent;
   if (!agent) throw new Error('agent required');
+  /* Which hub this agent is actually writing to, resolved through symlinks.
+   *
+   * A fleet split does not announce itself: roles configured with a different hub path keep
+   * heartbeating, keep reporting, keep closing tasks — into a directory nobody else reads. Seen
+   * for a full day across five roles (tasks macbook-pro-88, -96), and the way it was finally
+   * noticed was a human comparing directories by hand. A heartbeat that carries its own base
+   * makes the split a line in `hub presence` instead: a record whose hub differs from the reader's
+   * is either a second hub or a misrouted role, and both are worth knowing within the minute.
+   * realpath, because /home/agent/.hubd and /srv/fleet/hubd are routinely the same directory. */
+  let hubReal = HUB;
+  try { hubReal = fs.realpathSync(HUB); } catch {}
   const rec = {
     agent, role: a.role || null, status: a.status || null,
     task_id: (a.task_id ?? null), cwd: a.cwd || null,
-    node: JOURNAL_NODE, last_seen: now(), ttlMin: a.ttlMin ?? 15,
+    node: JOURNAL_NODE, hub: hubReal, last_seen: now(), ttlMin: a.ttlMin ?? 15,
   };
   fs.mkdirSync(PRESENCE, { recursive: true });
   atomicWrite(presencePath(agent), rec);
@@ -4062,7 +4091,14 @@ export function runPresence(a = {}) {
       cur.alsoOn = [...(cur.alsoOn || []), r.observedOn];
     }
   }
-  let list = [...best.values()].map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs) }));
+  let hubReal = HUB;
+  try { hubReal = fs.realpathSync(HUB); } catch {}
+  // elsewhere = an agent ON THIS NODE heartbeats into a different hub directory than the one being
+  // read: same machine, two hubs, which is the split itself. Compared only within this node on
+  // purpose — every remote node legitimately has its own path, and flagging those would be noise
+  // that teaches a reader to skip the line. Silent for pre-0.9.20 records, which carry no path.
+  let list = [...best.values()].map(rec => ({ ...rec, alive: presenceAlive(rec, nowMs),
+    ...(rec.hub && rec.node === JOURNAL_NODE && rec.hub !== hubReal ? { elsewhere: rec.hub } : {}) }));
   if (a.role) list = list.filter(r => r.role === a.role);
   if (a.aliveOnly) list = list.filter(r => r.alive);
   // "Who is here" — by working directory or by the project a cwd resolves to. Through the same

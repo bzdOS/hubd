@@ -16,7 +16,7 @@ import {
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
   runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -419,8 +419,15 @@ const DISPATCH = {
     // mistyped id is a warning the caller can act on immediately.
     let taskKnown;
     if (a.task != null && a.task !== '') { try { runTaskGet({ id: a.task }); taskKnown = true; } catch { taskKnown = false; } }
-    return { file: queueSend(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task }),
-      ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }) };
+    const file = queueSend(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task });
+    // What is actually WAITING for this role, after the append. "Sent" says the write happened; it
+    // never said whether anything is reading, and a sender read it as "delivered" — while four
+    // roles sat on a day of undelivered orders (task macbook-pro-98). A depth that keeps climbing
+    // is the sender's own evidence that nobody is consuming.
+    const depth = (() => { try { return peekQueueDepth(a.role, { root: teamRoot() }); } catch { return null; } })();
+    return { file, ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }),
+      ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting,
+        ...(depth.pending > 1 ? { note: `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. If this keeps climbing, nothing is consuming: check the role is waiting and run hub doctor on its node for a stalled cursor.` } : {}) } : {}) };
   },
   // subscriber: resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown

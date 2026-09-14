@@ -219,6 +219,44 @@ function offsetAfterShrink(text, mark) {
   return Buffer.byteLength(after === -1 ? text : text.slice(0, after + 1), 'utf8');
 }
 
+/* A cursor this consumer cannot WRITE is the one failure that used to look exactly like an empty
+ * queue. Measured 2026-09-14 across four live roles: 12 KB, 27 KB, 43 KB of orders sat undelivered
+ * for a day while every wait answered NO_CHANGES and every send answered "delivered" (task
+ * macbook-pro-98). The mechanism: mesh-sync runs as root on the fleet nodes, a root-run hub command
+ * leaves a root-owned .qstate/<file>.offset behind, and the role — a different user — then fails to
+ * write it. drainFile caught THAT the same way it caught a busy lock, and a busy lock is the only
+ * error where "skip this poll, retry next" is the right answer.
+ *
+ * Two changes, and the second is the one that matters. A non-transient error is now raised instead
+ * of swallowed, AND queueWait checks writability BEFORE it blocks — so the stall is reported when
+ * the queue is still empty, not first discovered by the message that gets lost. */
+export class QueueStalled extends Error {
+  constructor(file, cause) {
+    super(`queue cursor for ${path.basename(file)} cannot be written (${cause && cause.code ? cause.code : cause}): ` +
+      `messages cannot be delivered and would be silently held forever. ` +
+      `Fix the owner/permissions of ${file} and its directory (on a fleet node: chgrp -R <group> and chmod -R g+rwX over the hub dir), then retry.`);
+    this.name = 'QueueStalled';
+    this.file = file;
+    this.code = cause && cause.code;
+  }
+}
+
+/** Can this process advance these cursors? Returns the unwritable ones — never throws. */
+export function cursorStalls(stateDir, files) {
+  const out = [];
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.accessSync(stateDir, fs.constants.W_OK);
+  } catch (e) { return [{ file: stateDir, code: e.code || 'EACCES' }]; }
+  for (const f of files) {
+    const offFile = path.join(stateDir, `${f}.offset`);
+    if (!fs.existsSync(offFile)) continue;            // absent is fine: it will be created in a writable dir
+    try { fs.accessSync(offFile, fs.constants.W_OK); }
+    catch (e) { out.push({ file: offFile, code: e.code || 'EACCES' }); }
+  }
+  return out;
+}
+
 function drainFile(qdir, stateDir, f) {
   const offFile = path.join(stateDir, `${f}.offset`);
   const full = path.join(qdir, f);
@@ -242,7 +280,11 @@ function drainFile(qdir, stateDir, f) {
       writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
       return chunk.trim() || null;
     });
-  } catch { return null; }                            // lock busy — skip this poll, retry next
+  } catch (e) {
+    // A contended lock is the ONE transient case: skip this file for this poll, retry next.
+    if (e && /hub busy/.test(String(e.message))) return null;
+    throw new QueueStalled(offFile, e);
+  }
 }
 
 /**
@@ -378,6 +420,15 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
   }
 
+  // A marker whose process is gone is litter, not a competitor: the `finally` below only runs on a
+  // clean exit, so every killed session (a fleet respawn, a client restart) left one behind. Six sat
+  // on two nodes on 2026-09-14, and each new waiter reported a conflict that did not exist. Clear it
+  // here — the only place that already knows whether the pid is alive.
+  try {
+    const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
+    if (w.pid !== process.pid && !pidAlive(w.pid)) { try { fs.unlinkSync(waiterFile); } catch {} }
+  } catch { /* no marker or unreadable — fine */ }
+
   // Single-consumer guard: warn if a fresh, live competing waiter exists.
   try {
     const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
@@ -391,21 +442,37 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
     }
   } catch { /* no marker or unreadable — fine */ }
 
+  // Before blocking, not after: a consumer that cannot advance its cursors would otherwise sit in a
+  // long-poll that can only ever answer NO_CHANGES, and the first message to arrive would be the one
+  // that discovers it — by being lost. Checked every call, because ownership changes underneath a
+  // long-lived waiter (a root-run command, a git pull as another user).
+  {
+    const bad = cursorStalls(stateDir, sourceFiles());
+    if (bad.length) throw new QueueStalled(bad[0].file, { code: bad[0].code });
+  }
+
   writeWaiter();
   try {
     const deadline = Date.now() + timeout * 1000;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const parts = [];
+      const stalled = [];
       for (const f of sourceFiles()) {
-        const t = drainFile(qdir, stateDir, f);
+        let t = null;
+        // One unreadable cursor must not hide the files that ARE deliverable — but it is
+        // reported either way, never swallowed.
+        try { t = drainFile(qdir, stateDir, f); }
+        catch (e) { if (e && e.name === 'QueueStalled') { stalled.push(e); continue; } throw e; }
         if (t) parts.push(t);
       }
       if (parts.length) {
         const text = parts.join('\n').trim();
         const tasks = parseTaskRefs(text);
-        return { changed: true, text, ...(tasks.length ? { tasks } : {}) };
+        return { changed: true, text, ...(tasks.length ? { tasks } : {}),
+          ...(stalled.length ? { stalled: stalled.map(s => ({ file: s.file, code: s.code })) } : {}) };
       }
+      if (stalled.length) throw stalled[0];
       if (Date.now() >= deadline) return { changed: false };
 
       writeWaiter();
@@ -469,10 +536,16 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
 
   try {
     const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
-    if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
+    if (w.pid !== process.pid && !pidAlive(w.pid)) { try { fs.unlinkSync(waiterFile); } catch {} }
+    else if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
       process.stderr.write(`warning: another all-queues waiter (pid ${w.pid}) is active\n`);
     }
   } catch { /* no marker or unreadable — fine */ }
+
+  {
+    const bad = cursorStalls(stateDir, sourceFiles());
+    if (bad.length) throw new QueueStalled(bad[0].file, { code: bad[0].code });
+  }
 
   writeWaiter();
   try {
@@ -480,15 +553,19 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const events = [];
+      const stalled = [];
       for (const f of sourceFiles()) {
-        const t = drainFile(qdir, stateDir, f);
+        let t = null;
+        try { t = drainFile(qdir, stateDir, f); }
+        catch (e) { if (e && e.name === 'QueueStalled') { stalled.push(e); continue; } throw e; }
         if (t) {
           const { role, node } = parseFile(f);
           const tasks = parseTaskRefs(t);
           events.push({ role, node, text: t, ...(tasks.length ? { tasks } : {}) });
         }
       }
-      if (events.length) return { changed: true, events };
+      if (events.length) return { changed: true, events, ...(stalled.length ? { stalled: stalled.map(s => ({ file: s.file, code: s.code })) } : {}) };
+      if (stalled.length) throw stalled[0];
       if (Date.now() >= deadline) return { changed: false };
 
       writeWaiter();
@@ -714,7 +791,12 @@ export function queueInventory({ root, days = 30 } = {}) {
     const lastSeen = presence.filter(p => p.role === role).map(p => p.last_seen).sort().pop() || null;
     const read = queueCursorSeen(r, f);
     const isOwner = owners.has(role);
+    // A cursor this user cannot write stops delivery dead while every other number here looks
+    // healthy — so it is measured where the numbers are read, not only where a wait would trip
+    // over it (task macbook-pro-98).
+    const stalled = cursorStalls(path.join(r, '.qstate'), [f]).map(s => s.code)[0] || null;
     return { file: f, role, node, bytes, messages: heads.length, newest, ageDays, read, lastSeen, isOwner,
+      ...(stalled ? { stalled } : {}),
       ghost: !read && !lastSeen && !isOwner && ageDays >= days };
   });
 }

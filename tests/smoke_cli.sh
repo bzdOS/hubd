@@ -345,6 +345,22 @@ OUT15B=$($CLI doctor 2>&1)
 echo "$OUT15B" | grep -q "path:     $HUBD_DIR  (via env HUBD_DIR)"
 check "team dir: HUBD_DIR still wins when both are set" $?
 
+# ── Case 16: freeze is the stop-cock, and a forgotten one is not silent ────
+
+OUT16=$($CLI freeze 2>&1); RC16=$?
+[ "$RC16" -ne 0 ] && echo "$OUT16" | grep -q "say why"
+check "freeze: refused without a reason" $?
+OUT16B=$($CLI freeze "purge duplicate blocks" --by dev-smoke 2>&1); RC16B=$?
+[ "$RC16B" -eq 0 ] && [ -f "$HUBD_DIR/.mesh-freeze" ]
+check "freeze: writes the marker mesh-sync looks for" $?
+(cd "$TMP/team" && $CLI doctor 2>&1 | grep -q "mesh: FROZEN")
+check "freeze: doctor states it, so a forgotten freeze is visible" $?
+HUBD_DIR="$HUBD_DIR" sh "$REPO/scripts/mesh-sync.sh" 2>&1 | grep -q "FROZEN"
+check "freeze: mesh-sync skips the run and says why" $?
+OUT16C=$($CLI unfreeze 2>&1); RC16C=$?
+[ "$RC16C" -eq 0 ] && [ ! -f "$HUBD_DIR/.mesh-freeze" ] && echo "$OUT16C" | grep -q "Unfrozen"
+check "unfreeze: removes it and says the mesh runs again" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"

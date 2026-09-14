@@ -4,6 +4,47 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.20 — 2026-09-14
+
+One theme: a hub that cannot do its job must say so, instead of looking idle.
+
+- **A queue cursor that cannot be written no longer reads as an empty queue.** Measured across four
+  live fleet roles: 12, 27 and 43 KB of orders undelivered for a day, while every wait answered
+  NO_CHANGES, every send answered "delivered", and every role logged "queue empty" (task
+  macbook-pro-98). Delivery advances a per-file byte cursor; on a shared hub a command run by
+  another user leaves that cursor owned by them, and `drainFile` caught the resulting EACCES the
+  same way it caught a busy lock — the one error where "skip this poll, retry next" is right. Now
+  only a contended lock is transient: anything else raises `QueueStalled`, naming the file, what it
+  costs and the command that fixes it. `queueWait` checks writability BEFORE it blocks, so the stall
+  is reported while the queue is still empty rather than discovered by the message that gets lost;
+  one broken cursor no longer hides the roles that are fine (they deliver, with `stalled` alongside);
+  `hub doctor` lists such cursors first among the queue checks; and `hub_queue_send` returns the
+  depth now waiting, so a sender sees a backlog that is climbing instead of trusting "sent".
+  The request in the task — drain the backlog before entering the long-poll — was already the
+  behaviour since the first release; it was never the cause.
+- **A waiter marker whose process is gone is cleared.** The `finally` that removes it only runs on a
+  clean exit, so every killed session left one behind; six were found on two nodes, each making the
+  next waiter report a conflict that did not exist.
+- **`hub freeze "<why>" --by <you>` / `hub unfreeze`.** Every dangerous operation on a hub directory
+  starts with "stop the sync first", which meant remembering which of launchd, cron or a systemd
+  timer this node uses, under time pressure — twice it was not remembered. The marker is node-local
+  and gitignored (a mesh-wide freeze would have to travel by the sync it just stopped). `hub doctor`
+  states the freeze, and calls it a warning after six hours, because a freeze somebody forgot is a
+  node that silently stopped syncing.
+- **mesh-sync keeps a shared hub writable, and refuses a deleted log.** On a fleet node the sync runs
+  as root and the roles run as someone else, so every directory a pull creates locks them out — the
+  source of the stall above. After any pull that changed something, group write is restored over a
+  hub that is itself group-writable; a private hub is untouched. And the append-only guard now covers
+  deletion: it read diffs, and a file that is gone has no diff, so removing `journal.<node>.jsonl` or
+  a queue file passed straight through to every peer (exit 4, naming `hub queue gc --apply` as the
+  way to retire a queue properly).
+- **A heartbeat records which hub it was written into**, resolved through symlinks. Two roles on one
+  machine writing into two hubs was invisible for a day, twice (tasks macbook-pro-88, -96), and was
+  found by a human comparing directories. `hub presence` now flags an agent on this node whose
+  records go elsewhere; records from other nodes are not flagged, since every node legitimately has
+  its own path. `hub doctor` and `hub_whatsnew` also report a hub directory this process cannot write
+  — the condition under which everything reads healthy and nothing you write is kept.
+
 ## 0.9.19 — 2026-09-12
 
 - **`hub absorb` is all-or-nothing.** Its first field run stopped half-way with `EACCES`: the

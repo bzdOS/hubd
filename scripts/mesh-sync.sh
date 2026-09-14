@@ -25,6 +25,16 @@
 #     conflict, and telling a human to "resolve it by hand" sends them to fix nothing. Exit
 #     5 is that case — local changes, or two paths differing only by case, which no
 #     case-insensitive filesystem can hold. Exit 2 stays for a genuine content clash.
+#   * A DELETED LOG IS ALSO NOT APPEND-ONLY (exit 4). The guard above reads diffs, and a file
+#     that is gone has no diff to read. Removing journal.<node>.jsonl or a queue file deletes
+#     history for every peer on the next push, which is the same damage by a different route.
+#   * KEEP A SHARED HUB WRITABLE (after pull). On a fleet node the hub is one directory used by
+#     several users — roles under one account, this script under root. Whatever a pull creates
+#     belongs to the user running the pull, so a root-run sync silently locks the roles out of
+#     new directories and out of .git. The symptom is not an error: a role reads everything,
+#     writes nothing, and its queue answers "nothing new" forever (task macbook-pro-98). So when
+#     the hub dir is itself group-writable — the mark of a shared hub — group write is restored
+#     over the tree after any pull that changed something. A private hub is left untouched.
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
@@ -64,6 +74,12 @@ fi
 
 DIR="${HUBD_DIR:-$HOME/.hubd}"
 cd "$DIR" 2>/dev/null || { echo "mesh-sync: missing $DIR" >&2; exit 1; }
+# FROZEN before anything else, including the repo check: a freeze means "do nothing to this
+# directory", and that answer does not depend on how the directory is configured.
+if [ -f "$DIR/.mesh-freeze" ]; then
+  echo "mesh-sync: FROZEN — skipping ($DIR/.mesh-freeze). Run: hub unfreeze"
+  exit 0
+fi
 [ -d .git ] || { echo "mesh-sync: $DIR is not a git repo" >&2; exit 1; }
 
 NODE="$(hostname 2>/dev/null | cut -d. -f1)"; [ -n "$NODE" ] || NODE=node
@@ -82,6 +98,26 @@ if git diff HEAD -- '*.events.jsonl' 2>/dev/null | grep -E '^-[^-]' | grep -q .;
   exit 4
 fi
 
+DELETED_LOGS="$(git diff --name-only --diff-filter=D HEAD -- '*.jsonl' '*.queue.md' 2>/dev/null)"
+if [ -n "$DELETED_LOGS" ]; then
+  echo "mesh-sync: REFUSED — an append-only log file was DELETED, not appended to:" >&2
+  printf '    %s\n' $DELETED_LOGS >&2
+  echo "  Committing this would remove that history from every peer on the next push." >&2
+  echo "  Restore it, then re-sync:" >&2
+  echo "    git -C \"$DIR\" checkout -- $(printf '%s ' $DELETED_LOGS)" >&2
+  echo "  (Retiring a queue on purpose? hub queue gc --apply MOVES it to queues/archive/ instead.)" >&2
+  exit 4
+fi
+
+# Restore group write over a SHARED hub after a pull created files as this user. Only when the
+# hub dir carries the group-write bit itself; a private hub keeps its own modes. Both chmods are
+# idempotent, so a run that changed nothing costs one find.
+share_perms() {
+  [ -n "$(find . -maxdepth 0 -perm -g+w 2>/dev/null)" ] || return 0
+  chmod -R g+rwX . 2>/dev/null || true
+  find . -type d ! -perm -g+s -exec chmod g+s {} + 2>/dev/null || true
+}
+
 # 1. commit local hub writes, if any
 if [ -n "$(git status --porcelain)" ]; then
   git add -A
@@ -90,6 +126,7 @@ fi
 
 # 2. exchange with upstream, if one is configured (the always-on hub has none)
 if git remote | grep -qx origin; then
+  HEAD_BEFORE="$(git rev-parse HEAD 2>/dev/null)"
   # identity injected on the pull too: the merge commit needs a committer, and a
   # node may have no global git user set (fedora hit exactly this — reported as a
   # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
@@ -117,6 +154,7 @@ if git remote | grep -qx origin; then
         exit 2 ;;
     esac
   fi
+  [ "$HEAD_BEFORE" = "$(git rev-parse HEAD 2>/dev/null)" ] || share_perms
   g push -q origin "$BR" || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
 fi
 echo "mesh-sync: ok ($NODE $STAMP, $BR)"

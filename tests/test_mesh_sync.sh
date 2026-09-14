@@ -106,6 +106,40 @@ git -C "$TMP/a" add -A && git -C "$TMP/a" -c user.name=t -c user.email=t@t commi
 HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out4" 2>&1; rc=$?
 ok "$([ $rc -eq 4 ] && echo 1 || echo 0)" "append-only: a truncated event log still refuses with 4 (got $rc)"
 
+git -C "$TMP/a" checkout -q -- . 2>/dev/null
+
+# ── exit 4: a DELETED log file is the same damage by another route ────────────
+rm -f "$TMP/a/journal.seed.jsonl"
+HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out6" 2>&1; rc=$?
+ok "$([ $rc -eq 4 ] && echo 1 || echo 0)" "deleted log: removing an append-only log refuses with 4 (got $rc)"
+ok "$(grep -q 'journal.seed.jsonl' "$TMP/out6" && echo 1 || echo 0)" "deleted log: the refusal names the file"
+ok "$(grep -q 'queue gc --apply' "$TMP/out6" && echo 1 || echo 0)" "deleted log: and points at the operation that retires a queue properly"
+git -C "$TMP/a" checkout -q -- . 2>/dev/null
+
+# ── a shared hub stays group-writable after a pull ────────────────────────────
+# The fleet case: this script runs as root, the roles run as another user in the group. Anything
+# a pull creates is the puller's, and a role then reads everything and writes nothing.
+mkhub "$TMP/origin3"; git -C "$TMP/origin3" config receive.denyCurrentBranch ignore
+git clone -q "$TMP/origin3" "$TMP/s"; chmod 2775 "$TMP/s"
+mkdir -p "$TMP/origin3/queues" && printf 'x\n' > "$TMP/origin3/queues/r.n.queue.md"
+git -C "$TMP/origin3" add -A && git -C "$TMP/origin3" -c user.name=t -c user.email=t@t commit -q -m q
+HUBD_DIR="$TMP/s" sh "$SCRIPT" >"$TMP/out7" 2>&1
+gw() {   # gw <path> -> 1 when the group-write bit is set
+  case "$(ls -ld "$1" | cut -c1-10)" in
+    ?????w*) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+perm=$(ls -ld "$TMP/s/queues" | cut -c1-10)
+ok "$(gw "$TMP/s/queues")" "shared hub: a directory the pull created is group-writable ($perm)"
+ok "$(gw "$TMP/s/queues/r.n.queue.md")" "shared hub: so is the file in it"
+# A private hub is left exactly as it was.
+git clone -q "$TMP/origin3" "$TMP/p"; chmod 700 "$TMP/p"
+printf 'y\n' > "$TMP/origin3/queues/r2.n.queue.md"
+git -C "$TMP/origin3" add -A && git -C "$TMP/origin3" -c user.name=t -c user.email=t@t commit -q -m q2
+HUBD_DIR="$TMP/p" sh "$SCRIPT" >"$TMP/out8" 2>&1
+ok "$([ "$(gw "$TMP/p")" = 0 ] && echo 1 || echo 0)" "private hub: modes are not touched"
+
 echo ""
 echo "$pass pass, $fail fail"
 [ "$fail" -eq 0 ] || exit 1

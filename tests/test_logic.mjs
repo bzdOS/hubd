@@ -1760,6 +1760,44 @@ const qtWait = await q.queueWait('worker', { timeout: 1, root: QT });
 ok(qtWait.changed && qtWait.tasks && qtWait.tasks[0] === 'planck-3',
   'queue task ref: the consumer is told which task the message is about');
 
+/* ── a cursor that cannot be written must be LOUD, never "nothing new" ──
+ * Field measurement 2026-09-14 (task macbook-pro-98): four live roles, 12-43 KB of orders each,
+ * undelivered for a day. Every wait answered NO_CHANGES, every send answered delivered, every role
+ * logged "queue empty". Cause: a root-run command left a root-owned cursor and the role — another
+ * user — could not advance it, which drainFile caught exactly like a busy lock. */
+if (process.getuid && process.getuid() !== 0) {
+  const QS = mktmp();
+  fs.mkdirSync(path.join(QS, 'queues'), { recursive: true });
+  fs.mkdirSync(path.join(QS, '.qstate'), { recursive: true });
+  core.setHubBase(QS);
+  q.queueSend('stuck', 'order one', { from: 'orch', root: QS, node: 'n1' });
+  ok((await q.queueWait('stuck', { timeout: 1, root: QS })).changed, 'stall: setup — the first order is delivered normally');
+  q.queueSend('stuck', 'order two, sent while the cursor is read-only', { from: 'orch', root: QS, node: 'n1' });
+  const offFile = path.join(QS, '.qstate', 'stuck.n1.queue.md.offset');
+  fs.chmodSync(offFile, 0o444);
+  let stallErr = null;
+  try { await q.queueWait('stuck', { timeout: 1, root: QS }); } catch (e) { stallErr = e; }
+  ok(stallErr && stallErr.name === 'QueueStalled',
+    `stall: a wait on an unwritable cursor throws instead of reporting NO_CHANGES (got ${stallErr ? stallErr.name : 'no error'})`);
+  ok(stallErr && /silently held forever/.test(stallErr.message) && /chmod/.test(stallErr.message),
+    'stall: the error says what it costs and how to fix it');
+  ok(q.queueInventory({ root: QS }).find(x => x.file === 'stuck.n1.queue.md').stalled === 'EACCES',
+    'stall: the inventory doctor reads carries it too, so it is visible without waiting');
+  // A second role in the same hub stays deliverable: one broken cursor must not hide the rest.
+  q.queueSend('fine', 'unrelated order', { from: 'orch', root: QS, node: 'n1' });
+  const okRole = await q.queueWait('fine', { timeout: 1, root: QS });
+  ok(okRole.changed && /unrelated order/.test(okRole.text), 'stall: another role in the same hub still delivers');
+  fs.chmodSync(offFile, 0o644);
+  const recovered = await q.queueWait('stuck', { timeout: 1, root: QS });
+  ok(recovered.changed && /order two/.test(recovered.text), 'stall: once writable, the held order is delivered — nothing was lost');
+  // A marker left by a process that is gone is litter, and it used to stay forever.
+  const waiter = path.join(QS, '.qstate', 'stuck.waiter');
+  fs.writeFileSync(waiter, JSON.stringify({ pid: 999999, since: new Date().toISOString() }));
+  await q.queueWait('stuck', { timeout: 1, root: QS });
+  ok(!fs.existsSync(waiter), 'stall: a waiter marker whose process is dead is cleared, not reported as a competitor');
+  fs.rmSync(QS, { recursive: true, force: true });
+}
+
 // ── delivered vs pending, across hosts, in one answer ──
 const QL = mktmp();
 fs.mkdirSync(path.join(QL, 'queues'), { recursive: true });
@@ -2688,6 +2726,40 @@ fs.writeFileSync(path.join(ML, 'journal.old-2026-07.jsonl'), mlGood(3) + '\nojec
 ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
+
+// ── a heartbeat says which hub it was written into ──
+// Two roles on one machine writing to two hubs was invisible for a day twice (macbook-pro-88, -96):
+// everything kept working, into a directory nobody else read.
+{
+  const HB = mktmp();
+  core.setHubBase(HB);
+  core.runHeartbeat({ agent: 'role-a', role: 'w', status: 'working' });
+  const recPath = fs.readdirSync(path.join(HB, 'presence')).map(f => path.join(HB, 'presence', f))[0];
+  const rec = JSON.parse(fs.readFileSync(recPath, 'utf8'));
+  ok(rec.hub === fs.realpathSync(HB), `heartbeat: the record names the hub it was written into (got ${rec.hub})`);
+  ok(!core.runPresence().agents.find(a => a.agent === 'role-a').elsewhere,
+    'presence: a role writing into THIS hub is not flagged');
+  fs.writeFileSync(recPath, JSON.stringify({ ...rec, hub: '/home/agent/.hubd' }));
+  const split = core.runPresence().agents.find(a => a.agent === 'role-a');
+  ok(split.elsewhere === '/home/agent/.hubd', `presence: a role on this node writing elsewhere is flagged (got ${split.elsewhere})`);
+  fs.writeFileSync(recPath, JSON.stringify({ ...rec, hub: '/srv/other', node: 'someone-else' }));
+  ok(!core.runPresence().agents.find(a => a.agent === 'role-a').elsewhere,
+    'presence: a record from ANOTHER node is not flagged — every node legitimately has its own path');
+  fs.writeFileSync(recPath, JSON.stringify({ ...rec, hub: undefined }));
+  ok(!core.runPresence().agents.find(a => a.agent === 'role-a').elsewhere,
+    'presence: a pre-0.9.20 record with no path is silent rather than guessed about');
+  // A hub this process cannot write reads as healthy and keeps nothing.
+  if (process.getuid && process.getuid() !== 0) {
+    fs.chmodSync(path.join(HB, 'projects'), 0o555);
+    const env = core.envChecks({ transport: 'stdio' });
+    const item = env.items.find(i => i.id === 'hub-not-writable');
+    ok(item && item.severity === 'high' && /projects/.test(item.what), 'envChecks: an unwritable hub directory is a high-severity finding');
+    ok(item && /chmod -R g\+rwX/.test(item.remedy), 'envChecks: with the command that fixes a shared fleet hub');
+    fs.chmodSync(path.join(HB, 'projects'), 0o755);
+    ok(!core.envChecks({ transport: 'stdio' }).items.find(i => i.id === 'hub-not-writable'), 'envChecks: and it clears itself');
+  }
+  fs.rmSync(HB, { recursive: true, force: true });
+}
 
 // ── absorb: a hub base written in isolation joins this one as a new node ──
 // Real incident (task macbook-pro-96): roles wrote to a private ~/.hubd for a day; its planck-1..23
