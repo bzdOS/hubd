@@ -155,10 +155,36 @@ function releaseLock(lock) {
   try { fs.unlinkSync(lock); } catch {}
 }
 
+/* A file in a SHARED directory must be writable by the group that shares it.
+ *
+ * On a fleet node one hub directory is written by several users — the roles under one account, the
+ * sync under another, an operator under a third. The directory is group-writable and setgid, so
+ * everyone can create files in it; but a file created with the default umask (0022) is writable by
+ * its OWNER only, and the next user to need it is locked out of that one file forever. Measured
+ * 2026-09-14 on bsdos-x86: the role ran as `freebsd`, its queue cursor had been created by `agent`
+ * as rw-r--r--, and nine orders sat undelivered because a byte offset could not be advanced (task
+ * macbook-pro-98). mesh-sync cannot repair it either — chmod requires ownership, and the file
+ * belongs to the other user.
+ *
+ * So the rule is applied where the file is born: if the containing directory grants group write,
+ * the file does too. A private hub (no group write on the directory) is untouched, which is every
+ * single-user install. Failures are ignored on purpose — not owning the file is exactly the case
+ * this prevents in the future, and it must never break the write that is happening now. */
+export function shareMode(file) {
+  try {
+    const dir = fs.statSync(path.dirname(file));
+    if (!(dir.mode & 0o020)) return;                       // private directory — leave modes alone
+    const st = fs.statSync(file);
+    if ((st.mode & 0o060) === 0o060) return;               // already group rw
+    fs.chmodSync(file, st.mode | 0o060);
+  } catch {}
+}
+
 export function atomicWrite(file, data) {
   const tmp = file + '.tmp.' + process.pid;
   fs.writeFileSync(tmp, typeof data === 'string' ? data : JSON.stringify(data, null, 1));
   fs.renameSync(tmp, file);
+  shareMode(file);
 }
 
 export function withLock(file, fn) {
@@ -1035,6 +1061,7 @@ export function runUsageAdd(a = {}) {
     throw new Error('nothing to record: pass at least one of seconds, tokensIn, tokensOut, costUsd — this log holds what only YOU can see, so an empty entry says nothing');
   }
   fs.appendFileSync(usageFile(), JSON.stringify(rec) + '\n');
+  shareMode(usageFile());
   return { ok: true, recorded: rec };
 }
 
@@ -1162,6 +1189,7 @@ export function journalAppend(entry) {
     // can live). An entry that already carries one keeps it: a forwarded or replayed line
     // describes the hubd that ORIGINALLY wrote it, not the one passing it along.
     fs.appendFileSync(JOURNAL, JSON.stringify(entry && entry.v ? entry : { ...entry, v: VERSION }) + '\n');
+    shareMode(JOURNAL);
   });
 }
 
@@ -3180,6 +3208,7 @@ export function runTaskAdd(a) {
       resources: Array.isArray(a.resources) ? a.resources.map(slugify) : [],
     };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: JOURNAL_NODE, ev: 'add', id, t }) + '\n');
+    shareMode(TASK_EVENTS);
     rebuildTaskCache();
     journalAppend({ ts: now(), project: t.project, agent: t.by, kind: 'task', text: '+ task #' + id + ': ' + t.text });
     return { ok: true, task: t };
@@ -3290,6 +3319,7 @@ export function runTaskUpdate(a) {
     // cannot guess, so new writes say which convention they use and old ones keep the
     // best-effort heuristic they were written under.
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: origin.node, ev: 'set', id: origin.id, keyed: 'origin', patch }) + '\n');
+    shareMode(TASK_EVENTS);
     rebuildTaskCache();
     /* Say WHAT changed, not just that something did. The line used to read "~ task #N → edited"
      * for every non-status edit, so the single most useful event in a coordination log — somebody

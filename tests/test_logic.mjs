@@ -2727,6 +2727,30 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
+/* ── in a SHARED hub, a file hubd creates is writable by the group ──
+ * Measured on bsdos-x86 2026-09-14: the role ran as `freebsd`, its cursor had been created by
+ * `agent` with the default umask (rw-r--r--), and nine orders could not be delivered because the
+ * byte offset could not be advanced. Neither user could repair it — chmod needs ownership. */
+if (process.getuid && process.getuid() !== 0) {
+  const SH = mktmp(), PV = mktmp();
+  for (const d of [SH, PV]) fs.mkdirSync(path.join(d, 'queues'), { recursive: true });
+  fs.mkdirSync(path.join(SH, '.qstate'), { recursive: true });
+  for (const d of [SH, path.join(SH, 'queues'), path.join(SH, '.qstate')]) fs.chmodSync(d, 0o770);
+  fs.chmodSync(PV, 0o700); fs.chmodSync(path.join(PV, 'queues'), 0o700);
+  const groupRW = (f) => (fs.statSync(f).mode & 0o060) === 0o060;
+  core.setHubBase(SH);
+  q.queueSend('w', 'an order', { from: 'orch', root: SH, node: 'n1' });
+  await q.queueWait('w', { timeout: 1, root: SH });
+  core.journalAppend({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'x' });
+  ok(groupRW(path.join(SH, 'queues', 'w.n1.queue.md')), 'shared hub: a queue file is group-writable');
+  ok(groupRW(path.join(SH, '.qstate', 'w.n1.queue.md.offset')), 'shared hub: so is the cursor — the file the stall was about');
+  ok(groupRW(core.JOURNAL), 'shared hub: so is the journal this node appends to');
+  core.setHubBase(PV);
+  q.queueSend('w', 'an order', { from: 'orch', root: PV, node: 'n1' });
+  ok(!groupRW(path.join(PV, 'queues', 'w.n1.queue.md')), 'private hub: modes are left exactly as the umask made them');
+  for (const d of [SH, PV]) fs.rmSync(d, { recursive: true, force: true });
+}
+
 // ── a heartbeat says which hub it was written into ──
 // Two roles on one machine writing to two hubs was invisible for a day twice (macbook-pro-88, -96):
 // everything kept working, into a directory nobody else read.

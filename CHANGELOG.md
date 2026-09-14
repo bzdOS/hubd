@@ -22,6 +22,13 @@ One theme: a hub that cannot do its job must say so, instead of looking idle.
   depth now waiting, so a sender sees a backlog that is climbing instead of trusting "sent".
   The request in the task — drain the backlog before entering the long-poll — was already the
   behaviour since the first release; it was never the cause.
+- **In a shared hub, a file hubd creates is writable by the group that shares the directory.** This
+  is the same failure at its source. The node that proved it ran the role as `freebsd` while the
+  cursor had been created by `agent` with the default umask — and neither user could repair it,
+  because `chmod` requires ownership. Now every file hubd writes into a group-writable directory
+  (queue files, cursors, waiter markers, the journal, task events, usage, anything through
+  `atomicWrite`) gets group read/write. A directory without group write is a private hub and is left
+  exactly as the umask made it, which is every single-user install.
 - **A waiter marker whose process is gone is cleared.** The `finally` that removes it only runs on a
   clean exit, so every killed session left one behind; six were found on two nodes, each making the
   next waiter report a conflict that did not exist.
