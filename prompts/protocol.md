@@ -300,6 +300,13 @@ reading plain open, with no trace of the blocker. To see what has actually been 
 what is still waiting, across every host's file at once: `hub queue status [role]`. One per-host
 file read on its own is not the answer — a message already popped elsewhere looks undelivered in it.
 
+**Sending appends; it does not deliver.** A send reports the depth now waiting for that role, and a
+depth that keeps climbing means nothing is consuming — check that the role is waiting, and run `hub
+doctor` on its node. One failure used to be invisible on both sides: a cursor the consumer cannot
+write (a shared hub where another user's command created it) stopped delivery completely while every
+wait answered "nothing new". That is now an error naming the file and the fix, `hub doctor` lists such
+cursors, and a wait never reports an empty queue it could not actually read.
+
 A queue file is created by the first send and never disappears on its own, so an
 experiment leaves a role behind that nobody ever listens on. Those show up in `hub_brief`
 marked `neverRead` — messages waiting for a consumer that has never existed are not
