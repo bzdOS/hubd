@@ -2727,6 +2727,45 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
+/* ── the half of mesh health only a PEER can see ──
+ * A node whose pull keeps aborting knows it and nobody reads its doctor; from every other node it
+ * simply stops appearing in the shared history. One sat 77 commits behind on one card conflict. */
+{
+  const MN = mktmp();
+  const git = (args, env) => execSync(`git -C ${MN} ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', ...env } });
+  git('init -q -b main');
+  const commitAs = (node, file, iso) => {
+    fs.writeFileSync(path.join(MN, file), String(Date.now()) + Math.random());
+    git('add -A');
+    git(`-c user.name=${node} -c user.email=x@x commit -q -m sync`,
+      { GIT_COMMITTER_DATE: iso, GIT_AUTHOR_DATE: iso });
+  };
+  const iso = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600000).toISOString();
+  commitAs('Planck', 'journal.planck.jsonl', iso(30));     // raw hostname vs normalised file name
+  commitAs('fedora', 'journal.fedora.jsonl', iso(0.2));
+  fs.writeFileSync(path.join(MN, 'journal.planck-agent.jsonl'), '{}\n');   // absorbed: never a committer
+  core.setHubBase(MN);
+  const quiet = core.meshNodes({ staleHours: 6 });
+  ok(quiet.length === 1 && quiet[0].node === 'planck' && quiet[0].ageHours >= 29,
+    `mesh peers: the node that stopped pushing is named, matched across hostname case (got ${JSON.stringify(quiet)})`);
+  ok(!quiet.find(n => n.node === 'planck-agent'),
+    'mesh peers: a node that never committed here is an absorbed log, not a machine gone quiet');
+  ok(core.meshNodes({ staleHours: 72 }).length === 0, 'mesh peers: within the threshold, nothing is reported');
+  // A mesh nobody has touched for days says nothing about any single node.
+  const MN2 = mktmp();
+  const git2 = (args, env) => execSync(`git -C ${MN2} ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', ...env } });
+  git2('init -q -b main');
+  fs.writeFileSync(path.join(MN2, 'journal.planck.jsonl'), '{}\n');
+  git2('add -A');
+  git2('-c user.name=Planck -c user.email=x@x commit -q -m sync', { GIT_COMMITTER_DATE: iso(200), GIT_AUTHOR_DATE: iso(200) });
+  core.setHubBase(MN2);
+  ok(core.meshNodes({ staleHours: 6 }).length === 0,
+    'mesh peers: a mesh where NOBODY has committed lately is a quiet week, not a stuck node');
+  for (const d of [MN, MN2]) fs.rmSync(d, { recursive: true, force: true });
+}
+
 /* ── a broadcast role has no single "pending", so no single number is printed ──
  * The shared cursor of a fan-out role is never advanced by anyone — every reader keeps its own —
  * so the arithmetic against it only grows. It was read as a delivery failure and quoted as

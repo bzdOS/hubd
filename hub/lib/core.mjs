@@ -861,6 +861,50 @@ export function meshStatus() {
   };
 }
 
+/* Which PEER has gone quiet in the mesh.
+ *
+ * meshStatus above answers "am I in sync", and only this node can ask it. The failure it cannot see
+ * is the one that matters most: another node whose pull has been aborting for days. Planck sat 77
+ * commits behind on a single card conflict — its own doctor said so, and nobody was running its
+ * doctor. From any other node the evidence was already there and unread: mesh-sync commits as the
+ * node it runs on, so a peer that stopped pushing stops appearing in the shared history.
+ *
+ * Only real participants are judged — a node that has never committed here is an absorbed log or a
+ * legacy name, not a machine that went quiet — and only while the mesh itself is moving, so a
+ * weekend when nobody worked does not light up every row. Case-insensitive, because mesh-sync takes
+ * the raw hostname ("Planck") and the file names take the normalised one ("planck"). */
+export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
+  if (!fs.existsSync(path.join(HUB, '.git'))) return [];
+  const last = new Map();                       // node (lowercased) -> newest commit ISO
+  let newest = null;
+  for (const line of sh(`git log -${scan} --format=%cI%x09%cn`, HUB).split('\n')) {
+    const [iso, name] = line.split('\t');
+    if (!iso || !name) continue;
+    if (!newest) newest = iso;
+    const k = name.trim().toLowerCase();
+    if (!last.has(k)) last.set(k, iso);
+  }
+  if (!newest) return [];
+  const newestMs = new Date(newest).getTime();
+  // A mesh nobody has touched in a while is not evidence about any single node.
+  if (Date.now() - newestMs > staleHours * 3600000) return [];
+  const known = new Set();
+  try {
+    for (const f of fs.readdirSync(HUB)) {
+      const m = f.match(/^journal\.(.+?)(?:-\d{4}-\d{2}(?:\.\d+)?)?\.jsonl$/) || f.match(/^tasks\.(.+)\.events\.jsonl$/);
+      if (m) known.add(m[1].toLowerCase());
+    }
+  } catch {}
+  const out = [];
+  for (const node of known) {
+    const iso = last.get(node);
+    if (!iso) continue;                         // never a committer here: absorbed or legacy, not quiet
+    const ageH = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000);
+    if (ageH >= staleHours) out.push({ node, lastCommit: iso, ageHours: ageH });
+  }
+  return out.sort((a, b) => b.ageHours - a.ageHours);
+}
+
 /* Two tracked paths that differ only by case. On Linux they are two files; on macOS and Windows
  * they are one, and git cannot check out the second without overwriting the first — so the merge
  * refuses, every time, forever. That is what actually stopped the sync above.
