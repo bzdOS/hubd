@@ -22,7 +22,7 @@ import {
   journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
-  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb,
+  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
@@ -1326,6 +1326,30 @@ if (cmd === 'absorb') {
   done(0);
 }
 
+// cards compact: bring cards that grew before the cap existed back under it. Dry by default.
+if (cmd === 'cards' && args[1] === 'compact') {
+  const apply = args.includes('--apply');
+  const by = getFlag('--by') || process.env.HUBD_AGENT || null;
+  if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the move is journaled.');
+  let r; try { r = runCardsCompact({ apply, by }); } catch (e) { die(e.message); }
+  console.log((apply ? 'Compacted' : 'Would compact') + ' against ' + r.limits.sectionBytes + 'B per section' +
+    (apply ? '' : '  (dry run — add --apply --by <you>)'));
+  if (!r.cards.length) { console.log('  every card is already inside the limit.'); done(0); }
+  for (const c of r.cards) {
+    if (c.skipped) { console.log('  skip  ' + c.slug + ': ' + c.skipped); continue; }
+    console.log('  ' + c.slug + ': ' + c.before + 'B' + (c.after != null ? ' -> ' + c.after + 'B' : ''));
+    for (const s of (c.moved || c.sections)) {
+      console.log('      ' + (s.section || '') + ': ' + (s.entries != null
+        ? s.entries + ' oldest entr(y/ies), ' + s.bytes + 'B moved to projects/history/' + c.slug + '.md'
+        : s.bytes + 'B, ' + s.over + 'B over — oldest entries would move to projects/history/' + c.slug + '.md'));
+    }
+  }
+  console.log(apply
+    ? 'Nothing was deleted: every moved entry is in projects/history/<slug>.md, which syncs with the mesh.'
+    : 'Nothing written. The overflow would be MOVED to history, never dropped — FACT:/HYPO:/COMM: live only in the card.');
+  done(0);
+}
+
 if (cmd === 'card' && args[1] === 'resolve') {
   const targets = args.slice(2).filter(a => !a.startsWith('-'));
   const files = targets.length
@@ -2036,6 +2060,7 @@ else if (!cmd) {
     '  task list [-p proj] [--status open|done|all] [--json]',
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
+    '  cards compact [--apply --by <you>]   move the overflow of over-long card sections into projects/history/ (dry run without --apply)',
     '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
     '  freeze "<why>" --by <you>        stop mesh-sync on THIS node before operating on the hub dir',
     '  unfreeze                         let it sync again',
