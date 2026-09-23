@@ -92,6 +92,13 @@ hub section add myproject gates "kill if no paying user by 2026-09-01" --by dev-
 hub task get 42     # one task by id, plus what blocks it and what it blocks
 ```
 
+A card is a snapshot, and hubd enforces that rather than asking politely: an over-long
+digest is refused, a dated `appendLine` is refused (that is an event — `hub report` takes
+it, and files it in the journal too), and a section that outgrows its limit has its oldest
+entries moved into `projects/history/<slug>.md`, never dropped. Your numbers live in
+`limits.json` in the hub. A hub that grew before the limits existed catches up with
+`hub cards compact` (dry run; `--apply --by <you>` to write).
+
 A `⚠Nd behind` next to a project means its card has fallen behind its own
 journal: the work moved, the digest didn't. Re-sync that one with a fresh
 digest. (A project that has simply gone quiet is never flagged.)

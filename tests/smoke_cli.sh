@@ -361,6 +361,23 @@ OUT16C=$($CLI unfreeze 2>&1); RC16C=$?
 [ "$RC16C" -eq 0 ] && [ ! -f "$HUBD_DIR/.mesh-freeze" ] && echo "$OUT16C" | grep -q "Unfrozen"
 check "unfreeze: removes it and says the mesh runs again" $?
 
+# ── Case 17: a card is held to being a snapshot ────────────────────────────
+
+OUT17=$($CLI card capproj -m "$(node -e 'process.stdout.write("x".repeat(70000))')" --by smoke 2>&1); RC17=$?
+[ "$RC17" -ne 0 ] && echo "$OUT17" | grep -q "over this hub's limit"
+check "card cap: a 70 KB digest is refused" $?
+$CLI card capproj -m "a real snapshot" --by smoke >/dev/null 2>&1
+OUT17B=$($CLI card capproj --append-line "- 2026-09-23: shipped it" --by smoke 2>&1); RC17B=$?
+[ "$RC17B" -ne 0 ] && echo "$OUT17B" | grep -q "hub_report"
+check "card cap: a dated appendLine is refused and names hub_report" $?
+PAD=$(node -e 'process.stdout.write("y".repeat(400))')
+i=0; while [ $i -lt 40 ]; do $CLI report -p capproj --agent smoke -m "FACT: finding $i $PAD" >/dev/null 2>&1; i=$((i+1)); done
+[ -s "$HUBD_DIR/projects/history/capproj.md" ] && grep -q "finding 0 " "$HUBD_DIR/projects/history/capproj.md"
+check "card cap: the oldest facts are moved into history, not dropped" $?
+OUT17C=$(cd "$TMP/team" && $CLI cards compact 2>&1); RC17C=$?
+[ "$RC17C" -eq 0 ] && echo "$OUT17C" | grep -q "Would compact\|already inside the limit"
+check "cards compact: dry run reports without writing" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"
