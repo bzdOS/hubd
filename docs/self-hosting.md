@@ -113,6 +113,7 @@ intake for agents, over the network.
 | `HUBD_MULTITENANT` | off | `1` → every token is its own workspace at `tenants/<hash>/` |
 | `HUBD_DIR` | `~/.hubd` | where data lives |
 | `HUBD_TEAM_DIR` | = `HUBD_DIR` | queues and `AGENTS.md`; set alone it is the data dir too (one directory) |
+| `HUBD_SUBSCRIBER` | — | stdio only: the reader name for broadcast-role cursors (else `HUBD_SESSION`, else `HUBD_AGENT`, else the client process) |
 | `HUBD_HTTP_HOST` | `127.0.0.1` | bind address (keep it localhost behind a TLS proxy) |
 | `HUBD_HTTP_PORT` | `8787` | port (or pass `--http <port>`) |
 | `HUBD_RATE_LIMIT` | `120` | max POSTs per minute per client IP (over the limit → 429) |
