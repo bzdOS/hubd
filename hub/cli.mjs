@@ -19,7 +19,7 @@ import {
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalCounts, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
+  journalTail, journalSince, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
@@ -136,7 +136,7 @@ const REPORT_TEMPLATE = [
 ].join('\n');
 
 function claimRemaining(c) {
-  const ms = parseTs(c.since).getTime() + c.ttlMin * 60000 - Date.now();
+  const ms = parseTs(c.since).getTime() + (c.ttlMin ?? 240) * 60000 - Date.now();
   if (ms <= 0) return 'expired';
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
   return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
@@ -464,8 +464,8 @@ if (cmd === 'doctor') {
   console.log('  journal:  ' + jc.files + ' file(s), ' + jc.entries + ' entries' +
     (jc.malformed ? ', ' + jc.malformed + ' malformed' + (jc.malformedRecent ? '  WARNING' : '') : ''));
   if (jc.malformedRecent)
-    console.log('            ' + jc.malformedRecent + ' of them in the last ' + 200 +
-      ' lines of a live log - a writer is tearing writes NOW');
+    console.log('            ' + jc.malformedRecent + ' of them with fewer than ' + MALFORMED_SETTLED_AFTER +
+      ' good entries after them in a live log - a writer is tearing writes NOW');
   else if (jc.malformed)
     console.log('            all of them old: dropped on read, and not repairable without ' +
       'rewriting an append-only log');
@@ -2218,7 +2218,11 @@ setInterval(load,3000);
 </html>`;
 
   function getRules() {
-    const p = rulesFile();
+    // A tenant sees its OWN AGENTS.md or none. rulesFile() falls back to the team root — the
+    // server's HUBD_TEAM_DIR or a walk up from the server's cwd — which on a multi-tenant board
+    // handed the operator's constitution to every tenant that had not written one.
+    const own = path.join(HUB, 'AGENTS.md');
+    const p = MT ? (fs.existsSync(own) ? own : null) : rulesFile();
     if (p) { try { return { text: fs.readFileSync(p, 'utf8') }; } catch {} }
     return { text: 'No AGENTS.md found. Run "hub init" to scaffold a team folder, or create ~/.hubd/AGENTS.md to define team rules.' };
   }
