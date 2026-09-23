@@ -15,7 +15,7 @@ import {
   runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth, everConsumedHere } from './lib/queue.mjs';
-import { sessionId } from './lib/session.mjs';
+import { sessionId, subscriberId } from './lib/session.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -441,11 +441,13 @@ const DISPATCH = {
       ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
         ...(note ? { note } : {}) } : {}) };
   },
-  // subscriber: resolved from THIS process, never from the caller's arguments — the
+  // subscriber: subscriberId() — stable across a respawn (HUBD_SUBSCRIBER / HUBD_SESSION /
+  // HUBD_AGENT before the process id), so a restarted role resumes its own position.
+  // Resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown
   // client, and then the cursor stays shared per node exactly as before.
-  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: sessionId() }),
-  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: sessionId() }),
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
+  hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
 };
 
 // Where the queues and AGENTS.md live for THIS server. The CLI resolves the team root as
