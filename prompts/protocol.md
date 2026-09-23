@@ -109,7 +109,18 @@ Communication. Section headings localise (any language) in ONE file, `sections.j
 see `hub sections`. `hub card <slug> -m "<digest>"` sets the digest — and when only one line
 of it went stale, patch instead of rewriting the owner's framing: `hub card <slug> --replace
 "<old>" --with "<new>"` / `hub_card_set({replace:[{from,to}], appendLine})`; a `from` that is
-not in the digest is an error, never a silent no-op. `hub_report` tells you the digest's age
+not in the digest is an error, never a silent no-op.
+
+**The card is a snapshot, and hubd holds it to that.** A digest over the hub's limit is refused,
+and so is an `appendLine` that starts with a date — a dated line is an event, and events go to
+`hub_report`, which writes the right card section *and* the journal. When an accumulating section
+(Facts & hypotheses, Decisions, Communication) outgrows its limit, its OLDEST entries move to
+`projects/history/<slug>.md` and the card keeps the recent ones with a line saying where the rest
+went. Nothing is deleted: `FACT:`/`HYPO:`/`COMM:` live only in the card, so the overflow is moved,
+never trimmed. Limits are the hub's, in `limits.json` (`card.digestBytes`, `card.sectionBytes`).
+This matters because a card that cannot be read does not answer the one question it exists for:
+one hub reached 41 cards with three past 72 KB, and `hub_get` on the largest was refused by the
+caller's own context budget. `hub_report` tells you the digest's age
 in every reply and nudges once it trails the journal you just moved. `hub get <slug>`
 reads a project; `hub status` / `hub brief` orient you. Sitting in a project folder
 and don't know its slug? `hub_context({cwd:"<your absolute cwd>"})` resolves it for
