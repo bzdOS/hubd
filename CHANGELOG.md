@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.24 — 2026-09-23
+
+- **The queue depth a send reports now knows what it can mean on this node.** 0.9.21 added the depth
+  so a sender could see a backlog instead of trusting "sent"; it read that depth against a cursor
+  that is node-local by design, and then said "nothing is consuming" about it. For a role consumed
+  on another machine — most sends in a fleet — that accusation is simply wrong, and caught it on its
+  first real use: a send to an orchestrator read as 172 unconsumed messages while its consumer was
+  working normally one node away. A role this node really does consume still gets the warning; a
+  role it has never consumed gets the fact instead — this is the only view this machine can have,
+  check on the node that runs it. The reply carries `consumedHere` so the distinction is machine
+  readable, not only in prose.
+
 ## 0.9.23 — 2026-09-23
 
 - **A card is a snapshot, and hubd now holds it to that.** "3-6 lines of current state" was in
