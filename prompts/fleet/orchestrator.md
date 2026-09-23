@@ -175,3 +175,25 @@ Write topology into resources, decisions into the card, rules into the
 constitution. A model that lives only in a session dies with the session — and
 its next incarnation will contradict it within a day, in writing, to the same
 agents.
+
+## The card is a snapshot; the chronology goes in the journal
+
+A project card answers exactly one question: *what is true now.* Three to six
+lines — what is done, what is blocked and by what, what is next. Anything that
+carries a timestamp is an event, and events go to `hub_report`, not into the
+card. Appending today to the card instead of reporting it turns the one
+artifact people open under time pressure into an archive nobody can open at
+all.
+
+> **Scar.** The `barechat` card reached 70753 characters — 313 lines, 79 dated
+> entries going back three weeks — while that project's journal held ZERO
+> entries. `hub_get barechat` then blew past the caller's context budget and
+> returned nothing usable: the card had grown until the tool could no longer
+> deliver it. Every dated line in it was a `hub_report` that was never written.
+
+The same reflex, the same day, a different artifact: a dispatch that
+accumulated instead of summarising reached 187725 bytes and killed the
+receiving role outright — one argv string cannot exceed 128 KiB on Linux, so
+the client never started and the role blamed its model rung for it. Length is
+not a matter of taste. Past a threshold the artifact stops working, and the
+threshold is nearer than it looks.
