@@ -33,7 +33,7 @@ const TOOLS = [
     description: 'Create or update a project card from just a name and a digest — no folder needed (unlike hub_sync). Use it to capture a project that is not a local git checkout, e.g. when harvesting a dialog. Preserves any hand-written frontmatter and Facts. To fix ONE stale line without touching the owner\'s framing, patch instead of replacing: `replace: [{from, to}]` and/or `appendLine` — a `from` that is not in the digest is an error, not a silent no-op.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'project name or slug' },
-      digest: { type: 'string', description: 'the card digest: 3-6 lines of current state (replaces the whole text — omit it when patching)' },
+      digest: { type: 'string', description: 'the card digest: 3-6 lines of current state (replaces the whole text — omit it when patching). Enforced, not advised: a digest over the hub\'s limit is refused, and so is an appendLine that starts with a date — a dated line is an event and belongs in hub_report, which writes the card section AND the journal.' },
       replace: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }, description: 'patch: exact substrings to swap, each must occur exactly once in the current digest' },
       appendLine: { type: 'string', description: 'patch: one line to add at the end of the current digest' },
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
@@ -327,7 +327,10 @@ const OUTPUT_PLANS = {
   // is the least compressible thing in this answer (same reasoning as tasksOpen, one step further).
   hub_brief:      [['journalRecent', 30], ['queues', 40], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40], ['buttonItems', 20]],
   hub_status:     [['recentJournal', 10], ['projects', 60]],
-  hub_get:        [['journal', 15], ['claims', 20]],
+  // `card` is a STRING, cut by characters (capOutput handles both). Listed FIRST because an
+  // over-long card is exactly what makes this answer unreadable, and the journal and claims beside
+  // it are the parts a caller can least afford to lose.
+  hub_get:        [['card', 12000], ['journal', 15], ['claims', 20]],
   hub_whatsnew:   [['entries', 50]],
   hub_search:     [['hits', 40]],
   hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25]],

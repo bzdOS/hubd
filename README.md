@@ -145,6 +145,12 @@ is a folder you own. They are two separate things — and that is the whole poin
   idle queue, on both sides: the wait said nothing new, the send said sent. Four live roles held
   a day of orders that way. Now the wait fails with the file and the fix, `hub doctor` lists such
   cursors, and a send reports the depth now waiting so a climbing backlog is visible to the sender.
+- **A card that grew into a log.** The digest is advertised as a few lines of current state, and
+  nothing held it there: one hub reached three cards past 72 KB, and reading the largest was
+  refused by the caller's context budget. hubd now refuses an over-long digest and a dated
+  `appendLine` (that is an event — `hub report` takes it), and moves the oldest entries of an
+  over-long section into `projects/history/<slug>.md`. Moved, never dropped: facts written by
+  `hub_report` live only in the card. `hub cards compact` catches up a hub that grew first.
 - **A peer that went quiet.** A node whose pull keeps aborting knows it, and nobody runs another
   machine's `hub doctor` — so it writes locally, reaches no one, and looks fine from every side.
   `hub doctor` now names the nodes that have stopped appearing in the mesh's own history.

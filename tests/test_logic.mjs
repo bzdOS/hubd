@@ -2727,6 +2727,67 @@ ok(core.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
+/* ── a card is a snapshot, and the cap is what holds it to that ──
+ * Measured on a live hub: 41 cards, three past 72 KB, one past 250 KB, and hub_get on the largest
+ * returned 72444 characters that the caller's context refused (task macbook-pro-111). The growth is
+ * NOT in the digest (1.7-3.6 KB everywhere) — it is `## Facts & hypotheses`, one `- fact:` line at
+ * a time from hub_report, with nothing to rotate it. */
+{
+  const CL = mktmp();
+  core.setHubBase(CL);
+  // ACCEPTANCE (from the task): a 70 KB digest must be refused.
+  let thrown = null;
+  try { core.runCardSet({ project: 'big', digest: 'x'.repeat(70000), by: 'dev-t' }); } catch (e) { thrown = e.message; }
+  ok(/over this hub's limit/.test(thrown || '') && /hub_report/.test(thrown || ''),
+    `card cap: a 70 KB digest is refused, and the refusal says where the text goes (got ${String(thrown).slice(0, 60)})`);
+  ok(!fs.existsSync(core.cardPath('big')), 'card cap: and nothing is written — a refusal that half-wrote would be worse than none');
+  // A dated line is an event, not state.
+  core.runCardSet({ project: 'big', digest: 'a real snapshot', by: 'dev-t' });
+  thrown = null;
+  try { core.runCardSet({ project: 'big', appendLine: '- 2026-09-23: shipped the thing', by: 'dev-t' }); } catch (e) { thrown = e.message; }
+  ok(/event, not state/.test(thrown || '') && /hub_report/.test(thrown || ''),
+    `card cap: a dated appendLine is refused with the channel that takes it (got ${String(thrown).slice(0, 50)})`);
+  ok(core.runCardSet({ project: 'big', appendLine: '- ships on Fridays', by: 'dev-t' }).ok,
+    'card cap: an undated line still patches the digest — the rule is about dates, not about appendLine');
+  // The real growth channel: FACT: lines accumulating in one section.
+  const factCount = 400;
+  for (let i = 0; i < factCount; i++) core.runReport({ project: 'big', by: 'dev-t', text: `FACT: finding number ${i} ${'y'.repeat(60)}` });
+  const card = core.readCard('big');
+  const SEC = core.reportSections ? core.reportSections() : null;
+  const factBody = core.sectionBody(card, (SEC && SEC.fact) || 'Facts & hypotheses');
+  ok(Buffer.byteLength(factBody, 'utf8') <= core.cardLimits().sectionBytes + 200,
+    `card cap: the accumulating section stays under the cap after ${factCount} facts (got ${Buffer.byteLength(factBody, 'utf8')}B)`);
+  const hist = fs.readFileSync(path.join(CL, 'projects', 'history', 'big.md'), 'utf8');
+  ok(/finding number 0\b/.test(hist), 'card cap: the oldest fact is in history — moved, not dropped (it lives nowhere else)');
+  ok(new RegExp(`finding number ${factCount - 1}\\b`).test(card), 'card cap: the newest fact is still on the card');
+  ok(/older entries moved to projects\/history\/big\.md/.test(card), 'card cap: the card says where the rest went');
+  // Every fact ever written is still readable, card + history together.
+  let seen = 0;
+  for (let i = 0; i < factCount; i++) if (hist.includes(`finding number ${i} `) || card.includes(`finding number ${i} `)) seen++;
+  ok(seen === factCount, `card cap: all ${factCount} facts survive between card and history (found ${seen})`);
+  // The limit is the hub's, not the code's.
+  fs.writeFileSync(path.join(CL, 'limits.json'), JSON.stringify({ card: { digestBytes: 200, sectionBytes: 1024 } }));
+  ok(core.cardLimits().digestBytes === 200 && core.cardLimits().sectionBytes === 1024, 'card cap: limits.json in the hub overrides the defaults');
+  thrown = null;
+  try { core.runCardSet({ project: 'big', digest: 'z'.repeat(300), by: 'dev-t' }); } catch (e) { thrown = e.message; }
+  ok(/over this hub's limit of 200/.test(thrown || ''), 'card cap: and the configured number is the one enforced');
+  fs.rmSync(path.join(CL, 'limits.json'));
+  // A half-merged card is not ours to rewrite.
+  const conflicted = '# c\n\n## Digest\n\nd\n\n## Facts & hypotheses\n\n<<<<<<< HEAD\n' + '- fact: a\n'.repeat(2000) + '=======\n- fact: b\n>>>>>>> x\n';
+  ok(core.rotateCardOverflow(conflicted, 'c', 'dev-t').moved.length === 0,
+    'card cap: a card holding conflict markers is left alone — resolving it is a human decision');
+  // hub_get must stay readable: the card is a STRING, and the budget used to see only arrays.
+  const got = core.runGet({ project: 'big' });
+  // A card can still outgrow the read budget by having MANY sections, each inside the cap — so the
+  // read-side trim is tested against a limit this card really exceeds, not against luck.
+  const capped = core.capOutput(got, [['card', 4000], ['journal', 15], ['claims', 20]], { maxChars: 40000 });
+  ok(capped.card.length <= 4000 && capped.truncated && capped.truncated.card.hiddenChars > 0,
+    `card cap: hub_get trims an over-long card and says how much it hid (${capped.card.length} chars, hidden ${capped.truncated && capped.truncated.card && capped.truncated.card.hiddenChars})`);
+  ok(JSON.stringify(capped, null, 1).length <= 40000, 'card cap: and the whole answer fits the budget it was given');
+  ok(/## Digest/.test(capped.card), 'card cap: what survives the cut is the head — the snapshot, not the tail');
+  fs.rmSync(CL, { recursive: true, force: true });
+}
+
 /* ── the half of mesh health only a PEER can see ──
  * A node whose pull keeps aborting knows it and nobody reads its doctor; from every other node it
  * simply stops appearing in the shared history. One sat 77 commits behind on one card conflict. */

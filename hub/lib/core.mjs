@@ -1857,12 +1857,24 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
   const truncated = {};
   const totals = {};
   const note = (key, arr) => { truncated[key] = { shown: arr.length, hidden: totals[key] - arr.length }; };
+  /* A long STRING was invisible to this budget, and it is the one payload a caller cannot page
+   * through: hub_get returns the card as one field, and a 72 KB card therefore left here whole and
+   * was refused by the caller's context — the tool could not deliver its own data (task
+   * macbook-pro-111). Cut from the head, which is the right end for a card: frontmatter, digest and
+   * next step come first, and the accumulated tail is what a reader can do without. */
+  const noteStr = (key, s) => { truncated[key] = { shownChars: s.length, hiddenChars: totals[key] - s.length,
+    hint: `read the rest with full: true, or open the file` }; };
 
   for (const [key, limit] of plan) {
-    const arr = out[key];
-    if (!Array.isArray(arr)) continue;
-    totals[key] = arr.length;
-    if (arr.length > limit) { out[key] = arr.slice(0, limit); note(key, out[key]); }
+    const v = out[key];
+    if (typeof v === 'string') {
+      totals[key] = v.length;
+      if (v.length > limit) { out[key] = v.slice(0, limit); noteStr(key, out[key]); }
+      continue;
+    }
+    if (!Array.isArray(v)) continue;
+    totals[key] = v.length;
+    if (v.length > limit) { out[key] = v.slice(0, limit); note(key, out[key]); }
   }
 
   // Headroom for the two keys this function adds itself: `truncated` and `hint` are written
@@ -1876,6 +1888,16 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
     for (const [key] of plan) {
       if (size() <= budget) return;
       let arr = out[key];
+      if (typeof arr === 'string') {
+        // Same quarter-at-a-time walk, never below a head that still answers "what is this".
+        const strFloor = floor ? 2000 : 500;
+        while (arr.length > strFloor && size() > budget) {
+          arr = arr.slice(0, Math.max(strFloor, arr.length - Math.max(1, Math.ceil(arr.length / 4))));
+          out[key] = arr;
+          noteStr(key, arr);
+        }
+        continue;
+      }
       if (!Array.isArray(arr)) continue;
       while (arr.length > floor && size() > budget) {
         arr = arr.slice(0, Math.max(floor, arr.length - Math.max(1, Math.ceil(arr.length / 4))));
@@ -2281,6 +2303,12 @@ export function runSync(a) {
   const hasNew = !!(diff && diff.sinceLastSync && diff.newCommits > 0);
   const metrics = projectMetrics(dir);
 
+  const lim = cardLimits();
+  if (a.digest && Buffer.byteLength(String(a.digest).trim(), 'utf8') > lim.digestBytes) {
+    throw new Error(`digest is ${Buffer.byteLength(String(a.digest).trim(), 'utf8')} bytes, over this hub's limit of ${lim.digestBytes} ` +
+      `(<hub>/limits.json → card.digestBytes). A digest is the current state in a few lines. ` +
+      `Move the narrative to hub_report — FACT:/DECIDE:/COMM: land in the right card section and in the journal.`);
+  }
   if (a.digest && oldDigest && a.digest.trim() !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (sync by ${author})\n${oldDigest}\n`);
@@ -2300,10 +2328,13 @@ export function runSync(a) {
     (hasNew ? `- since last sync: ${diff.newCommits} commit(s)${diff.filesChanged ? ', ' + diff.filesChanged + ' file(s)' : ''}${diff.insertions !== null ? ', +' + diff.insertions : ''}${diff.deletions !== null ? '/-' + diff.deletions + ' lines' : ''}\n` : '') +
     (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : '- no git\n') +
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
-  atomicWrite(cardPath(pname), card);
+  const rot = rotateCardOverflow(card, slug, author, lim);
+  atomicWrite(cardPath(pname), rot.text);
   const diffText = hasNew ? ` (${diff.newCommits} new commits, +${diff.insertions || 0}/-${diff.deletions || 0})` : '';
   journalAppend({ ts: now(), project: slug, agent: author, kind: 'sync', text: 'synced' + (a.digest ? ' with digest' : '') + diffText });
-  return { ok: true, project: slug, card: cardPath(pname), gitSeen: !!git, newCommits: hasNew ? diff.newCommits : 0, metrics, hint: a.digest ? undefined : 'Card kept old/empty digest — pass digest="..." to write your summary.' };
+  return { ok: true, project: slug, card: cardPath(pname), gitSeen: !!git, newCommits: hasNew ? diff.newCommits : 0, metrics,
+    ...(rot.moved.length ? { rotated: rot.moved } : {}),
+    hint: a.digest ? undefined : 'Card kept old/empty digest — pass digest="..." to write your summary.' };
 }
 
 // Create or update a project card from just (project, digest) — no folder needed.
@@ -2346,9 +2377,24 @@ export function runCardSet(a) {
   const slug = slugify(pname);
   const prev = readCard(pname);
   const oldDigest = digestOf(prev);
+  /* A dated line is an event, and an event belongs in the journal. This is how a snapshot turns
+   * into a log one honest-looking line at a time: 57 dated lines had accumulated in one card, each
+   * of them a hub_report that was never filed, and the card then answered "what is true now" with
+   * three weeks of history. Refused at the door, naming where the text goes. */
+  if (a.appendLine != null && /^\s*[-*+]?\s*(?:\d{4}-\d{2}-\d{2}|\d{2}[./]\d{2}[./]\d{2,4})\b/.test(String(a.appendLine))) {
+    throw new Error('appendLine starts with a date, so it is an event, not state: file it with hub_report ' +
+      '(FACT: / DECIDE: / COMM:), which writes the right card section AND the journal. ' +
+      'A card is the snapshot — "what is true now" — and a dated line is what makes it stop being one.');
+  }
   let digest, patched = null;
   if (patching) { patched = patchDigest(oldDigest, a); digest = patched.text; }
   else digest = String(a.digest).trim();
+  const lim = cardLimits();
+  if (Buffer.byteLength(digest, 'utf8') > lim.digestBytes) {
+    throw new Error(`digest is ${Buffer.byteLength(digest, 'utf8')} bytes, over this hub's limit of ${lim.digestBytes} ` +
+      `(<hub>/limits.json → card.digestBytes). A digest is the current state in a few lines, not the record of how it got there. ` +
+      `Move the narrative to hub_report — FACT:/DECIDE:/COMM: lines land in the right card section and in the journal — and keep here only what is true now.`);
+  }
   if (oldDigest && digest !== oldDigest) {
     const histFile = path.join(HISTORY, slug + '.md');
     fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
@@ -2360,11 +2406,13 @@ export function runCardSet(a) {
     `- slug: ${slug}\n- set: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (ownerBody ? ownerBody + '\n' : '');
-  atomicWrite(cardPath(pname), card);
+  const rot = rotateCardOverflow(card, slug, author, lim);
+  atomicWrite(cardPath(pname), rot.text);
   journalAppend({ ts: now(), project: slug, agent: author, kind: 'note',
     text: (patched ? 'card patched: ' + patched.applied.map(p => p.appendLine ? '+ ' + p.appendLine.slice(0, 40) : `"${p.from.slice(0, 30)}" -> "${p.to.slice(0, 30)}"`).join('; ')
                    : 'card set: ' + digest.split('\n')[0].slice(0, 80)).slice(0, 160) });
-  return { ok: true, project: slug, card: cardPath(pname), ...(patched ? { patched: patched.applied, digest } : {}) };
+  return { ok: true, project: slug, card: cardPath(pname), ...(patched ? { patched: patched.applied, digest } : {}),
+    ...(rot.moved.length ? { rotated: rot.moved } : {}) };
 }
 
 /* ── Resources (infra/topology as cards) + typed relationship graph ──
@@ -2540,6 +2588,137 @@ function editSection(text, heading, payload, mode) {
   return text.slice(0, bodyStart) + '\n\n' + next + '\n' + text.slice(end);
 }
 
+/* ── A card is a snapshot, and nothing was holding it to that ──
+ *
+ * "3-6 lines of current state" is in hub_card_set's own description, and it held for nobody: of 41
+ * cards on one hub, three had grown past 72 KB and one past 250 KB, and `hub_get` on the largest
+ * returned 72444 characters that the caller's context refused — the tool could not deliver its own
+ * data (task macbook-pro-111).
+ *
+ * WHERE THE GROWTH ACTUALLY IS, which is not where it was assumed to be. The digests are fine:
+ * 1.7-3.6 KB each, nobody stuffs them. It is `## Facts & hypotheses` — 47 KB, 63 KB, 231 KB —
+ * written one `- fact:` line at a time by hub_report, forever, with nothing to rotate it. So a cap
+ * on the digest alone would have changed nothing measurable.
+ *
+ * WHY THE OVERFLOW IS MOVED AND NOT DROPPED. DECIDE: is journaled as well as written to the card;
+ * FACT:, HYPO: and COMM: are NOT — the card is their only home (see runReport). Trimming a section
+ * would therefore destroy the only copy. The overflow goes to projects/history/<slug>.md, which
+ * already exists for superseded digests, is mesh-synced, and is one grep away.
+ *
+ * ON WRITE, never on read: cards travel between nodes by git, so a card allowed to grow here
+ * arrives over-sized everywhere. Read-side capping (capOutput) is the second half, not the fix.
+ *
+ * Thresholds live in the hub, not in this file: <hub>/limits.json, so an operator can raise them
+ * for their own hub without patching code. */
+export function cardLimits() {
+  const def = { digestBytes: 8192, sectionBytes: 8192 };
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(HUB, 'limits.json'), 'utf8'));
+    const c = (j && j.card) || {};
+    return {
+      digestBytes: Number.isFinite(c.digestBytes) && c.digestBytes > 0 ? c.digestBytes : def.digestBytes,
+      sectionBytes: Number.isFinite(c.sectionBytes) && c.sectionBytes > 0 ? c.sectionBytes : def.sectionBytes,
+    };
+  } catch { return def; }
+}
+
+/* Sections that are NOT rotated. Digest has its own cap and its own history trail; Facts (auto) is
+ * regenerated from git on every sync, so moving it to history would archive a derived value. */
+const NO_ROTATE = new Set(['Digest', 'Facts (auto)']);
+const MOVED_MARK = '- … older entries moved to ';
+
+/* Split a section body into ENTRIES. A list item starts an entry; anything that follows without
+ * starting one belongs to it (a fact that wrapped, a fenced block). Prose with no list at all
+ * falls back to lines, so a hand-written section still rotates rather than being exempt by shape. */
+function sectionEntries(body) {
+  const lines = String(body).split('\n');
+  const starts = lines.filter(l => /^\s*[-*+]\s/.test(l)).length;
+  if (starts < 2) return lines.filter(l => l.trim()).map(l => [l]);
+  const out = [];
+  for (const l of lines) {
+    if (/^\s*[-*+]\s/.test(l) || !out.length) out.push([l]);
+    else out[out.length - 1].push(l);
+  }
+  return out.filter(e => e.join('\n').trim());
+}
+
+/** Rotate every over-cap section of a card into its history file. Returns the new text and what
+ *  moved; writes history itself, because the caller has a card to save either way. */
+export function rotateCardOverflow(text, slug, by, limits = cardLimits()) {
+  const moved = [];
+  if (!text || CONFLICT_RE.test(text)) return { text, moved };   // a half-merged card is not ours to rewrite
+  const histRel = path.join('projects', 'history', slug + '.md');
+  const parts = String(text).split(/(?=^## )/m);
+  const outParts = parts.map(part => {
+    const m = /^## (.+?)[ \t]*$/m.exec(part);
+    if (!m || NO_ROTATE.has(m[1].trim())) return part;
+    const heading = m[1].trim();
+    const head = part.slice(0, m.index + m[0].length);
+    const body = part.slice(m.index + m[0].length);
+    if (Buffer.byteLength(body, 'utf8') <= limits.sectionBytes) return part;
+    // The marker line is regenerated, never accumulated: one line saying where the rest went.
+    const entries = sectionEntries(body).filter(e => !e.join('\n').startsWith(MOVED_MARK));
+    const keep = [];
+    let bytes = 0;
+    for (let i = entries.length - 1; i >= 0; i--) {          // newest first — the snapshot end
+      const b = Buffer.byteLength(entries[i].join('\n') + '\n', 'utf8');
+      if (keep.length && bytes + b > limits.sectionBytes) break;
+      keep.unshift(entries[i]); bytes += b;
+    }
+    const out = entries.slice(0, entries.length - keep.length);
+    if (!out.length) return part;
+    moved.push({ section: heading, entries: out.length, bytes: Buffer.byteLength(out.map(e => e.join('\n')).join('\n'), 'utf8') });
+    try {
+      fs.mkdirSync(HISTORY, { recursive: true });
+      fs.appendFileSync(path.join(HISTORY, slug + '.md'),
+        `\n---\n### until ${now()} (${heading} — overflow past ${limits.sectionBytes}B, by ${by || 'hubd'})\n` +
+        out.map(e => e.join('\n')).join('\n') + '\n');
+      shareMode(path.join(HISTORY, slug + '.md'));
+    } catch { return part; }                                  // could not archive → keep the card whole
+    return head + '\n\n' + MOVED_MARK + histRel + '\n' + keep.map(e => e.join('\n')).join('\n') + '\n';
+  });
+  return { text: outParts.join(''), moved };
+}
+
+/** Bring every existing card under the cap — the one-off for a hub that grew before the cap
+ *  existed. Dry by default: the plan says which section of which card loses how much, and where
+ *  it goes. Cards already inside the limit are untouched and unlisted. */
+export function runCardsCompact(a = {}) {
+  const lim = cardLimits();
+  const cards = [];
+  let files = [];
+  try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch {}
+  for (const f of files.sort()) {
+    const slug = f.replace(/\.md$/, '');
+    let text = '';
+    try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
+    const before = Buffer.byteLength(text, 'utf8');
+    if (CONFLICT_RE.test(text)) { cards.push({ slug, before, skipped: 'conflict markers — resolve it first (hub card resolve)' }); continue; }
+    // Dry run must not write history, so the plan is measured on a copy and only re-run for real
+    // when applying. rotateCardOverflow appends to history as it goes, which is right for a live
+    // write and wrong for a preview.
+    const planned = [];
+    for (const part of text.split(/(?=^## )/m)) {
+      const m = /^## (.+?)[ \t]*$/m.exec(part);
+      if (!m || NO_ROTATE.has(m[1].trim())) continue;
+      const body = part.slice(m.index + m[0].length);
+      const bytes = Buffer.byteLength(body, 'utf8');
+      if (bytes > lim.sectionBytes) planned.push({ section: m[1].trim(), bytes, over: bytes - lim.sectionBytes });
+    }
+    if (!planned.length) continue;
+    if (!a.apply) { cards.push({ slug, before, sections: planned }); continue; }
+    const rot = rotateCardOverflow(text, slug, a.by || 'hubd', lim);
+    if (!rot.moved.length) continue;
+    atomicWrite(path.join(PROJ, f), rot.text);
+    cards.push({ slug, before, after: Buffer.byteLength(rot.text, 'utf8'), moved: rot.moved });
+  }
+  if (a.apply && cards.length) {
+    journalAppend({ ts: now(), project: 'hub', agent: a.by || 'hubd', kind: 'note',
+      text: `cards compacted: ${cards.length} card(s) over ${lim.sectionBytes}B per section; the overflow is in projects/history/<slug>.md` });
+  }
+  return { ok: true, apply: !!a.apply, limits: lim, cards };
+}
+
 /* The current step of a "## Next step" body: its text, and who set it when, read back from the
  * ` — set <ts> by <who>` stamp runReport writes. A body written before the stamp existed reads
  * as {by: null, at: null} — it is still reported as replaced, just without an owner check,
@@ -2629,7 +2808,11 @@ export function runReport(a) {
       if (prev) summary.nextReplaced = { text: prev.text, by: prev.by, at: prev.at };
     }
     fs.mkdirSync(PROJ, { recursive: true });
-    atomicWrite(cardPath(project), text);
+    // The cap is applied HERE, on the write that grows the card, because a card that is allowed to
+    // grow on one node arrives over-sized on every other one.
+    const rot = rotateCardOverflow(text, slug, by);
+    if (rot.moved.length) summary.rotated = rot.moved;
+    atomicWrite(cardPath(project), rot.text);
   }
   for (const list of b.done) for (const part of list.split(',')) {
     const id = part.trim();   // id may be a bare number OR a node-scoped string (task #194) — pass through as-is

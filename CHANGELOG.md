@@ -4,6 +4,33 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.23 — 2026-09-23
+
+- **A card is a snapshot, and hubd now holds it to that.** "3-6 lines of current state" was in
+  `hub_card_set`'s own description and held for nobody: one hub reached 41 cards with three past
+  72 KB and one past 250 KB, and `hub_get` on the largest returned 72444 characters that the
+  caller's context refused — the tool could not deliver its own data (task macbook-pro-111). The
+  growth was not where it looked: every digest was fine at 1.7-3.6 KB, and the bulk was
+  `## Facts & hypotheses` at 47, 63 and 231 KB, written one `- fact:` line at a time by
+  `hub_report` with nothing to rotate it, so a cap on the digest alone would have changed nothing.
+  Now: an accumulating section that outgrows `card.sectionBytes` has its OLDEST entries moved to
+  `projects/history/<slug>.md`, and the card keeps the recent ones plus a line saying where the
+  rest went. Moved, never trimmed — `DECIDE:` is journaled but `FACT:`, `HYPO:` and `COMM:` are
+  not, so the card is their only copy and dropping the tail would destroy it. Enforced on WRITE,
+  because a card allowed to grow on one node arrives over-sized on every peer; a card holding
+  conflict markers is left alone, since resolving it is a human's call. A digest over
+  `card.digestBytes` is refused, and so is an `appendLine` that starts with a date — that is an
+  event, and the refusal names `hub_report`, which writes the card section and the journal both.
+  Limits are the hub's, in `limits.json`, not constants in the code.
+- **`hub_get` can no longer become unreadable.** The output budget only ever shrank arrays, and a
+  card is one string field — so the largest payload in the answer was the one thing it could not
+  cut. It now trims long strings too, from the head (where the digest and the next step are), and
+  reports `shownChars` / `hiddenChars` with how to read the rest. The 257 KB card that started
+  this returns an 18 KB reply.
+- **`hub cards compact`** brings a hub that grew before the limits existed back under them. Dry by
+  default: which section of which card loses how much, and where it goes. On the hub it was
+  written for, six cards went from 257/86/72 KB to 22/22/32 KB with every line accounted for.
+
 ## 0.9.22 — 2026-09-14
 
 - **`hub doctor` names the peers that have stopped appearing in the mesh.** Found by running the
