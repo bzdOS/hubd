@@ -16,7 +16,7 @@ import {
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
   runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth, everConsumedHere } from './lib/queue.mjs';
 import { sessionId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -428,9 +428,20 @@ const DISPATCH = {
     // roles sat on a day of undelivered orders (task macbook-pro-98). A depth that keeps climbing
     // is the sender's own evidence that nobody is consuming.
     const depth = (() => { try { return peekQueueDepth(a.role, { root: teamRoot() }); } catch { return null; } })();
+    /* The depth is measured against THIS node's cursor, and that is only evidence when this node is
+     * where the role is consumed. A role read on another machine keeps its cursor there — .qstate is
+     * node-local and never syncs — so a cross-node queue reads as permanently unconsumed from here.
+     * Saying "nothing is consuming" about those would be wrong on most sends in a fleet, and a
+     * warning that is usually wrong is one its reader learns to skip. So: consumed-here gets the
+     * real warning, never-consumed-here gets the caveat instead of an accusation. */
+    const seenHere = (() => { try { return everConsumedHere(a.role, { root: teamRoot() }); } catch { return false; } })();
+    const note = !depth || depth.pending <= 1 ? null
+      : seenHere
+        ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
+        : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and cursors are node-local — so this is not a backlog, it is the only view this machine can have. Check on the node that runs the role.`;
     return { file, ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }),
-      ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting,
-        ...(depth.pending > 1 ? { note: `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. If this keeps climbing, nothing is consuming: check the role is waiting and run hub doctor on its node for a stalled cursor.` } : {}) } : {}) };
+      ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
+        ...(note ? { note } : {}) } : {}) };
   },
   // subscriber: resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown

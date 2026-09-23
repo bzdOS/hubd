@@ -749,6 +749,17 @@ export function queueSummaryForBrief({ root } = {}) {
  *
  * Nothing is deleted. A ghost is MOVED to queues/archive/, so every message stays readable and
  * the move is one reviewable rename in the mesh's git history instead of a silent loss. */
+/** Has THIS node ever consumed this role — any of its per-host files. The discriminator between
+ *  "a backlog" and "the only view a machine that does not run the role can have". */
+export function everConsumedHere(role, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const esc = String(role).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  let files = [];
+  try { files = fs.readdirSync(path.join(r, 'queues')).filter(f => re.test(f)); } catch { return false; }
+  return files.some(f => queueCursorSeen(r, f));
+}
+
 export function queueCursorSeen(root, file) {
   const st = path.join(root, '.qstate');
   if (fs.existsSync(path.join(st, `${file}.offset`))) return true;

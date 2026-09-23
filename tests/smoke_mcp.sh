@@ -108,6 +108,34 @@ rm -rf "$HUBD_DIR2"
 printf '\n%d pass, %d fail (attribution)\n' "$P2" "$F2"
 [ "$F2" -eq 0 ] || exit 1
 
+# ── a send reports depth, and knows what that depth can mean on THIS node ──
+# The depth is measured against a node-local cursor, so a role consumed on another machine reads as
+# permanently unconsumed here. Warning about that would be wrong on most sends in a fleet.
+D4="$(mktemp -d)"
+REQS4=$(cat <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"local","text":"first","from":"o"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_queue_wait","arguments":{"role":"local","timeout":2}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"local","text":"a","from":"o"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"local","text":"b","from":"o"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"remote","text":"a","from":"o"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hub_queue_send","arguments":{"role":"remote","text":"b","from":"o"}}}
+EOF
+)
+OUT4=$(printf '%s\n' "$REQS4" | HUBD_DIR="$D4" HUBD_AGENT=dev-t node hub/index.mjs 2>/dev/null)
+P4=0; F4=0
+chk4() { if [ "$2" -eq 0 ]; then P4=$((P4+1)); echo "PASS $1"; else F4=$((F4+1)); echo "FAIL $1"; fi; }
+echo "$OUT4" | grep -q '"id":5' && echo "$OUT4" | sed -n 's/.*"id":5.*/&/p' | grep -q 'IS consumed on this node'
+chk4 "send depth: a role consumed HERE gets the real warning" $?
+echo "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -q 'never consumed this role'
+chk4 "send depth: a role consumed elsewhere gets the node-local caveat, not an accusation" $?
+echo "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -qv 'nothing is consuming'
+chk4 "send depth: and is not told that nothing is consuming it" $?
+rm -rf "$D4"
+printf '\n%d pass, %d fail (send depth)\n' "$P4" "$F4"
+[ "$F4" -eq 0 ] || exit 1
+
 # ── One directory: a server declared with HUBD_TEAM_DIR alone writes EVERYTHING there ──
 # Presence, journal and queues. Until 0.9.17 the queues went to HUB (the server ignored the
 # variable) and the base itself stayed ~/.hubd (task macbook-pro-88).
