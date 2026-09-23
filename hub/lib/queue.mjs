@@ -127,6 +127,17 @@ function readTail(file, off, size) {
   } finally { fs.closeSync(fd); }
 }
 
+/* The subscriber namespaces under a .qstate dir: exactly the directory names a subscriber can have.
+ * __watchall__ (the tap root) and _archive (retired namespaces) cannot match SUBSCRIBER_RE, which is
+ * why they are named with a leading underscore — every reader skips them by construction. */
+const NS_ARCHIVE = '_archive';
+function subscriberDirs(stateDir) {
+  try {
+    return fs.readdirSync(stateDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && SUBSCRIBER_RE.test(d.name)).map(d => d.name);
+  } catch { return []; }
+}
+
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (e) { return e.code === 'EPERM'; }
@@ -471,17 +482,24 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
   } catch { /* no marker or unreadable — fine */ }
 
   // Single-consumer guard: warn if a fresh, live competing waiter exists.
+  let competitor = null;
   try {
     const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
-    if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) {
-      // Sharing a cursor is the conflict, not sharing a role: distinct subscribers
-      // have their own cursor namespace and never reach this warning.
-      process.stderr.write(`warning: another waiter (pid ${w.pid}) shares this cursor — one live consumer per cursor\n`);
-      // stderr is invisible to an MCP client, so this used to be a warning nobody read.
-      // Record it: an env check turns it into "declare the role, or run one waiter".
-      if (!declared) recordEnvObservation('cursor-conflict', role);
-    }
+    if (w.pid !== process.pid && (Date.now() - new Date(w.since).getTime()) < 10000 && pidAlive(w.pid)) competitor = w;
   } catch { /* no marker or unreadable — fine */ }
+  // A subscriber id that outlives the process (HUBD_AGENT, HUBD_SESSION, --as) can be held by two
+  // live sessions at once — two sessions on one machine with the same HUBD_AGENT. They then split a
+  // broadcast between them, each seeing half. Recorded while it is true, cleared when it is not.
+  const sharedKey = fanout ? `${role} as ${subscriber}` : null;
+  if (competitor) {
+    // Sharing a cursor is the conflict, not sharing a role: distinct subscribers
+    // have their own cursor namespace and never reach this warning.
+    process.stderr.write(`warning: another waiter (pid ${competitor.pid}) shares this cursor — one live consumer per cursor\n`);
+    // stderr is invisible to an MCP client, so this used to be a warning nobody read.
+    // Record it: an env check turns it into "declare the role, or run one waiter".
+    if (!declared) recordEnvObservation('cursor-conflict', role);
+    else if (sharedKey) recordEnvObservation('subscriber-shared', sharedKey);
+  } else if (sharedKey) clearEnvObservation('subscriber-shared', sharedKey);
 
   // Before blocking, not after: a consumer that cannot advance its cursors would otherwise sit in a
   // long-poll that can only ever answer NO_CHANGES, and the first message to arrive would be the one
@@ -794,13 +812,8 @@ export function everConsumedHere(role, { root } = {}) {
 export function queueCursorSeen(root, file) {
   const st = path.join(root, '.qstate');
   if (fs.existsSync(path.join(st, `${file}.offset`))) return true;
-  try {
-    for (const d of fs.readdirSync(st, { withFileTypes: true })) {
-      if (!d.isDirectory() || d.name === '__watchall__') continue;   // a tap is not a consumer
-      if (fs.existsSync(path.join(st, d.name, `${file}.offset`))) return true;
-    }
-  } catch {}
-  return false;
+  // subscriberDirs skips the tap root (a tap is not a consumer) and the archive.
+  return subscriberDirs(st).some(d => fs.existsSync(path.join(st, d, `${file}.offset`)));
 }
 
 /**
@@ -883,11 +896,7 @@ export function outOfBandTrims({ root } = {}) {
     }
   };
   check(null, stateDir);
-  try {
-    for (const d of fs.readdirSync(stateDir, { withFileTypes: true })) {
-      if (d.isDirectory() && d.name !== '__watchall__') check(d.name, path.join(stateDir, d.name));
-    }
-  } catch {}
+  for (const d of subscriberDirs(stateDir)) check(d, path.join(stateDir, d));
   return out.sort((a, b) => b.lost - a.lost);
 }
 
@@ -953,15 +962,12 @@ export function queueLedger({ root, role } = {}) {
     // no single "delivered" for the role — report the readers instead of averaging them into a
     // number that is true for nobody.
     const readers = [];
-    try {
-      for (const d of fs.readdirSync(stateDir, { withFileTypes: true })) {
-        if (!d.isDirectory() || d.name === '__watchall__') continue;
-        try {
-          const c = parseInt(fs.readFileSync(path.join(stateDir, d.name, `${f}.offset`), 'utf8').trim(), 10) || 0;
-          readers.push({ subscriber: d.name, delivered: countHeads(buf.subarray(0, Math.min(c, buf.length)).toString('utf8')) });
-        } catch {}
-      }
-    } catch {}
+    for (const d of subscriberDirs(stateDir)) {
+      try {
+        const c = parseInt(fs.readFileSync(path.join(stateDir, d, `${f}.offset`), 'utf8').trim(), 10) || 0;
+        readers.push({ subscriber: d, delivered: countHeads(buf.subarray(0, Math.min(c, buf.length)).toString('utf8')) });
+      } catch {}
+    }
     if (!byRole.has(rl)) byRole.set(rl, { role: rl, fanout: fanoutRoles.has(rl), isButton: owners.has(rl), total: 0, delivered: 0, pending: 0, files: [], readers: [] });
     const agg = byRole.get(rl);
     agg.total += total; agg.delivered += delivered; agg.pending += total - delivered;
@@ -987,13 +993,59 @@ export function queueLedger({ root, role } = {}) {
   return { roles: [...byRole.values()].sort((a, b) => (a.role < b.role ? -1 : 1)) };
 }
 
+/* ── Subscriber namespaces that nobody reads with any more ──
+ *
+ * Every per-reader cursor namespace (.qstate/<subscriber>/, and taps under __watchall__/) lived
+ * forever, and a dead one read as a reader "behind" in `hub queue status` indistinguishable from a
+ * live one (task macbook-pro-99). Liveness is observable: a waiting reader rewrites its .waiter
+ * marker every poll and its offsets on every delivery, so the newest mtime inside the namespace is
+ * its last sign of life. Idle past `days` = retired — MOVED to .qstate/_archive/, never deleted, so a
+ * reader that comes back after a long absence can be restored by moving the directory back. */
+export function subscriberNamespaces({ root, days = 7 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const st = path.join(r, '.qstate');
+  const nowMs = Date.now();
+  const out = [];
+  const scan = (dir, tap) => {
+    for (const name of subscriberDirs(dir)) {
+      const full = path.join(dir, name);
+      let newest = 0;
+      try { for (const f of fs.readdirSync(full)) { try { newest = Math.max(newest, fs.statSync(path.join(full, f)).mtimeMs); } catch {} } } catch {}
+      if (!newest) { try { newest = fs.statSync(full).mtimeMs; } catch {} }
+      const ageDays = Math.floor((nowMs - newest) / 86400000);
+      out.push({ name, tap, dir: full, lastActive: newest ? new Date(newest).toISOString().slice(0, 16).replace('T', ' ') : null,
+        ageDays, stale: ageDays >= days });
+    }
+  };
+  scan(st, false);
+  scan(path.join(st, '__watchall__'), true);
+  return out.sort((a, b) => b.ageDays - a.ageDays);
+}
+
+/** Move stale namespaces into .qstate/_archive/ (taps into _archive/__watchall__/). */
+export function archiveStaleSubscribers({ root, days = 7 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const moved = [], failed = [];
+  for (const ns of subscriberNamespaces({ root: r, days }).filter(n => n.stale)) {
+    const destDir = path.join(r, '.qstate', NS_ARCHIVE, ...(ns.tap ? ['__watchall__'] : []));
+    try {
+      fs.mkdirSync(destDir, { recursive: true });
+      let dest = path.join(destDir, ns.name);
+      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(destDir, `${ns.name}.${n}`);
+      fs.renameSync(ns.dir, dest);
+      moved.push((ns.tap ? '__watchall__/' : '') + ns.name);
+    } catch { failed.push(ns.name); }
+  }
+  return { moved, failed };
+}
+
 /**
  * Archive the ghost queues. Dry by default — prints what it WOULD move, so the first run is
  * always safe to type. `apply` moves them into queues/archive/, never unlinks.
  *
  * @param {{ root?: string, days?: number, apply?: boolean }} options
  */
-export function runQueueGc({ root, days = 30, apply = false } = {}) {
+export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 } = {}) {
   const r = root ?? resolveQueueRoot();
   const inv = queueInventory({ root: r, days });
   const ghosts = inv.filter(x => x.ghost);
@@ -1001,7 +1053,12 @@ export function runQueueGc({ root, days = 30, apply = false } = {}) {
   // of 43 files had never been consumed but only 5 were older than the default 30 days, and a
   // bare "5 ghosts" would read as "the other 38 are fine".
   const neverRead = inv.filter(x => !x.read && !x.lastSeen && !x.isOwner).length;
-  if (!apply) return { apply: false, days, count: ghosts.length, ghosts, live: inv.length - ghosts.length, neverRead, total: inv.length };
+  // Reader namespaces are the other thing a queue leaves behind, on a much shorter clock: a
+  // subscriber idle for a week is gone, while a queue file idle for a week may just be quiet.
+  const staleSubscribers = subscriberNamespaces({ root: r, days: subscriberDays }).filter(n => n.stale);
+  if (!apply) return { apply: false, days, count: ghosts.length, ghosts, live: inv.length - ghosts.length, neverRead, total: inv.length,
+    subscriberDays, staleSubscribers };
+  const subs = archiveStaleSubscribers({ root: r, days: subscriberDays });
   const dir = path.join(r, 'queues', 'archive');
   fs.mkdirSync(dir, { recursive: true });
   const moved = [], failed = [];
@@ -1013,7 +1070,8 @@ export function runQueueGc({ root, days = 30, apply = false } = {}) {
       moved.push(g.file);
     } catch { failed.push(g.file); }
   }
-  return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts };
+  return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts,
+    subscriberDays, staleSubscribers, subscribersArchived: subs.moved, subscribersFailed: subs.failed };
 }
 
 /**

@@ -4,6 +4,41 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.26 — 2026-09-23
+
+- **A broadcast reader keeps its place across a respawn** (task macbook-pro-99). The cursor of a
+  subscriber was keyed by the client process, so every restart of a role got a fresh namespace:
+  it either re-read the whole queue or, with `--from-now`, skipped what arrived while it was down —
+  and each dead namespace stayed in `hub queue status` as a reader "behind" forever (eight for one
+  role on one node). Cursors now key on a name that survives the process: `HUBD_SUBSCRIBER`, else
+  `HUBD_SESSION`, else `HUBD_AGENT`, else the process as before. The author floor and the whatsnew
+  checkpoint keep the per-process id — `HUBD_AGENT` is shared by every session on a machine, and an
+  author shared that way is what the floor exists to prevent. Two live sessions that do share a
+  reader name on one broadcast role are now detected and reported (they would split it), with the
+  fix. The first wait under the new name starts a new cursor once, like any new subscriber.
+- **Dead reader namespaces are archived, not kept forever or deleted.** `hub queue gc` lists
+  namespaces idle for 7 days (a live reader rewrites its marker every poll) and `--apply` moves them
+  to `.qstate/_archive/`; `hub gc`, which used to `rm -rf` them, now moves them too. `hub doctor`
+  names them. Archived namespaces are not counted as readers anywhere.
+- **A card no longer grows a second copy of a section** (task macbook-pro-112). Writers matched one
+  exact heading, so a card written before the hub was localised — or a heading typed in another case
+  — got a new section beside the old one, and every later copy of a heading was dead: nothing could
+  append to it, readers still saw it. Writes now find the section a card already has for that key
+  under its configured heading, the English default, or a declared alias (`"aliases": [...]` in
+  `sections.json`), case-insensitively. `hub doctor` names cards holding a section twice, and
+  `hub cards merge-sections` (dry run by default) folds them: lists concatenate in file order into
+  the live section, and a second next step goes to `projects/history/`, because two current steps is
+  the defect. A heading that merely resembles a key (`## Facts` beside the localised facts section,
+  a hand-written section on the hubs it appears on) is left alone unless declared an alias —
+  merging it would let rotation move curated facts to history.
+- **The author rule now covers claims, heartbeats, freeze, absorb and `cards compact`.** A claim or
+  presence record under `claude` is as unattributable as a journal line under it.
+- **A stale lock is stolen by rename, not unlink.** Two waiters that both saw a stale lock could
+  have the second remove the first's fresh one, leaving two holders; the steal now moves exactly one
+  file and puts it back if it turns out to be fresh.
+- **The secret store check resolves symlinks.** A store reached through a symlink into the team
+  root passed as "outside" while every byte landed in the replicated tree.
+
 ## 0.9.25 — 2026-09-23
 
 An audit pass over the whole codebase: every finding below was reproduced on the code before it was

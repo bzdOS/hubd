@@ -23,9 +23,10 @@ import {
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
+  runCardsMergeSections, cardSectionIssues, requireAuthor,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces, archiveStaleSubscribers } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -781,6 +782,15 @@ if (cmd === 'doctor') {
         console.log('    NOT a backlog: cursors and presence are node-local, so a consumer on another machine');
         console.log('    cannot be seen from here. Check on the node that runs the role before touching these.');
       }
+      // Reader namespaces nobody has used in a week: dead sessions of a broadcast role, each one
+      // listed as a reader "behind" in `hub queue status` forever. Housekeeping, not a fault — no
+      // message is at risk — so it is stated with its remedy and not counted as a warning.
+      const idleNs = subscriberNamespaces({ root: teamRoot, days: 7 }).filter(n => n.stale);
+      if (idleNs.length) {
+        console.log('  ' + idleNs.length + ' reader namespace(s) idle 7d+ (dead sessions): ' +
+          idleNs.slice(0, 6).map(n => (n.tap ? '__watchall__/' : '') + n.name).join(', ') + (idleNs.length > 6 ? ', …' : '') +
+          '  hint: hub queue gc --apply (moves them to .qstate/_archive/)');
+      }
       // Ghost roll-up: files nobody ever consumed, nobody is present for, and that are not a
       // human's queue. They inflate every pending number in the hub until they are archived.
       const ghosts = queueInventory({ root: teamRoot }).filter(x => x.ghost);
@@ -833,6 +843,26 @@ if (cmd === 'doctor') {
       console.log('  hint: if they are, point the old one at the canonical one in ' +
         path.join(HUB, 'project-aliases.json') + '  e.g. {"' + pairs[0][0] + '": "' + pairs[0][1] + '"}' +
         ' — reads then resolve both ways and new tasks land on the canonical slug (nothing is renamed on disk)');
+    }
+  }
+
+  // A card holding one section twice: writers reach only the first, readers see both and cannot
+  // tell which is live (task macbook-pro-112).
+  {
+    const doubled = [];
+    for (const f of projFiles) {
+      let t = ''; try { t = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
+      const is = cardSectionIssues(t);
+      if (is.length) doubled.push({ slug: f.replace(/\.md$/, ''), is });
+    }
+    if (doubled.length) {
+      warnings++;
+      console.log('');
+      console.log('cards: ' + doubled.length + ' card(s) hold a section twice — writes reach only the first  WARNING');
+      for (const d of doubled.slice(0, 8)) console.log('  ' + d.slug + ': ' + d.is.map(i => i.key
+        ? i.headings.map(h => '## ' + h).join(' + ') : '## ' + i.heading + ' x' + i.count).join('; '));
+      if (doubled.length > 8) console.log('  ... and ' + (doubled.length - 8) + ' more');
+      console.log('  hint: hub cards merge-sections  (dry run; --apply --by <you> folds them into the live section)');
     }
   }
 
@@ -1282,6 +1312,7 @@ if (cmd === 'freeze' || cmd === 'unfreeze') {
     '  the reason is what tells the next person (or the next you) whether it is safe to unfreeze.');
   const by = getFlag('--by') || process.env.HUBD_AGENT || null;
   if (!by) die('--by required (or set HUBD_AGENT): a freeze stops every peer from receiving this node\'s work.');
+  try { requireAuthor(by, '--by'); } catch (e) { die(e.message); }
   if (fs.existsSync(FREEZE_FILE)) {
     let info = {}; try { info = JSON.parse(fs.readFileSync(FREEZE_FILE, 'utf8')); } catch {}
     console.log('Already frozen since ' + (info.since || '?') + ' by ' + (info.by || '?') + ': ' + (info.why || '?'));
@@ -1347,6 +1378,25 @@ if (cmd === 'cards' && args[1] === 'compact') {
   console.log(apply
     ? 'Nothing was deleted: every moved entry is in projects/history/<slug>.md, which syncs with the mesh.'
     : 'Nothing written. The overflow would be MOVED to history, never dropped — FACT:/HYPO:/COMM: live only in the card.');
+  done(0);
+}
+
+// cards merge-sections: fold doubled sections (same heading twice, or one key under two locales)
+// into the live one. Dry by default.
+if (cmd === 'cards' && args[1] === 'merge-sections') {
+  const apply = args.includes('--apply');
+  const by = getFlag('--by') || process.env.HUBD_AGENT || null;
+  if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the merge is journaled.');
+  let r; try { r = runCardsMergeSections({ apply, by }); } catch (e) { die(e.message); }
+  if (!r.cards.length) { console.log('No card holds a section twice.'); done(0); }
+  const what = (i) => i.key ? `${i.key}: ${i.headings.map(h => '## ' + h).join(' + ')}` : `## ${i.heading} x${i.count}`;
+  for (const c of r.cards) {
+    console.log('  ' + c.slug + ': ' + c.issues.map(what).join('; ') + (c.skipped ? '  — skipped: ' + c.skipped : ''));
+    for (const m of (c.merged || [])) console.log('      → ## ' + m.section + ' (' + m.mode + ')');
+  }
+  console.log(apply
+    ? 'Merged. Lists were concatenated in file order; a second next step went to projects/history/<slug>.md, never dropped.'
+    : 'Nothing written (dry run — add --apply --by <you>). Lists would be concatenated into the section writers reach; a second next step would move to history.');
   done(0);
 }
 
@@ -1737,31 +1787,16 @@ if (cmd === 'gc') {
       }
     }
   } catch (e) { die('cannot read hub dir: ' + e.message); }
-  // Per-subscriber cursor dirs accumulate one per session and nothing else ever removes
-  // them. Only sweep dirs untouched for a week: an idle but live session must keep its
-  // cursor, or it silently resumes at the tail and skips whatever arrived meanwhile.
+  // Per-subscriber cursor dirs accumulate one per session. Namespaces idle for a week — a
+  // live reader rewrites its .waiter every poll — are MOVED to .qstate/_archive/, not deleted
+  // (they used to be rm -rf'd): a reader that returns after a long absence can be put back
+  // and resumes where it stopped. Taps under __watchall__ go by the same rule.
   // Shared cursors sit as plain files in .qstate and are never touched here.
-  // Two levels, because subscribers live in two places: .qstate/<subscriber>/ for a
-  // role's own readers, and .qstate/__watchall__/<subscriber>/ for fleet taps — the
-  // latter is where an orchestrator's cursor goes, so skipping __watchall__ outright
-  // would exempt the busiest kind from the sweep entirely.
-  const sweepCursors = (dir, label) => {
-    let n = 0;
-    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const full = path.join(dir, d.name);
-      if (d.name === '__watchall__' && label === '') { n += sweepCursors(full, '__watchall__/'); continue; }
-      let newest = 0;
-      for (const f of fs.readdirSync(full)) {
-        try { newest = Math.max(newest, fs.statSync(path.join(full, f)).mtimeMs); } catch {}
-      }
-      if (newest && nowMs - newest > 7 * 86400000) {
-        try { fs.rmSync(full, { recursive: true, force: true }); console.log('  removed stale cursor ' + label + d.name); n++; } catch {}
-      }
-    }
-    return n;
-  };
-  try { removed += sweepCursors(path.join(resolveQueueRoot(), '.qstate'), ''); } catch {}
+  try {
+    const subs = archiveStaleSubscribers({ root: resolveQueueRoot(), days: 7 });
+    for (const n of subs.moved) console.log('  archived idle reader ' + n + ' → .qstate/_archive/');
+    removed += subs.moved.length;
+  } catch {}
   // Session records in .env-state.json accumulate the same way cursor dirs do — one per
   // session that was told about a protocol change — so they go by the same rule.
   try {
@@ -2011,12 +2046,18 @@ else if (cmd === 'queue') {
     for (const g of r.ghosts) {
       console.log(`  ${g.file}  ${g.messages} msg, ${g.bytes}B, ${g.newest ? 'newest ' + g.newest : 'empty'}, ${g.ageDays}d, never read`);
     }
+    for (const s of r.staleSubscribers) {
+      console.log(`  reader ${s.tap ? '__watchall__/' : ''}${s.name}  last active ${s.lastActive || '?'} (${s.ageDays}d)`);
+    }
     if (apply) {
       console.log(r.count
         ? `Archived ${r.moved.length}/${r.count} ghost queue(s) → ${r.archive}${r.failed.length ? '  (failed: ' + r.failed.join(', ') + ')' : ''}`
         : `Nothing to archive at --days ${days}`);
+      if (r.staleSubscribers.length) console.log(`Archived ${r.subscribersArchived.length}/${r.staleSubscribers.length} idle reader namespace(s) → .qstate/_archive/` +
+        (r.subscribersFailed.length ? '  (failed: ' + r.subscribersFailed.join(', ') + ')' : '') + ' — move one back to resume that reader where it stopped');
       done(0);
     }
+    if (r.staleSubscribers.length) console.log(`${r.staleSubscribers.length} reader namespace(s) idle ${r.subscriberDays}d+ — --apply moves them to .qstate/_archive/ (never deleted).`);
     console.log(r.count
       ? `${r.count} ghost queue(s) older than ${days}d, ${r.live} live. Nothing moved — re-run with --apply to archive them into queues/archive/ (moved, never deleted).`
       : `No ghost queues older than ${days}d: every queue file has a cursor, a present agent, or is newer.`);
@@ -2061,6 +2102,7 @@ else if (!cmd) {
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
     '  cards compact [--apply --by <you>]   move the overflow of over-long card sections into projects/history/ (dry run without --apply)',
+    '  cards merge-sections [--apply --by <you>]   fold a section a card holds twice (same heading, or two locales) into the live one',
     '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
     '  freeze "<why>" --by <you>        stop mesh-sync on THIS node before operating on the hub dir',
     '  unfreeze                         let it sync again',

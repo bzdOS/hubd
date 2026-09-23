@@ -3109,7 +3109,152 @@ core.setHubBase(AUP);
 }
 core.setHubBase(T0);
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP]) fs.rmSync(d, { recursive: true, force: true });
+// ── macbook-pro-112: one card, two sections that mean the same thing ──
+const MS2 = mktmp();
+core.setHubBase(MS2);
+{
+  // A hub localised AFTER its cards were written: "Up next" / "Known things" configured, while the
+  // card still carries the English defaults. The writers used to start a second section beside them.
+  fs.writeFileSync(path.join(MS2, 'sections.json'), JSON.stringify({ next: 'Up next', facts: 'Known things' }));
+  fs.writeFileSync(path.join(MS2, 'projects', 'loc.md'),
+    '# loc\n\n- slug: loc\n- set: 2026-09-01 10:00 by dev-t\n\n## Digest\n\nd\n\n## Facts & hypotheses\n\n- fact: old one\n\n## decisions\n\n- 2026-09-01 10:00: lower-case heading\n');
+  core.runReport({ project: 'loc', by: 'dev-t', text: 'FACT: new one\nDECIDE: goes to the lower-case section' });
+  let card = core.readCard('loc');
+  ok(!/## Known things/.test(card) && /- fact: old one\n- fact: new one/.test(card),
+    'sections: a FACT lands in the English section the card already has, not in a new localised one');
+  ok((card.match(/^## decisions$/gim) || []).length === 1 && /goes to the lower-case section/.test(core.sectionBody(card, 'decisions')),
+    'sections: heading match is case-insensitive — no second "Decisions" beside "decisions"');
+  const sa = core.runSectionAdd({ project: 'loc', section: 'Known things', text: 'via the configured name', by: 'dev-t' });
+  ok(sa.section === 'Facts & hypotheses' && sa.created === false, `section add: a configured heading resolves to the section the card has (got ${sa.section})`);
+
+  // Detection and merge.
+  fs.writeFileSync(path.join(MS2, 'projects', 'dup.md'),
+    '# dup\n\n- slug: dup\n\n## Digest\n\nd\n\n## Up next\n\n- live step — set 2026-09-20 10:00 by dev-t\n\n## Handoff linux\n\n- first\n\n' +
+    '## Next step\n\n- stale english step\n\n## Handoff linux\n\n- second\n\n## Handoff linux\n\n- third\n');
+  const iss = core.cardSectionIssues(core.readCard('dup'));
+  ok(iss.some(i => i.key === 'next' && i.kind === 'locales') && iss.some(i => i.heading === 'Handoff linux' && i.count === 3),
+    `sections: detection names one key under two headings and a heading repeated three times (${JSON.stringify(iss)})`);
+  const dry = core.runCardsMergeSections({});
+  ok(dry.apply === false && dry.cards.some(c => c.slug === 'dup') && !dry.cards.some(c => c.merged) && /stale english step/.test(core.readCard('dup')),
+    'merge: dry run lists and writes nothing');
+  let thrown = null; try { core.runCardsMergeSections({ apply: true }); } catch (e) { thrown = e.message; }
+  ok(/by required/.test(thrown || ''), 'merge: --apply needs an author');
+  core.runCardsMergeSections({ apply: true, by: 'dev-t' });
+  card = core.readCard('dup');
+  ok((card.match(/^## Handoff linux$/gm) || []).length === 1 && /- first\n- second\n- third/.test(card),
+    'merge: a repeated heading is folded into the first, entries in file order');
+  ok((card.match(/^## (Up next|Next step)$/gm) || []).length === 1 && /live step/.test(card) && !/stale english step/.test(card),
+    'merge: two next-step sections leave the LIVE one, not two current steps');
+  ok(/stale english step/.test(fs.readFileSync(path.join(MS2, 'projects', 'history', 'dup.md'), 'utf8')), 'merge: the superseded step is in history, not dropped');
+  ok(core.cardSectionIssues(card).length === 0, 'merge: nothing doubled is left');
+  // Declared aliases are the only way a look-alike heading joins a key.
+  fs.writeFileSync(path.join(MS2, 'projects', 'hand.md'), '# hand\n\n## Digest\n\nd\n\n## Facts\n\n- curated\n\n## Known things\n\n- fact: x\n');
+  ok(core.cardSectionIssues(core.readCard('hand')).length === 0, 'sections: an undeclared look-alike ("Facts") is a separate hand section');
+  fs.writeFileSync(path.join(MS2, 'sections.json'), JSON.stringify({ next: 'Up next', facts: { heading: 'Known things', aliases: ['Facts'] } }));
+  ok(core.cardSectionIssues(core.readCard('hand')).some(i => i.key === 'facts'), 'sections: once declared as an alias it is reported as the same section');
+  const doc = run('doctor', { HUBD_DIR: MS2, HUBD_TEAM_DIR: MS2 });
+  ok(/card\(s\) hold a section twice/.test(doc.out) && /hand: ## Facts \+ ## Known things/.test(doc.out), 'doctor: names the cards that hold a section twice');
+  const cliM = run('cards merge-sections', { HUBD_DIR: MS2, HUBD_TEAM_DIR: MS2 });
+  ok(cliM.code === 0 && /hand: facts: ## Facts \+ ## Known things/.test(cliM.out) && /dry run/.test(cliM.out), 'merge CLI: dry run prints the plan');
+}
+core.setHubBase(T0);
+
+// ── macbook-pro-99: a broadcast reader keeps its place across a respawn ──
+const SUBQ = mktmp();
+core.setHubBase(SUBQ);
+{
+  const qlib = await import(path.join(REPO, 'hub/lib/queue.mjs'));
+  const sess = await import(path.join(REPO, 'hub/lib/session.mjs'));
+  const saved = { a: process.env.HUBD_AGENT, s: process.env.HUBD_SESSION, u: process.env.HUBD_SUBSCRIBER };
+  delete process.env.HUBD_SESSION; delete process.env.HUBD_SUBSCRIBER;
+  process.env.HUBD_AGENT = 'barechat-linux';
+  sess.resetSessionId();
+  const sid = sess.subscriberId();
+  ok(sid === 'a-barechat-linux', `subscriber: falls back to HUBD_AGENT, which a respawned role comes back with (got ${sid})`);
+  ok(sess.sessionId() !== sid, 'subscriber: the process session id (author floor, checkpoints) is NOT the shared agent name');
+  process.env.HUBD_SUBSCRIBER = 'linux-reader'; sess.resetSessionId();
+  ok(sess.subscriberId() === 'u-linux-reader', 'subscriber: HUBD_SUBSCRIBER wins when the harness names the reader');
+  delete process.env.HUBD_SUBSCRIBER; sess.resetSessionId();
+
+  fs.writeFileSync(path.join(SUBQ, 'subscriber-roles.json'), JSON.stringify(['chat']));
+  qlib.queueSend('chat', 'one', { from: 'dev-t', root: SUBQ });
+  const w1 = await qlib.queueWait('chat', { root: SUBQ, timeout: 1, subscriber: sess.subscriberId() });
+  qlib.queueSend('chat', 'two', { from: 'dev-t', root: SUBQ });
+  sess.resetSessionId();                                   // "respawn": same env, new process identity
+  const w2 = await qlib.queueWait('chat', { root: SUBQ, timeout: 1, subscriber: sess.subscriberId() });
+  ok(/one/.test(w1.text) && /two/.test(w2.text) && !/one/.test(w2.text), 'subscriber: after a respawn the reader resumes at its own position — not from zero, not from the end');
+
+  // Two live sessions on one stable id split a broadcast — seen and reported, not silent.
+  const nsDir = path.join(SUBQ, '.qstate', sid);
+  fs.writeFileSync(path.join(nsDir, 'chat.waiter'), JSON.stringify({ pid: process.ppid, since: new Date().toISOString() }));
+  const origErr = process.stderr.write; process.stderr.write = () => true;
+  await qlib.queueWait('chat', { root: SUBQ, timeout: 0, subscriber: sid });
+  process.stderr.write = origErr;
+  const sharedObs = () => ((JSON.parse(fs.readFileSync(path.join(SUBQ, '.env-state.json'), 'utf8')).observations || {})['subscriber-shared'] || {}).values || [];
+  ok(sharedObs().includes(`chat as ${sid}`) && core.envChecks({}).total >= 1,
+    'subscriber: two live waiters on one id are recorded for the environment check');
+  fs.rmSync(path.join(nsDir, 'chat.waiter'), { force: true });
+  await qlib.queueWait('chat', { root: SUBQ, timeout: 0, subscriber: sid });
+  ok(sharedObs().length === 0, 'subscriber: and the notice clears once only one waits');
+
+  // Dead namespaces: listed, archived (moved, not deleted), and no longer counted as readers.
+  const old = (Date.now() - 10 * 86400000) / 1000;
+  for (const d of [path.join(SUBQ, '.qstate', 'p-111-dead'), path.join(SUBQ, '.qstate', '__watchall__', 'p-222-dead')]) {
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'chat.cowork.queue.md.offset'), '0');
+    fs.utimesSync(path.join(d, 'chat.cowork.queue.md.offset'), old, old);
+  }
+  const g0 = qlib.runQueueGc({ root: SUBQ });
+  ok(g0.staleSubscribers.map(s => s.name).sort().join(',') === 'p-111-dead,p-222-dead' && fs.existsSync(path.join(SUBQ, '.qstate', 'p-111-dead')),
+    `gc: dry run lists the idle reader namespaces, including taps, and moves nothing (${g0.staleSubscribers.map(s => s.name)})`);
+  ok(qlib.queueLedger({ root: SUBQ, role: 'chat' }).roles[0].readers.some(r => r.subscriber === 'p-111-dead'), 'gc: before archiving, the dead reader shows in the ledger');
+  const g1 = qlib.runQueueGc({ root: SUBQ, apply: true });
+  ok(g1.subscribersArchived.length === 2 && fs.existsSync(path.join(SUBQ, '.qstate', '_archive', 'p-111-dead', 'chat.cowork.queue.md.offset'))
+    && fs.existsSync(path.join(SUBQ, '.qstate', '_archive', '__watchall__', 'p-222-dead')) && fs.existsSync(nsDir),
+    'gc: --apply moves idle namespaces to .qstate/_archive/ and leaves the live one');
+  ok(!qlib.queueLedger({ root: SUBQ, role: 'chat' }).roles[0].readers.some(r => /dead|archive/.test(r.subscriber)), 'gc: an archived namespace is no longer a reader');
+  const gcCli = run('gc', { HUBD_DIR: SUBQ, HUBD_TEAM_DIR: SUBQ });
+  ok(gcCli.code === 0 && fs.existsSync(path.join(SUBQ, '.qstate', '_archive')), 'gc: hub gc leaves the archive alone');
+
+  if (saved.a === undefined) delete process.env.HUBD_AGENT; else process.env.HUBD_AGENT = saved.a;
+  if (saved.s !== undefined) process.env.HUBD_SESSION = saved.s;
+  if (saved.u !== undefined) process.env.HUBD_SUBSCRIBER = saved.u;
+  sess.resetSessionId();
+}
+core.setHubBase(T0);
+
+// ── audit tails: the author rule everywhere, the lock steal, the secret store behind a symlink ──
+const TL = mktmp();
+core.setHubBase(TL);
+{
+  let e1 = null; try { core.runClaim({ project: 'p', area: 'x', agent: 'claude' }); } catch (e) { e1 = e.message; }
+  ok(/names a model/.test(e1 || ''), 'author: a claim holder is held to the author rule');
+  let e2 = null; try { core.runHeartbeat({ agent: 'agent' }); } catch (e) { e2 = e.message; }
+  ok(/names a model|placeholder/.test(e2 || ''), 'author: a heartbeat name is held to the author rule');
+  let e3 = null; try { core.runCardsCompact({ apply: true }); } catch (e) { e3 = e.message; }
+  ok(/by required/.test(e3 || ''), 'author: cards compact --apply needs an author');
+
+  // A stale lock is stolen, and nothing is left behind by the steal.
+  const lf = path.join(TL, 'claims.json.lock');
+  fs.writeFileSync(lf, '');
+  const old = (Date.now() - 120000) / 1000; fs.utimesSync(lf, old, old);
+  const c = core.runClaim({ project: 'p', area: 'y', agent: 'dev-t' });
+  ok(c.ok && !fs.existsSync(lf) && !fs.readdirSync(TL).some(f => f.includes('.stale.')), 'lock: a stale lock is stolen by rename and leaves no grave file');
+
+  // The secret store must not be reachable inside the replicated tree through a symlink.
+  const sec = await import(path.join(REPO, 'hub/lib/secrets.mjs'));
+  const link = path.join(mktmp(), 'store-link');
+  fs.mkdirSync(path.join(TL, 'inside'));
+  fs.symlinkSync(path.join(TL, 'inside'), link);
+  const prev = process.env.HUBD_SECRETS_DIR; process.env.HUBD_SECRETS_DIR = link;
+  let e4 = null; try { sec.assertNotReplicated(TL); } catch (e) { e4 = e.message; }
+  ok(/inside the team root/.test(e4 || ''), 'secrets: a store symlinked into the team root is refused');
+  if (prev === undefined) delete process.env.HUBD_SECRETS_DIR; else process.env.HUBD_SECRETS_DIR = prev;
+  fs.rmSync(path.dirname(link), { recursive: true, force: true });
+}
+core.setHubBase(T0);
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

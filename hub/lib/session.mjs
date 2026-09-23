@@ -83,5 +83,32 @@ export function sessionId() {
   return cached;
 }
 
-/** Test seam: forget the memoised value so a test can vary the environment. */
-export function resetSessionId() { cached = undefined; }
+/* ── Which READER a queue cursor belongs to ──
+ *
+ * sessionId() answers "which process is this", and for the author floor and the whatsnew
+ * checkpoint that is the right question. For a broadcast cursor it is the wrong one: a role that is
+ * respawned every two hours got a fresh p-<ppid>-<token> each time, so every respawn either re-read
+ * the whole queue or (with fromNow) skipped whatever arrived while it was down — and the dead
+ * namespaces stayed behind as readers "behind" forever. Eight of them for one role on one node
+ * (task macbook-pro-99).
+ *
+ * So a cursor prefers a name that SURVIVES the process: HUBD_SUBSCRIBER if the harness names the
+ * reader outright, then HUBD_SESSION, then HUBD_AGENT — the role's own configured name, which is
+ * what a respawned role comes back with — and only then the process. The author floor keeps using
+ * sessionId(): HUBD_AGENT is per machine, and an author shared by every session on it is exactly
+ * what the floor's suffix exists to prevent. Two live sessions that DO share one of these names on
+ * one broadcast role are detected at wait time and reported (see queueWait), not silently split. */
+let cachedSub;
+export function subscriberId() {
+  if (cachedSub !== undefined) return cachedSub;
+  const sub = clean(process.env.HUBD_SUBSCRIBER || '');
+  if (sub) return (cachedSub = 'u-' + sub);
+  const explicit = clean(process.env.HUBD_SESSION || '');
+  if (explicit) return (cachedSub = 's-' + explicit);
+  const agent = clean(process.env.HUBD_AGENT || '');
+  if (agent) return (cachedSub = 'a-' + agent);
+  return (cachedSub = sessionId());
+}
+
+/** Test seam: forget the memoised values so a test can vary the environment. */
+export function resetSessionId() { cached = undefined; cachedSub = undefined; }

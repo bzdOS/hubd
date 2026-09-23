@@ -32,11 +32,29 @@ export function secretsRoot() {
   return process.env.HUBD_SECRETS_DIR || path.join(os.homedir(), '.hubd-secrets');
 }
 
+/* Where a path REALLY is: the realpath of its nearest existing ancestor, plus the rest. The check
+ * below compared path.resolve() strings, so a store reached through a symlink — ~/.hubd-secrets
+ * pointing into the hub, or a hub reached through /home/agent/.hubd -> /srv/fleet/hubd — passed as
+ * "outside" while every byte of it landed in the replicated tree. */
+function realish(p) {
+  let cur = path.resolve(p);
+  const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(cur), ...rest.reverse()); }
+    catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 /** Throws if the store would sit inside the replicated team root. */
 export function assertNotReplicated(teamRoot) {
   if (!teamRoot) return;
-  const store = path.resolve(secretsRoot());
-  const team = path.resolve(teamRoot);
+  const store = realish(secretsRoot());
+  const team = realish(teamRoot);
   const inside = store === team || store.startsWith(team + path.sep);
   if (inside) {
     throw new Error(

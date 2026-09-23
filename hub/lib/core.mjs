@@ -135,10 +135,22 @@ function acquireLock(file) {
       try {
         const st = fs.statSync(lock);
         if (Date.now() - st.mtimeMs > 30000) {
-          try { fs.unlinkSync(lock); } catch (unlinkErr) {
-            if (unlinkErr.code !== 'ENOENT') throw unlinkErr;
+          /* Steal by RENAME, then look at what was taken. unlink-by-path had a window: two waiters
+           * both see the stale lock, the first removes it and takes a fresh one, and the second's
+           * unlink then removes that FRESH lock — two holders at once. A rename moves exactly one
+           * inode; if the one we moved turns out to be fresh, it is linked back before retrying. */
+          const grave = `${lock}.stale.${process.pid}.${crypto.randomBytes(3).toString('hex')}`;
+          try { fs.renameSync(lock, grave); } catch (renameErr) {
+            if (renameErr.code !== 'ENOENT') throw renameErr;
+            continue;                                      // someone else took it first — retry
           }
-          continue; // retry immediately
+          let fresh = false;
+          try { fresh = Date.now() - fs.statSync(grave).mtimeMs <= 30000; } catch {}
+          if (fresh) { try { fs.linkSync(grave, lock); } catch {} }
+          try { fs.unlinkSync(grave); } catch {}
+          if (!fresh) continue;                              // the stale one is gone — retry now
+          sleepMs(50);
+          continue;
         }
       } catch (statErr) {
         if (statErr.code !== 'ENOENT') throw statErr;
@@ -1365,8 +1377,7 @@ export function lawFor(id, fallback) {
 
 /** The body of one "## Heading" section, or null. Read-side twin of editSection. */
 export function sectionBody(text, heading) {
-  const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp('^## ' + esc + '[ \\t]*$', 'm').exec(String(text || ''));
+  const m = headingRe(heading).exec(String(text || ''));
   if (!m) return null;
   const start = m.index + m[0].length;
   const rest = String(text).slice(start);
@@ -1433,7 +1444,7 @@ export function runLint(a = {}) {
   for (const c of projectCards()) {
     if (restrict && !restrict.includes(c.slug)) continue;
     if (!money.includes(c.slug)) continue;
-    const body = sectionBody(c.text, gatesHeading);
+    const body = sectionBody(c.text, liveHeading(c.text, 'gates'));
     if (isPlaceholder(body)) continue;
     if (!/\d{4}-\d{2}-\d{2}/.test(body)) {
       findings.push({ id: 'gate-without-date', severity: 'med', project: c.slug,
@@ -1567,7 +1578,7 @@ export function runAudit(a = {}) {
   }
   for (const c of cards) {
     if (!money.includes(c.slug)) continue;
-    const body = sectionBody(c.text, gatesHeading);
+    const body = sectionBody(c.text, liveHeading(c.text, 'gates'));
     if (isPlaceholder(body)) continue;
     const dates = (body.match(/\d{4}-\d{2}-\d{2}/g) || []).sort();
     const last = dates[dates.length - 1];
@@ -1991,7 +2002,12 @@ const SECTIONS_DEFAULT = [
   { key: 'communication', heading: 'Communication',      hint: 'what has gone out externally vs what is still queued' },
 ];
 export function sectionsConfig() {
-  const cfg = SECTIONS_DEFAULT.map(s => ({ ...s }));
+  // `defaultHeading` survives the override: a card written before sections.json existed (or on a
+  // node with another locale) carries the English heading, and a writer that only knows the local
+  // one used to miss it and start a second section beside it (task macbook-pro-112). `aliases` is
+  // for headings an instance DECLARES as the same section — never guessed, because a hand-written
+  // section that merely looks similar may hold something else.
+  const cfg = SECTIONS_DEFAULT.map(s => ({ ...s, defaultHeading: s.heading, aliases: [] }));
   for (const fname of ['sections.json', 'report-sections.json']) {   // report-sections.json = deprecated alias
     try {
       const f = path.join(HUB, fname);
@@ -2000,12 +2016,42 @@ export function sectionsConfig() {
       for (const s of cfg) {
         const ov = o[s.key];
         if (typeof ov === 'string') s.heading = ov;
-        else if (ov && typeof ov === 'object') { if (ov.heading) s.heading = ov.heading; if (ov.hint) s.hint = ov.hint; }
+        else if (ov && typeof ov === 'object') {
+          if (ov.heading) s.heading = ov.heading;
+          if (ov.hint) s.hint = ov.hint;
+          if (Array.isArray(ov.aliases)) s.aliases = ov.aliases.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim());
+        }
       }
       return cfg;   // first file found wins (sections.json preferred)
     } catch {}
   }
   return cfg;
+}
+
+/** Every heading that means section `key`, most preferred first: configured, default, aliases. */
+export function sectionHeadings(key) {
+  const s = sectionsConfig().find(x => x.key === key);
+  if (!s) return [];
+  const seen = new Set(), out = [];
+  for (const h of [s.heading, s.defaultHeading, ...s.aliases]) {
+    const k = h.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(h); }
+  }
+  return out;
+}
+
+const headingRe = (heading) => new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*$', 'mi');
+/** Is "## heading" in this text — case-insensitive, trailing blanks ignored, like every writer here. */
+export function hasHeading(text, heading) { return headingRe(heading).test(String(text || '')); }
+
+/** The heading section `key` actually lives under in THIS card, or the configured one to create. */
+export function liveHeading(text, key) {
+  const all = sectionHeadings(key);
+  for (const h of all) {
+    const m = headingRe(h).exec(String(text || ''));
+    if (m) return m[0].slice(3).trim();
+  }
+  return all[0] || key;
 }
 
 // "Buttons" (task #159): which queue roles are HUMAN owners, not agents — the
@@ -2210,6 +2256,15 @@ export function envChecks({ session, transport } = {}) {
       id: 'queue-fanout-undeclared', severity: 'med', actor: 'agent',
       what: `Two sessions were seen waiting on one cursor for: ${conflicted.join(', ')}. A message goes to exactly one of them, so the other never sees it.`,
       remedy: `If those roles are meant to broadcast, add them to subscriber-roles.json in the team root and every waiter gets its own cursor. If they are work queues, this is working as intended — run a single waiter and the notice goes away.`,
+    });
+  }
+
+  const shared = ((st.observations || {})['subscriber-shared'] || {}).values || [];
+  if (shared.length) {
+    out.push({
+      id: 'subscriber-shared', severity: 'med', actor: 'agent+restart',
+      what: `Two live sessions waited under one subscriber id: ${shared.join(', ')}. A broadcast then splits between them — each sees only part of it.`,
+      remedy: 'Give each session its own reader name: HUBD_SUBSCRIBER (or HUBD_SESSION) in that client\'s hubd env, or `--as <name>` on the CLI. The id falls back to HUBD_AGENT, which every session on one machine shares.',
     });
   }
 
@@ -2571,11 +2626,8 @@ const REPORT_PREFIX = {
   TASK: 'task', TODO: 'task',
   NOTE: 'note',
 };
-function reportSections() {
-  const byKey = {};
-  for (const s of sectionsConfig()) byKey[s.key] = s.heading;   // same single source as the scaffold → no drift
-  return { decide: byKey.decisions, fact: byKey.facts, hypo: byKey.facts, comm: byKey.communication, next: byKey.next };
-}
+// Prefixes route to section KEYS, resolved per card by liveHeading(): the heading the card already
+// uses for that key, whichever locale it was written in, before the configured one is created.
 function cardBaseFor(name) {
   const slug = slugify(name);
   return `# ${name}\n\n- slug: ${slug}\n\n## Digest\n\n<no digest yet — run hub card ${slug} -m "...">\n\n` + cardScaffold();
@@ -2583,8 +2635,7 @@ function cardBaseFor(name) {
 // Append (or set) one line under a "## Heading" of a card, preserving everything else;
 // replaces a lone "<placeholder>" body or creates the section if it is missing.
 function editSection(text, heading, payload, mode) {
-  const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp('^## ' + esc + '[ \\t]*$', 'm').exec(text);
+  const m = headingRe(heading).exec(text);
   if (!m) return text.replace(/\s*$/, '') + '\n\n## ' + heading + '\n\n' + payload + '\n';
   const bodyStart = m.index + m[0].length;
   const rest = text.slice(bodyStart);
@@ -2698,6 +2749,7 @@ export function rotateCardOverflow(text, slug, by, limits = cardLimits()) {
  *  existed. Dry by default: the plan says which section of which card loses how much, and where
  *  it goes. Cards already inside the limit are untouched and unlisted. */
 export function runCardsCompact(a = {}) {
+  if (a.apply) requireAuthor(a.by, 'by');   // the move is journaled, and history records who moved it
   const lim = cardLimits();
   const cards = [];
   let files = [];
@@ -2733,6 +2785,114 @@ export function runCardsCompact(a = {}) {
   return { ok: true, apply: !!a.apply, limits: lim, cards };
 }
 
+/* ── One card, two sections that mean the same thing ──
+ *
+ * editSection writes into the FIRST heading that matches, so every later section of the same name
+ * is dead: nothing can append to it, and hub_get still hands it to a reader, who then sees two
+ * "Next step"s with different contents and no way to tell which is live. One hub had three
+ * "## Handoff barechat-linux" in one card, and "## Next step" beside its localised heading in two
+ * (task macbook-pro-112). Two shapes, both found here:
+ *   - the same heading more than once (a merge resolved by hand, a heading typed twice);
+ *   - one section KEY under two of its headings (the English default and the sections.json one) —
+ *     a card written before the hub was localised, or on a node with another locale.
+ * A heading that only resembles a key is NOT folded in: "## Facts" beside the localised facts heading is
+ * a hand-written section on the cards it appears on, and merging it would let rotation move the
+ * curated facts to history. Declare it an alias in sections.json if it really is the same. */
+function sectionGroupId(heading) {
+  const h = heading.trim().toLowerCase();
+  for (const s of sectionsConfig()) if (sectionHeadings(s.key).some(x => x.toLowerCase() === h)) return 'key:' + s.key;
+  return 'h:' + h;
+}
+
+/** What is doubled in a card: same-heading repeats and one key under several headings. */
+export function cardSectionIssues(text) {
+  const groups = new Map();
+  for (const m of String(text || '').matchAll(/^## (.+?)[ \t]*$/gm)) {
+    const id = sectionGroupId(m[1]);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(m[1].trim());
+  }
+  const out = [];
+  for (const [id, heads] of groups) {
+    if (heads.length < 2) continue;
+    out.push(id.startsWith('key:')
+      ? { key: id.slice(4), headings: heads, kind: new Set(heads.map(h => h.toLowerCase())).size > 1 ? 'locales' : 'repeated' }
+      : { heading: heads[0], count: heads.length, kind: 'repeated' });
+  }
+  return out;
+}
+
+/** Fold every doubled section into one. Lists concatenate in file order at the position of the
+ *  live section (the one writers reach); for "next", which is SET rather than appended, the live
+ *  step stays and the dead variants go to history — two current steps is the defect, not a fix. */
+export function mergeCardSections(text, slug, by) {
+  const merged = [];
+  if (!text || CONFLICT_RE.test(text)) return { text, merged };
+  const parts = String(text).split(/(?=^## )/m).map(p => {
+    const m = /^## (.+?)[ \t]*$/m.exec(p);
+    return m && m.index === 0 ? { heading: m[1].trim(), body: p.slice(m[0].length), id: sectionGroupId(m[1]) } : { raw: p };
+  });
+  const byId = new Map();
+  parts.forEach((p, i) => { if (p.id) { if (!byId.has(p.id)) byId.set(p.id, []); byId.get(p.id).push(i); } });
+  const drop = new Set();
+  for (const [id, idx] of byId) {
+    if (idx.length < 2) continue;
+    const key = id.startsWith('key:') ? id.slice(4) : null;
+    const live = key ? liveHeading(text, key).toLowerCase() : null;
+    const target = key ? (idx.find(i => parts[i].heading.toLowerCase() === live) ?? idx[0]) : idx[0];
+    const bodyOf = (i) => parts[i].body.replace(/^\n+/, '').replace(/\s+$/, '');
+    const others = idx.filter(i => i !== target);
+    if (key === 'next') {
+      for (const i of others) {
+        const b = bodyOf(i);
+        if (b && !isPlaceholder(b)) appendHistory(slug, `\n---\n### until ${now()} (## ${parts[i].heading} — a second next-step section, superseded by ## ${parts[target].heading}; merged by ${by || 'hubd'})\n${b}\n`);
+      }
+    } else {
+      let movedMark = null;
+      const lines = [];
+      for (const i of idx) {
+        const b = bodyOf(i);
+        if (!b || isPlaceholder(b)) continue;
+        for (const l of b.split('\n')) {
+          if (l.startsWith(MOVED_MARK)) { movedMark = movedMark || l; continue; }
+          lines.push(l);
+        }
+      }
+      parts[target].body = '\n\n' + [movedMark, ...lines].filter(x => x != null).join('\n') + '\n\n';
+    }
+    for (const i of others) drop.add(i);
+    merged.push({ section: parts[target].heading, from: others.map(i => parts[i].heading), mode: key === 'next' ? 'kept live step, others to history' : 'concatenated' });
+  }
+  if (!merged.length) return { text, merged };
+  const out = parts.filter((_, i) => !drop.has(i)).map(p => p.raw != null ? p.raw : `## ${p.heading}${p.body}`).join('');
+  return { text: out.replace(/\n{3,}/g, '\n\n'), merged };
+}
+
+/** Run the merge over every card. Dry by default; --apply writes, rotates and journals once. */
+export function runCardsMergeSections(a = {}) {
+  const by = a.apply ? requireAuthor(a.by, 'by') : (a.by || null);
+  const cards = [];
+  let files = [];
+  try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')).sort(); } catch {}
+  for (const f of files) {
+    const slug = f.replace(/\.md$/, '');
+    let text; try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
+    const issues = cardSectionIssues(text);
+    if (!issues.length) continue;
+    if (CONFLICT_RE.test(text)) { cards.push({ slug, issues, skipped: 'conflict markers — resolve it first (hub card resolve)' }); continue; }
+    if (!a.apply) { cards.push({ slug, issues }); continue; }
+    const r = mergeCardSections(text, slug, by);
+    const rot = rotateCardOverflow(r.text, slug, by);
+    atomicWrite(path.join(PROJ, f), rot.text);
+    cards.push({ slug, issues, merged: r.merged, ...(rot.moved.length ? { rotated: rot.moved } : {}) });
+  }
+  if (a.apply && cards.some(c => c.merged)) {
+    journalAppend({ ts: now(), project: 'hub', agent: by, kind: 'note',
+      text: `card sections merged: ${cards.filter(c => c.merged).map(c => c.slug).join(', ')} — doubled headings folded into the live one` });
+  }
+  return { ok: true, apply: !!a.apply, cards };
+}
+
 /* The current step of a "## Next step" body: its text, and who set it when, read back from the
  * ` — set <ts> by <who>` stamp runReport writes. A body written before the stamp existed reads
  * as {by: null, at: null} — it is still reported as replaced, just without an owner check,
@@ -2757,7 +2917,6 @@ export function runReport(a) {
   const project = a.project || 'general';
   const slug = slugify(project);
   const by = requireAuthor(a.by ?? a.agent, 'by');
-  const SEC = reportSections();
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
@@ -2798,13 +2957,13 @@ export function runReport(a) {
       const cut = d.indexOf('|');
       const what = (cut === -1 ? d : d.slice(0, cut)).trim();
       const why = cut === -1 ? '' : d.slice(cut + 1).trim();
-      text = editSection(text, SEC.decide, `- ${now()}: ${what}${why ? ' — ' + why : ''}`, 'append');
+      text = editSection(text, liveHeading(text, 'decisions'), `- ${now()}: ${what}${why ? ' — ' + why : ''}`, 'append');
       summary.decisions++;
       journalAppend({ ts: now(), project: slug, agent: by, kind: 'decision', text: what + (why ? ' — ' + why : '') });
     }
-    for (const f of b.fact) { text = editSection(text, SEC.fact, `- fact: ${f}`, 'append'); summary.facts++; }
-    for (const h of b.hypo) { text = editSection(text, SEC.hypo, `- hypothesis: ${h}`, 'append'); summary.hypos++; }
-    for (const c of b.comm) { text = editSection(text, SEC.comm, `- ${now()}: ${c}`, 'append'); summary.comms++; }
+    for (const f of b.fact) { text = editSection(text, liveHeading(text, 'facts'), `- fact: ${f}`, 'append'); summary.facts++; }
+    for (const h of b.hypo) { text = editSection(text, liveHeading(text, 'facts'), `- hypothesis: ${h}`, 'append'); summary.hypos++; }
+    for (const c of b.comm) { text = editSection(text, liveHeading(text, 'communication'), `- ${now()}: ${c}`, 'append'); summary.comms++; }
     if (b.next.length) {
       /* NEXT: replaces the section by design — "one concrete physical step". What it used to do as
        * well was replace it SILENTLY: a side session's one-line NEXT: wiped a step the owner had
@@ -2813,7 +2972,7 @@ export function runReport(a) {
        * as one dated `prev` line (one, not a history — the journal holds that), the response
        * says what was replaced, and a step set by an owner role is not replaced by anyone else
        * without force. */
-      const prev = parseNextStep(sectionBody(text, SEC.next));
+      const prev = parseNextStep(sectionBody(text, liveHeading(text, 'next')));
       const owners = new Set(ownerRoles());
       if (prev && prev.by && owners.has(prev.by) && !owners.has(by) && !a.force) {
         throw new Error(`NEXT: refused — the current next step was set by owner role "${prev.by}"${prev.at ? ' on ' + prev.at : ''}: "${prev.text}". ` +
@@ -2821,7 +2980,7 @@ export function runReport(a) {
       }
       const lines = b.next.map(n => `- ${n} — set ${now()} by ${by}`);
       if (prev) lines.push(`- prev (${prev.at || 'undated'}${prev.by ? ', by ' + prev.by : ''}): ${prev.text}`);
-      text = editSection(text, SEC.next, lines.join('\n'), 'set');
+      text = editSection(text, liveHeading(text, 'next'), lines.join('\n'), 'set');
       summary.next = true;
       if (prev) summary.nextReplaced = { text: prev.text, by: prev.by, at: prev.at };
     }
@@ -2923,13 +3082,16 @@ export function runSectionAdd(a = {}) {
   const want = String(a.section ?? '').trim();
   if (!want) throw new Error('section required: a key (' + cfg.map(s => s.key).join(' | ') +
     ') or a literal heading as it appears in the card');
-  const heading = (cfg.find(s => s.key === want.toLowerCase())
-    || cfg.find(s => s.heading.toLowerCase() === want.toLowerCase())
-    || { heading: want.replace(/^#+\s*/, '') }).heading;
+  const literal = want.replace(/^#+\s*/, '');
+  // A key, or ANY heading that means a key (configured, default English, declared alias), lands in
+  // the section this card already has for it — never a second one beside it (task macbook-pro-112).
+  const key = (cfg.find(s => s.key === want.toLowerCase())
+    || cfg.find(s => sectionHeadings(s.key).some(h => h.toLowerCase() === literal.toLowerCase())) || {}).key;
 
   const slug = slugify(project);
   const before = readCard(project) || cardBaseFor(project);
-  const created = !new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*$', 'm').test(before);
+  const heading = key ? liveHeading(before, key) : literal;
+  const created = !hasHeading(before, heading);
   const line = `- ${now()}: ${raw}` + (a.provenance ? ` · src: ${String(a.provenance).trim()}` : '');
   const after = editSection(before, heading, line, a.mode === 'set' ? 'set' : 'append');
   fs.mkdirSync(PROJ, { recursive: true });
@@ -4180,6 +4342,7 @@ export function runClaim(a) {
   // nothing about which one it had left out.
   const missing = ['project', 'area', 'agent'].filter(k => !a[k]);
   if (missing.length) throw new Error('missing required: ' + missing.join(', ') + ' (claim needs project, area, agent)');
+  requireAuthor(a.agent, 'agent');   // a claim holder is an author: "claude" holds nothing anyone can tell apart
   return withLock(CLAIMS, () => {
     const db = loadClaims();
     db.claims = activeClaims(db.claims);
@@ -4316,8 +4479,9 @@ export function presenceSnapshots() {
 }
 
 export function runHeartbeat(a) {
-  const agent = a && a.agent;
-  if (!agent) throw new Error('agent required');
+  // Held to the author rule like every other write: presence keys one record per name, and a
+  // placeholder name would merge every session that used it into one row.
+  const agent = requireAuthor(a && a.agent, 'agent');
   /* Which hub this agent is actually writing to, resolved through symlinks.
    *
    * A fleet split does not announce itself: roles configured with a different hub path keep
@@ -4534,7 +4698,7 @@ export function runAbsorb(a = {}) {
   const hubReal = fs.realpathSync(HUB), fromReal = fs.realpathSync(from);
   if (hubReal === fromReal) throw new Error('source is this hub base itself');
   if (hubReal.startsWith(fromReal + path.sep) || fromReal.startsWith(hubReal + path.sep)) throw new Error('source and hub base nest: ' + from + ' vs ' + HUB);
-  if (a.apply && !a.by) throw new Error('by required to apply: the absorb is journaled under that author');
+  if (a.apply) requireAuthor(a.by, 'by');   // the absorb is journaled under that author
 
   const refusals = [];
   if (fs.existsSync(path.join(from, '.git'))) refusals.push('source is a git repository - a mesh node syncs, it is not absorbed');
