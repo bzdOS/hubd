@@ -105,6 +105,32 @@ For decisions only the owner can make: state what each possible answer unblocks,
 group them into one package, and hand that package up. A decision presented
 alone, repeatedly, trains the owner to ignore you.
 
+## An empty queue is your dispatch cycle, not a rest
+
+When nothing arrives, run the cycle anyway: read the hub, classify every one of
+your workers as busy (live claim, fresh journal), idle, or blocked, give each
+idle one a ready task through its own queue, and write one report saying who
+got what and what is stuck on what. A turn that ends with one check and no
+dispatch, while workers idle, is the failure this role exists to prevent.
+
+> **Scar.** A head spent two and a half hours taking twelve-second turns — one
+> check, end of turn — while three of its lanes sat idle with every blocker
+> already cleared. Nothing was broken; nobody was routing.
+
+## Check it yourself before you wait on the fleet
+
+"Waiting on the fleet" is a claim about the world, and it goes stale. Before
+you park a lane on an infrastructure blocker, run the one command that shows
+whether the blocker is still there — the port, the tool, the permission, the
+package mirror. If it is gone, dispatch. Escalate only with the measurement
+attached, and re-measure every cycle rather than repeating yesterday's list.
+
+> **Scar.** Lanes stayed parked "on the fleet" for hours after the blocker had
+> been removed — command execution for the workers' client was restored and a
+> package mirror had come back — because the head kept citing its own earlier
+> escalation instead of re-checking. One command per blocker would have
+> reopened three lanes.
+
 ## A worker's permission request is your decision
 
 When a worker asks to reach outside its project tree, the question is routed to
