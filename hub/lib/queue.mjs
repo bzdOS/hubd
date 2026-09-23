@@ -88,7 +88,50 @@ export function resolveQueueRoot() {
   return resolveQueueRootInfo().root;
 }
 
-/** This node's short name (first hostname component), matching mesh-sync's NODE. */
+/* A role and a subscriber name become PATH COMPONENTS — queues/<role>.<node>.queue.md and
+ * .qstate/<subscriber>/ — so they are checked before anything touches the disk. `hub_queue_send`
+ * took the role verbatim, and "../../x" wrote x.<node>.queue.md two directories above the hub:
+ * over the HTTP transport, a file anywhere the server user can write, from any tenant. Rejected
+ * rather than sanitised, the same call secrets.mjs makes: a rewritten name delivers to a queue
+ * nobody is waiting on. No dots in a role, because every reader splits <role>.<node> on the dot. */
+const ROLE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
+const SUBSCRIBER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+export function assertRole(role) {
+  if (typeof role !== 'string' || !ROLE_RE.test(role)) {
+    throw new Error(`invalid role ${JSON.stringify(role)}: letters, digits, "-" and "_" only, starting with a letter or digit ` +
+      `(a role is part of a file name: queues/<role>.<node>.queue.md)`);
+  }
+  return role;
+}
+function assertSubscriber(sub) {
+  if (sub == null || sub === '') return sub;
+  if (typeof sub !== 'string' || !SUBSCRIBER_RE.test(sub)) {
+    throw new Error(`invalid subscriber ${JSON.stringify(sub)}: letters, digits, ".", "-" and "_" only (it names a cursor directory)`);
+  }
+  return sub;
+}
+
+/** Every file that carries this role: <role>.queue.md (legacy) and <role>.<node>.queue.md. */
+function roleFileRe(role) {
+  const esc = String(role).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+}
+
+/** The bytes of `file` from `off` to `size`, decoded — cursors are byte offsets, never string ones. */
+function readTail(file, off, size) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(size - off);
+    fs.readSync(fd, buf, 0, size - off, off);
+    return buf.toString('utf8');
+  } finally { fs.closeSync(fd); }
+}
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+
 /**
  * Roles whose queue fans out: every subscriber sees every message.
  *
@@ -274,11 +317,7 @@ function drainFile(qdir, stateDir, f) {
         return null;
       }
       if (sz === off) return null;                    // a competitor drained it first
-      const fd = fs.openSync(full, 'r');
-      const buf = Buffer.allocUnsafe(sz - off);
-      fs.readSync(fd, buf, 0, sz - off, off);
-      fs.closeSync(fd);
-      const chunk = buf.toString('utf8');
+      const chunk = readTail(full, off, sz);
       writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
       return chunk.trim() || null;
     });
@@ -319,6 +358,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   // everywhere else, on the one durable channel that skipped the rule. The MCP floor
   // (HUBD_AGENT) fills an omitted `from` before it reaches here.
   const sender = requireAuthor(from, 'from');
+  assertRole(role);
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   fs.mkdirSync(qdir, { recursive: true });
@@ -358,6 +398,8 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
  * @returns {Promise<{ changed: true, text: string } | { changed: false }>}
  */
 export async function queueWait(role, { timeout = 540, root, subscriber, fromNow = false } = {}) {
+  assertRole(role);
+  assertSubscriber(subscriber);
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   // A subscriber gets its OWN cursor namespace, the same trick queueWaitAll already
@@ -384,8 +426,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
 
   // Match <role>.queue.md (legacy) and <role>.<node>.queue.md (per-host). Node
   // names have no dots, so a single optional [^.]+ segment is exact per role.
-  const esc = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const fileRe = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  const fileRe = roleFileRe(role);
   // A cursor that does not exist yet reads as offset 0, so a NEW subscriber
   // namespace replays the whole queue on its first wait. For a human joining a
   // broadcast that is right — the history is the point. For a supervisor whose
@@ -415,10 +456,6 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
     try { return fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return []; }
   };
 
-  function pidAlive(pid) {
-    try { process.kill(pid, 0); return true; }
-    catch (e) { return e.code === 'EPERM'; }
-  }
   function writeWaiter() {
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
     shareMode(waiterFile);
@@ -506,6 +543,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
  * @returns {Promise<{ changed: true, events: Array<{ role: string, node: string|null, text: string }> } | { changed: false }>}
  */
 export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
+  assertSubscriber(subscriber);
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   // Same reasoning as queueWait: __watchall__ already keeps taps off a role's own
@@ -530,10 +568,6 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
     return m ? { role: m[1], node: m[2] || null } : { role: f, node: null };
   }
 
-  function pidAlive(pid) {
-    try { process.kill(pid, 0); return true; }
-    catch (e) { return e.code === 'EPERM'; }
-  }
   function writeWaiter() {
     fs.writeFileSync(waiterFile, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), 'utf8');
     shareMode(waiterFile);
@@ -596,8 +630,7 @@ export function peekQueueDepth(role, { root } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   const stateDir = path.join(r, '.qstate');
-  const esc = role.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const fileRe = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  const fileRe = roleFileRe(role);
   let files;
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { pending: 0, oldestWaiting: null }; }
 
@@ -606,14 +639,13 @@ export function peekQueueDepth(role, { root } = {}) {
     let off = 0; try { off = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10) || 0; } catch {}
     let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
     if (size <= off) continue;
-    const fd = fs.openSync(path.join(qdir, f), 'r');
-    const buf = Buffer.allocUnsafe(size - off);
-    fs.readSync(fd, buf, 0, size - off, off);
-    fs.closeSync(fd);
+    // A file this user cannot read is a stall for doctor to name, not a crash inside hub_brief.
+    let tail;
+    try { tail = readTail(path.join(qdir, f), off, size); } catch { continue; }
     // Match the FULL block header (incl. "· from") that queueSend writes — a bare
     // timestamp pattern also matched such a line quoted inside a message body and
     // inflated the count.
-    const heads = buf.toString('utf8').match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || [];
+    const heads = tail.match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || [];
     pending += heads.length;
     for (const h of heads) {
       const ts = h.slice(3, 19);
@@ -753,8 +785,7 @@ export function queueSummaryForBrief({ root } = {}) {
  *  "a backlog" and "the only view a machine that does not run the role can have". */
 export function everConsumedHere(role, { root } = {}) {
   const r = root ?? resolveQueueRoot();
-  const esc = String(role).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+  const re = roleFileRe(role);
   let files = [];
   try { files = fs.readdirSync(path.join(r, 'queues')).filter(f => re.test(f)); } catch { return false; }
   return files.some(f => queueCursorSeen(r, f));
@@ -1050,11 +1081,7 @@ export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } 
     try {
       const size = fs.statSync(path.join(qdir, f)).size;
       if (size <= off) continue;
-      const fd = fs.openSync(path.join(qdir, f), 'r');
-      const buf = Buffer.allocUnsafe(size - off);
-      fs.readSync(fd, buf, 0, size - off, off);
-      fs.closeSync(fd);
-      text = buf.toString('utf8');
+      text = readTail(path.join(qdir, f), off, size);
     } catch { continue; }
 
     // Same header shape peekQueueDepth counts, so the list and the count can never disagree.

@@ -298,6 +298,10 @@ session has its own cursor and sees every message. `hub queue wait '*'` taps EVE
 at once (own offset — does not consume any role's messages), for a supervisor watching
 the fleet; several supervisors may tap at the same time without competing.
 
+A role name is part of a file name (`queues/<role>.<node>.queue.md`), so it is letters, digits,
+`-` and `_`, starting with a letter or digit — no dots, no slashes. Anything else is refused
+before a byte is written.
+
 Flags may come before or after the text. A body that begins with `-` (a list, a diff) goes
 through `--text "<text>"`; a long or shell-hostile body goes through stdin — `hub queue send
 <role> - --from <you> < file`. A flag the command does not know is refused, and every refusal
