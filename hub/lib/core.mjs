@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
 // materialised protocol matches the code actually running there).
@@ -185,6 +185,18 @@ export function atomicWrite(file, data) {
   fs.writeFileSync(tmp, typeof data === 'string' ? data : JSON.stringify(data, null, 1));
   fs.renameSync(tmp, file);
   shareMode(file);
+}
+
+/* projects/history/<name>.md — superseded digests and rotated card sections. Appended by whichever
+ * user happens to write the card, so on a shared hub it needs the same group bit as every other
+ * append: the first writer used to leave it rw-r--r--, and the next user's card write then failed
+ * on the history step, before the card itself was saved. One helper, so no caller forgets. */
+function appendHistory(name, text) {
+  const f = path.join(HISTORY, name + '.md');
+  fs.mkdirSync(HISTORY, { recursive: true });
+  fs.appendFileSync(f, text);
+  shareMode(f);
+  return f;
 }
 
 export function withLock(file, fn) {
@@ -657,7 +669,7 @@ export function logDuplication() {
  * count cannot tell the difference: the first version of this counted a fixed window of trailing
  * lines, which called two June-era lines at the head of a 58-line log "happening NOW" simply
  * because the whole file fitted inside the window. Entries-after is scale-free. */
-const MALFORMED_SETTLED_AFTER = 20;
+export const MALFORMED_SETTLED_AFTER = 20;
 
 export function journalCounts() {
   const files = journalFiles();
@@ -890,9 +902,11 @@ export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
   if (Date.now() - newestMs > staleHours * 3600000) return [];
   const known = new Set();
   try {
+    // The same node-from-filename rules the log readers use, so "a node" means one thing here.
     for (const f of fs.readdirSync(HUB)) {
-      const m = f.match(/^journal\.(.+?)(?:-\d{4}-\d{2}(?:\.\d+)?)?\.jsonl$/) || f.match(/^tasks\.(.+)\.events\.jsonl$/);
-      if (m) known.add(m[1].toLowerCase());
+      const node = /^journal\..+\.jsonl$/.test(f) ? journalNodeOf(f)
+        : /^tasks\..+\.events\.jsonl$/.test(f) ? taskEventNodeOf(f) : '';
+      if (node) known.add(node.toLowerCase());
     }
   } catch {}
   const out = [];
@@ -1679,8 +1693,9 @@ export function runAudit(a = {}) {
 
   /* (8) Work that left no journal. The weaker signal: a project whose local checkout gained commits
    * in the window while its journal gained nothing. Only checkable where the card's recorded
-   * `- path:` exists on THIS node with a .git — elsewhere the check says it checked nothing. */
-  if (a.git !== false) {
+   * `- path:` exists on THIS node with a .git — elsewhere the check says it checked nothing. Never on
+   * a remote transport: a card's `- path:` is tenant-written text, and this runs git in it. */
+  if (a.git !== false && a.local !== false) {
     let checked = 0;
     const gitDays = Math.max(1, parseInt(days, 10) || 7);
     for (const c of cards) {
@@ -1797,7 +1812,7 @@ export function runReview(a = {}) {
     // `queues` comes from the caller for the same reason runAudit takes it there: queue.mjs
     // imports this file. Without rows the stale-button check is skipped, and runAudit says so in
     // its own notes rather than reading as "no buttons are stale".
-    const r = runAudit({ apply: false, days: a.days, queues: a.queues });
+    const r = runAudit({ apply: false, days: a.days, queues: a.queues, local: a.local });
     auditTotal = r.findings.length;
     all = all.concat(r.findings.map(f => ({ ...f, from: 'audit' })));
   } catch (e) { notes.push('audit failed: ' + (e && e.message ? e.message : String(e))); }
@@ -1915,7 +1930,11 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
   if (Object.keys(truncated).length) {
     out.truncated = truncated;
     out.hint = 'Capped to fit an agent context — ' +
-      Object.entries(truncated).map(([k, v]) => `${k}: ${v.shown} shown, ${v.hidden} hidden`).join(' · ') +
+      // A string is cut by characters and a list by items, and the note says which: the string
+      // branch once printed "card: undefined shown, undefined hidden" here.
+      Object.entries(truncated).map(([k, v]) => v.shownChars != null
+        ? `${k}: ${v.shownChars} chars shown, ${v.hiddenChars} hidden`
+        : `${k}: ${v.shown} shown, ${v.hidden} hidden`).join(' · ') +
       '. Pass full:true for everything, or narrow the question (project, hours, status).';
   }
   return out;
@@ -2239,9 +2258,8 @@ export function ensureProtocol(force) {
      * window per agent, which is the cheapest possible failure here. */
     ensureGitignored('.checkins.json');
   } catch {}
-  let body;
-  try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
-  catch { return { ok: false }; }
+  const body = shippedProtocol();
+  if (body == null) return { ok: false };
   const target = path.join(HUB, 'HUBD.md');
   let cur = '';
   try { cur = fs.readFileSync(target, 'utf8'); } catch {}
@@ -2304,14 +2322,9 @@ export function runSync(a) {
   const metrics = projectMetrics(dir);
 
   const lim = cardLimits();
-  if (a.digest && Buffer.byteLength(String(a.digest).trim(), 'utf8') > lim.digestBytes) {
-    throw new Error(`digest is ${Buffer.byteLength(String(a.digest).trim(), 'utf8')} bytes, over this hub's limit of ${lim.digestBytes} ` +
-      `(<hub>/limits.json → card.digestBytes). A digest is the current state in a few lines. ` +
-      `Move the narrative to hub_report — FACT:/DECIDE:/COMM: land in the right card section and in the journal.`);
-  }
+  if (a.digest) assertDigestSize(String(a.digest).trim(), lim);
   if (a.digest && oldDigest && a.digest.trim() !== oldDigest) {
-    const histFile = path.join(HISTORY, slug + '.md');
-    fs.appendFileSync(histFile, `\n---\n### until ${now()} (sync by ${author})\n${oldDigest}\n`);
+    appendHistory(slug, `\n---\n### until ${now()} (sync by ${author})\n${oldDigest}\n`);
   }
 
   const frontmatter = cardFrontmatter(prev);
@@ -2390,14 +2403,9 @@ export function runCardSet(a) {
   if (patching) { patched = patchDigest(oldDigest, a); digest = patched.text; }
   else digest = String(a.digest).trim();
   const lim = cardLimits();
-  if (Buffer.byteLength(digest, 'utf8') > lim.digestBytes) {
-    throw new Error(`digest is ${Buffer.byteLength(digest, 'utf8')} bytes, over this hub's limit of ${lim.digestBytes} ` +
-      `(<hub>/limits.json → card.digestBytes). A digest is the current state in a few lines, not the record of how it got there. ` +
-      `Move the narrative to hub_report — FACT:/DECIDE:/COMM: lines land in the right card section and in the journal — and keep here only what is true now.`);
-  }
+  assertDigestSize(digest, lim);
   if (oldDigest && digest !== oldDigest) {
-    const histFile = path.join(HISTORY, slug + '.md');
-    fs.appendFileSync(histFile, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
+    appendHistory(slug, `\n---\n### until ${now()} (card set by ${author})\n${oldDigest}\n`);
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
@@ -2466,10 +2474,10 @@ export function runResourceSet(a) {
     for (const t of a.edges[rel]) targets.add(slugify(t));
     set(rel, [...targets].map(s => `[[${s}]]`).join(', '));
   }
-  const oldDigest = prev ? (prev.split('## Digest')[1] || '').split(/\n## /)[0].trim() : null;
+  const oldDigest = prev ? digestOf(prev) : null;
   const digest = (a.digest != null && String(a.digest).trim()) || oldDigest || '<what this is, in one line>';
   if (prev && oldDigest && a.digest != null && String(a.digest).trim() && String(a.digest).trim() !== oldDigest) {
-    fs.appendFileSync(path.join(HISTORY, 'resource-' + slug + '.md'), `\n---\n### until ${now()} (resource set by ${author})\n${oldDigest}\n`);
+    appendHistory('resource-' + slug, `\n---\n### until ${now()} (resource set by ${author})\n${oldDigest}\n`);
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const card = frontToText(pairs) +
@@ -2610,6 +2618,15 @@ function editSection(text, heading, payload, mode) {
  *
  * Thresholds live in the hub, not in this file: <hub>/limits.json, so an operator can raise them
  * for their own hub without patching code. */
+/** One refusal for an over-long digest, whichever tool wrote it (hub_sync and hub_card_set). */
+function assertDigestSize(digest, lim = cardLimits()) {
+  const bytes = Buffer.byteLength(String(digest), 'utf8');
+  if (bytes <= lim.digestBytes) return;
+  throw new Error(`digest is ${bytes} bytes, over this hub's limit of ${lim.digestBytes} ` +
+    `(<hub>/limits.json → card.digestBytes). A digest is the current state in a few lines, not the record of how it got there. ` +
+    `Move the narrative to hub_report — FACT:/DECIDE:/COMM: lines land in the right card section and in the journal — and keep here only what is true now.`);
+}
+
 export function cardLimits() {
   const def = { digestBytes: 8192, sectionBytes: 8192 };
   try {
@@ -2669,11 +2686,8 @@ export function rotateCardOverflow(text, slug, by, limits = cardLimits()) {
     if (!out.length) return part;
     moved.push({ section: heading, entries: out.length, bytes: Buffer.byteLength(out.map(e => e.join('\n')).join('\n'), 'utf8') });
     try {
-      fs.mkdirSync(HISTORY, { recursive: true });
-      fs.appendFileSync(path.join(HISTORY, slug + '.md'),
-        `\n---\n### until ${now()} (${heading} — overflow past ${limits.sectionBytes}B, by ${by || 'hubd'})\n` +
+      appendHistory(slug, `\n---\n### until ${now()} (${heading} — overflow past ${limits.sectionBytes}B, by ${by || 'hubd'})\n` +
         out.map(e => e.join('\n')).join('\n') + '\n');
-      shareMode(path.join(HISTORY, slug + '.md'));
     } catch { return part; }                                  // could not archive → keep the card whole
     return head + '\n\n' + MOVED_MARK + histRel + '\n' + keep.map(e => e.join('\n')).join('\n') + '\n';
   });
@@ -2779,7 +2793,11 @@ export function runReport(a) {
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
     let text = readCard(project) || cardBaseFor(project);
     for (const d of b.decide) {
-      const [what, why] = d.split('|').map(s => s.trim());
+      // Split on the FIRST "|" only: a destructuring of split('|') kept two parts and silently
+      // dropped the rest, so "a | because b | and c" lost "and c" from the card AND the journal.
+      const cut = d.indexOf('|');
+      const what = (cut === -1 ? d : d.slice(0, cut)).trim();
+      const why = cut === -1 ? '' : d.slice(cut + 1).trim();
       text = editSection(text, SEC.decide, `- ${now()}: ${what}${why ? ' — ' + why : ''}`, 'append');
       summary.decisions++;
       journalAppend({ ts: now(), project: slug, agent: by, kind: 'decision', text: what + (why ? ' — ' + why : '') });
@@ -2915,9 +2933,13 @@ export function runSectionAdd(a = {}) {
   const line = `- ${now()}: ${raw}` + (a.provenance ? ` · src: ${String(a.provenance).trim()}` : '');
   const after = editSection(before, heading, line, a.mode === 'set' ? 'set' : 'append');
   fs.mkdirSync(PROJ, { recursive: true });
-  atomicWrite(cardPath(project), after);
+  // The fourth way to grow a card, and the one 0.9.23 missed: report, sync and card-set rotate on
+  // write, and a section fed only through here grew without bound on every node it synced to.
+  const rot = rotateCardOverflow(after, slug, by);
+  atomicWrite(cardPath(project), rot.text);
   journalAppend({ ts: now(), project: slug, agent: by, kind: 'note', text: `${heading}: ${raw.slice(0, 100)}` });
-  return { ok: true, project: slug, section: heading, created, card: cardPath(project) };
+  return { ok: true, project: slug, section: heading, created, card: cardPath(project),
+    ...(rot.moved.length ? { rotated: rot.moved } : {}) };
 }
 
 export function runStatus(a = {}) {
@@ -3254,11 +3276,15 @@ function findProjectByPath(root) {
   return null;
 }
 
-export function resolveContext(cwd) {
+/* `local: false` is the HTTP transport. There the cwd is a path on the CALLER's machine, and walking
+ * it here would walk the server's disk instead — reading any `.hubd` file it names and, through
+ * claimsTouched, listing recently modified files under any directory a tenant cares to pass. So a
+ * remote resolve uses only what the hub itself holds: recorded sync paths and card names. */
+export function resolveContext(cwd, { local = true } = {}) {
   const start = path.resolve(String(cwd || ''));
-  const root = findGitRoot(start) || start;
+  const root = (local && findGitRoot(start)) || start;
 
-  const marker = findHubdMarker(start);
+  const marker = local ? findHubdMarker(start) : null;
   if (marker) return { project: marker.slug, via: 'marker', root: marker.root, guessed: false, ...(marker.inventory ? { inventory: marker.inventory } : {}) };
 
   const byPath = findProjectByPath(root);
@@ -3284,11 +3310,11 @@ const underRoot = (cwd, root) => {
   const c = path.resolve(String(cwd)), r = path.resolve(String(root));
   return c === r || c.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
 };
-export function presenceHere({ root = null, project = null, aliveOnly = true } = {}) {
+export function presenceHere({ root = null, project = null, aliveOnly = true, local = true } = {}) {
   const slug = project ? slugify(project) : null;
-  let list = runPresence({ aliveOnly }).agents;
+  let list = runPresence({ aliveOnly, local }).agents;
   if (root) list = list.filter(r => underRoot(r.cwd, root));
-  if (slug) list = list.filter(r => r.cwd && resolveContext(r.cwd).project === slug);
+  if (slug) list = list.filter(r => r.cwd && resolveContext(r.cwd, { local }).project === slug);
   return list.map(({ agent, role, status, task_id, cwd, last_seen, observedOn, alive }) =>
     ({ agent, role, status, task_id, cwd, last_seen, observedOn, alive }));
 }
@@ -3304,7 +3330,8 @@ export function presenceHere({ root = null, project = null, aliveOnly = true } =
 export function runContext(a) {
   const cwd = a && a.cwd;
   if (!cwd) throw new Error("cwd required — pass the CALLING agent's own absolute working directory (the hubd process's cwd is not reliable)");
-  const ctx = resolveContext(cwd);
+  const local = a.local !== false;
+  const ctx = resolveContext(cwd, { local });
   if (ctx.guessed) ctx.hint = `guessed from the folder name — write ${path.join(ctx.root, '.hubd')} with one line "${ctx.project}" to make it certain`;
   if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
   const card = readCard(ctx.project);
@@ -3323,8 +3350,12 @@ export function runContext(a) {
     presenceHere: presenceHere({ root: ctx.root, project: null }),
     journalTail: journalTail(ctx.project, a.journalTail ?? 5),
     // "You are already editing somebody's zone": live claims (not the caller's, when it says who
-    // it is) whose glob covers a file changed in this checkout in the last half hour.
-    claimsTouched: claimsTouched({ root: ctx.root, project: ctx.project, agent: a.agent || null, minutes: a.recentMinutes ?? 30 }),
+    // it is) whose glob covers a file changed in this checkout in the last half hour. Needs the
+    // checkout's own disk, so a remote transport says it did not look rather than answering "none".
+    claimsTouched: local
+      ? claimsTouched({ root: ctx.root, project: ctx.project, agent: a.agent || null, minutes: a.recentMinutes ?? 30 })
+      : { touched: [], recentFiles: 0, capped: false, minutes: a.recentMinutes ?? 30,
+          note: 'not checked: this server cannot see your checkout — run `hub claim check <path>` locally' },
   };
 }
 
@@ -3361,7 +3392,9 @@ export function runWhereAmI(a = {}) {
     const script = path.isAbsolute(ctx.inventory) ? ctx.inventory : path.join(root, ctx.inventory);
     if (fs.existsSync(script)) {
       let text = '';
-      try { text = execSync(JSON.stringify(script), { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }); }
+      // No shell: the path comes from a file in the repository, and JSON-style double quotes do not
+      // stop a shell from expanding $(...) or backticks inside them.
+      try { text = execFileSync(script, [], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }); }
       catch (e) { text = String((e && e.stdout) || '') + (e && e.stderr ? '\n[stderr] ' + String(e.stderr).slice(0, 500) : '') + (e && e.killed ? '\n[inventory script exceeded 5 s and was stopped]' : ''); }
       out.localInventory = { script: ctx.inventory, output: String(text).slice(0, 4000), truncated: String(text).length > 4000 };
     } else out.localInventory = { script: ctx.inventory, missing: true };
@@ -3579,7 +3612,7 @@ export function runTaskUpdate(a) {
      * line is not verbosity, it is whether a person reconstructing the month needs it: who holds
      * a task and what state it is in, yes; which of its fields was touched, no.
      *
-     * `kind: 'task'` survives for creation (line 2682), assignment and non-done status, and that
+     * `kind: 'task'` survives for creation (runTaskAdd), assignment and non-done status, and that
      * matters beyond taste: BOOKKEEPING_KINDS excludes `task` from the card-freshness signal
      * precisely so that filing a task does not count as the project having moved. Promoting
      * creation to `note` would silently undo that fix. */
@@ -3635,17 +3668,7 @@ export function runBrief(a = {}) {
   const todayPlus3 = new Date(nowMs + 3 * 86400000).toISOString().slice(0, 10);
 
   const db = loadTasks();
-  const tasksOpen = db.tasks
-    .filter(t => t.status === 'open')
-    .sort((x, y) => {
-      const xu = x.deadline && x.deadline <= todayPlus3 ? 1 : 0;
-      const yu = y.deadline && y.deadline <= todayPlus3 ? 1 : 0;
-      if (xu !== yu) return yu - xu;
-      const imp = { high: 3, med: 2, normal: 1 };
-      const xi = imp[x.importance] || 1, yi = imp[y.importance] || 1;
-      if (xi !== yi) return yi - xi;
-      return x.created < y.created ? -1 : 1;
-    });
+  const tasksOpen = db.tasks.filter(t => t.status === 'open').sort(byUrgency(todayPlus3));
 
   const journalRecent = collapseRepeats(journalSince(hours));
 
@@ -3675,7 +3698,7 @@ export function runBrief(a = {}) {
     tasksOpen, journalRecent, staleCards, staleDigests, activeClaims: activeClaims(claimsDb.claims),
     // The audit rides here rather than waiting to be called — see runReview. `queues` arrives from
     // the caller (index.mjs/cli.mjs already compute the rows for the queue section).
-    review: runReview({ queues: a.queues, limit: a.reviewLimit }),
+    review: runReview({ queues: a.queues, limit: a.reviewLimit, local: a.local }),
     generated: now(),
   };
 }
@@ -3717,9 +3740,8 @@ function protocolSlice(body, heading, { firstBlockOnly = false } = {}) {
 }
 export function runOnboarding(a = {}) {
   ensureProtocol();
-  let body;
-  try { body = fs.readFileSync(new URL('../../prompts/protocol.md', import.meta.url), 'utf8'); }
-  catch { return { ok: false, error: 'protocol.md not found in this hubd install' }; }
+  const body = shippedProtocol();
+  if (body == null) return { ok: false, error: 'protocol.md not found in this hubd install' };
   const mode = String(a.mode || 'short');
   if (mode === 'full') return { ok: true, version: VERSION, mode, protocol: body };
   if (mode !== 'short') throw new Error(`mode: "${mode}" is not "short" or "full"`);
@@ -3827,7 +3849,7 @@ export function runWhatsNew(a = {}) {
     ...(env.items.length ? { environment: env.items, environmentTotal: env.total } : {}),
     // Same passenger as in runBrief: an agent that returns to work sees what the hub's own rules
     // say is wrong, without anyone having to remember to ask (see runReview).
-    review: runReview({ queues: a.queues, limit: a.reviewLimit }),
+    review: runReview({ queues: a.queues, limit: a.reviewLimit, local: a.local }),
   };
 }
 
@@ -3934,6 +3956,9 @@ function eligibleOpen(tasks, { project, assignee } = {}) {
   return { list, blocked: open.filter(blocked), openIds };
 }
 
+/* The one "what first" order — due within three days, then importance, then oldest — shared by
+ * hub_next, hub_agenda, hub_brief and the kanban. It was written out three times, and a fix to one
+ * copy (a task with no `created` sorting unpredictably) had not reached the other two. */
 const IMPORTANCE_RANK = { high: 3, med: 2, normal: 1 };
 function byUrgency(today3) {
   return (x, y) => {
@@ -4096,7 +4121,8 @@ export function runClaimCheck(a = {}) {
   const p = String(a.path || '').trim();
   if (!p) throw new Error('path required: the file you are about to edit');
   let project = a.project ? slugify(a.project) : null, root = a.root || null;
-  if (!project || !root) {
+  if (!project && a.local === false) throw new Error('project required on a remote server: it cannot resolve a path on your machine');
+  if ((!project || !root) && a.local !== false) {
     const ctx = resolveContext(path.isAbsolute(p) ? (fs.existsSync(p) && fs.statSync(p).isDirectory() ? p : path.dirname(p)) : process.cwd());
     project = project || ctx.project; root = root || ctx.root;
   }
@@ -4167,7 +4193,9 @@ export function runClaim(a) {
     const result = { ok: true, claim, matchable,
       ...(matchable ? {} : { hint: 'this area is prose, so `hub claim check <path>` cannot match files against it — a glob like "src/**/*.ts" or "docs/{a,b}.md" would' }) };
     if (existing) {
-      const exp = new Date(parseTs(existing.since).getTime() + existing.ttlMin * 60000)
+      // `?? 240` as activeClaims reads it: a claim written without ttlMin made this NaN, and
+      // toISOString() on an Invalid Date throws — the new claim was saved and the call still failed.
+      const exp = new Date(parseTs(existing.since).getTime() + (existing.ttlMin ?? 240) * 60000)
         .toISOString().slice(0, 16).replace('T', ' ');
       result.warning = `area already claimed by ${existing.agent} until ${exp}`;
     }
@@ -4361,7 +4389,7 @@ export function runPresence(a = {}) {
   // "Who is here" — by working directory or by the project a cwd resolves to. Through the same
   // predicates runContext's presenceHere uses, so the two never name different people.
   if (a.cwd) list = list.filter(r => underRoot(r.cwd, a.cwd));
-  if (a.project) { const slug = slugify(a.project); list = list.filter(r => r.cwd && resolveContext(r.cwd).project === slug); }
+  if (a.project) { const slug = slugify(a.project); list = list.filter(r => r.cwd && resolveContext(r.cwd, { local: a.local !== false }).project === slug); }
   list.sort((x, y) => (x.last_seen < y.last_seen ? 1 : -1));   // freshest first
 
   /* Membership is not "ever wrote a journal" — that set never shrinks, and this hub's journals
@@ -4445,17 +4473,7 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
     };
   }
 
-  function sortOpen(list) {
-    return [...list].sort((x, y) => {
-      const xu = x.deadline && x.deadline <= todayPlus3 ? 1 : 0;
-      const yu = y.deadline && y.deadline <= todayPlus3 ? 1 : 0;
-      if (xu !== yu) return yu - xu;
-      const imp = { high: 3, med: 2, normal: 1 };
-      const xi = imp[x.importance] || 1, yi = imp[y.importance] || 1;
-      if (xi !== yi) return yi - xi;
-      return x.created < y.created ? -1 : 1;
-    });
-  }
+  const sortOpen = (list) => [...list].sort(byUrgency(todayPlus3));
 
   const queued = sortOpen(db.tasks.filter(t => t.status === 'open' && !t.assignee)).map(mapTask);
   const inProgress = sortOpen(db.tasks.filter(t => t.status === 'open' && t.assignee)).map(mapTask);
@@ -4656,6 +4674,7 @@ export function runAbsorb(a = {}) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, text, 'utf8');
     written.push(p);
+    shareMode(p);          // a card absorbed into projects/ is rewritten by other users afterwards
   };
   try {
     for (const dir of new Set(plan.writes.map(w => path.dirname(path.join(HUB, w))))) {

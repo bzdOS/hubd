@@ -4,6 +4,43 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.25 — 2026-09-23
+
+An audit pass over the whole codebase: every finding below was reproduced on the code before it was
+fixed, and each has a test that fails on 0.9.24.
+
+- **Security: a queue role could name a path.** `hub_queue_send` used the role verbatim in
+  `queues/<role>.<node>.queue.md`, so `role: "../../x"` wrote `x.<node>.queue.md` two directories
+  above the hub — over the HTTP transport, anywhere the server user can write, from any tenant.
+  Role and subscriber names are now checked before any disk access (letters, digits, `-`, `_`;
+  subscribers may also carry `.`), and refused rather than rewritten.
+- **Security: over HTTP, a caller's `cwd` was resolved against the server's disk.** `hub_context`
+  looked for a `.hubd` marker and a git root under whatever path it was given and, through
+  `claimsTouched`, listed recently modified files there; `hub_claim_check` and `hub_presence` did
+  the same, and the audit riding on `hub_brief` ran `git log` in a card's `- path:`, which a tenant
+  writes. The HTTP transport now sets `local: false` on every call (a caller cannot override it),
+  and those tools answer from hub data only, saying what they did not check.
+- **Security: the multi-tenant board showed the operator's `AGENTS.md`** to every tenant that had
+  not written its own, through the team-root fallback. A tenant now sees its own rules or none.
+- **`hub whereami` ran the marker's inventory script through a shell**, quoted with JSON double
+  quotes, inside which a shell still expands `$(...)`. It is executed directly now.
+- **`hub_section_add` was the one card write with no size cap.** 0.9.23 rotated over-long sections
+  on report, sync and card-set; a section fed only through here grew without bound. It rotates too.
+- **History files in a shared hub were created owner-only.** `projects/history/<slug>.md` is
+  appended by whoever writes the card; the first writer left it `rw-r--r--`, and the next user's
+  card write then failed on the history step before saving the card — the macbook-pro-98 class, in
+  one more place. All history appends (and absorbed files) now go through the same group-bit rule.
+- **`DECIDE: a | b | c` lost `c`** from both the card and the journal: the split kept two parts.
+- **A claim written without `ttlMin` crashed the next conflicting claim** after saving it
+  (`Invalid Date`), and printed `NaNm left` in `hub brief`.
+- **`hub_get`'s truncation note read `card: undefined shown, undefined hidden`** when the card
+  string was cut; it now says how many characters were shown and hidden.
+- `hub doctor`'s torn-write line described a 200-line window the check no longer uses.
+- Refactors, behaviour unchanged except that a task with no `created` stamp now sorts the same way
+  in `hub_brief` and the kanban as it already did in `hub_next`: one urgency sort instead of three copies, one reader for the
+  shipped protocol, one digest-size refusal, one tail reader and role-file matcher in the queue
+  module, and the node-name rules shared between the mesh check and the log readers.
+
 ## 0.9.24 — 2026-09-23
 
 - **The queue depth a send reports now knows what it can mean on this node.** 0.9.21 added the depth

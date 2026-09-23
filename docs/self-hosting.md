@@ -93,6 +93,14 @@ intake for agents, over the network.
   schemas require them). For the same reason `hub_whatsnew` checkpoints key on
   the agent name, and the `environment` list never reports the server's own
   env to a remote caller.
+- **Nothing reads the server's own disk on a caller's behalf.** A `cwd` or a
+  path a remote caller passes names a place on ITS machine, so `hub_context`
+  resolves the project from hub data only (recorded sync paths, card names — no
+  `.hubd` marker lookup, no git-root walk) and reports `claimsTouched` as not
+  checked; `hub_claim_check` needs `project`; `hub_presence` filtered by project
+  and the audit riding on `hub_brief` / `hub_whatsnew` skip the same walks (the
+  audit's commits-without-journal check runs `git` in a card's `- path:`, which a
+  tenant can write). The server sets this itself; a caller cannot turn it off.
 - Every other tool (tasks, journal, status, search, brief, claims, cards,
   resources, graph) behaves exactly as over stdio — the transport is the only
   difference.
@@ -129,4 +137,11 @@ Markdown tool (see [interop](interop.md)).
   and a cap on tenant creation (`HUBD_MAX_TENANTS`) bound the obvious disk-fill
   and flood vectors. Still: put it behind TLS and harden before exposing widely —
   there is no audit log yet.
+- **The rate limit keys on `X-Forwarded-For` when it is present.** That is right
+  behind a TLS proxy that sets it, and spoofable when clients reach the server
+  directly — keep `HUBD_HTTP_HOST` on localhost behind the proxy.
+- **Upgrade a public server before anything else.** Versions before 0.9.25 let a
+  queue role carry a path (`../../x`), which wrote a file outside the hub
+  wherever the server user could write, and resolved a caller's `cwd` against the
+  server's own disk.
 - Back up `HUBD_DIR`; it is plain files and git-friendly.

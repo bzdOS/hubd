@@ -4,11 +4,9 @@
  * Architecture: dumb server, smart agents. All logic lives in lib/core.mjs.
  */
 import readline from 'node:readline';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
-const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 import {
-  runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
+  VERSION, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, setHubBase, HUB,
   runResourceSet, runResourceList, runResourceGet, runGraph,
@@ -605,7 +603,10 @@ async function handleMessage(msg, mode = 'stdio') {
       // server, so "the caller forgot to say who it is" degrades to a real name from
       // the config instead of to a placeholder. An explicit argument always wins, so a
       // session that knows its own function can still be more specific than the floor.
-      const argv = withAuthorFloor(params?.arguments || {});
+      // `local: false` over HTTP, set here and never taken from the caller: it is what keeps
+      // hub_context, hub_claim_check, hub_presence and the audit off the SERVER's filesystem, and
+      // a tenant who could pass `local: true` would get that walk back.
+      const argv = { ...withAuthorFloor(params?.arguments || {}), ...(mode === 'http' ? { local: false } : {}) };
       const r = await fn(argv);
       if (name === 'hub_onboarding') onboarded = true;
       if (name === 'hub_whatsnew') whatsnewChecked = true;

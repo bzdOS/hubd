@@ -1408,8 +1408,55 @@ ok(htNew.isError === false && !/author-floor/.test(htNew.content[0].text),
 const htNewB = await httpCall('hub_whatsnew', { agent: 'remote-reviewer' });
 ok(/"firstCheckin": true/.test(htNewB.content[0].text),
   'http: whatsnew checkpoints are per caller, not one per server process');
+// A role is a path component. "../../x" used to write x.<node>.queue.md two directories above the
+// hub — over HTTP, anywhere the server user can write, from any tenant.
+const htEsc = await httpCall('hub_queue_send', { role: '../../escaped-role', text: 'hi', from: 'remote-dev' });
+ok(htEsc.isError === true && /invalid role/.test(htEsc.content[0].text), `http: a role with a path in it is refused (got ${htEsc.content[0].text.slice(0, 60)})`);
+// queues/../../ is the directory holding the hub, which is where the old code put the file.
+ok(!fs.readdirSync(path.dirname(HT)).some(f => f.startsWith('escaped-role')), 'http: and nothing was written outside the hub');
+// The cwd a remote caller passes is a path on ITS machine. Resolving it here walked the server's
+// disk: a .hubd marker anywhere on it named the project, and claimsTouched listed fresh files.
+const HTM = mktmp();
+fs.writeFileSync(path.join(HTM, '.hubd'), 'server-side-secret-slug\n');
+const htCtx = await httpCall('hub_context', { cwd: HTM });
+ok(htCtx.isError === false && !/server-side-secret-slug/.test(htCtx.content[0].text) && /"via": "none"/.test(htCtx.content[0].text),
+  'http: hub_context does not read a marker file on the server\'s disk');
+const htCtxForced = await httpCall('hub_context', { cwd: HTM, local: true });
+ok(!/server-side-secret-slug/.test(htCtxForced.content[0].text), 'http: a caller cannot pass local:true to get the walk back');
+// With a card of that name the project resolves from hub data alone — and claimsTouched, which
+// needs the checkout's disk, says it did not look instead of answering "nobody".
+fs.writeFileSync(path.join(HT, 'projects', core.slugify(path.basename(HTM)) + '.md'), '# x\n\n## Digest\n\nd\n');
+const htCtx2 = await httpCall('hub_context', { cwd: HTM });
+ok(/"via": "guess"/.test(htCtx2.content[0].text) && /not checked: this server cannot see your checkout/.test(htCtx2.content[0].text),
+  'http: a resolved project reports claimsTouched as not checked on a remote server');
+const htCc = await httpCall('hub_claim_check', { path: path.join(HTM, 'x.txt') });
+ok(htCc.isError === true && /project required on a remote server/.test(htCc.content[0].text), 'http: claim check without a project is refused instead of resolving a server path');
+fs.rmSync(HTM, { recursive: true, force: true });
 srv.kill();
 fs.rmSync(HT, { recursive: true, force: true });
+
+// ── the multi-tenant board shows a tenant its own rules, never the operator's ──
+{
+  const SB = mktmp();
+  fs.writeFileSync(path.join(SB, 'AGENTS.md'), '# operator rules — not for tenants\n');
+  const tid = 'a'.repeat(40);
+  fs.mkdirSync(path.join(SB, 'tenants', tid, 'projects'), { recursive: true });
+  const boardPort = 18950 + (process.pid % 40);
+  const board = spawn('node', [path.join(REPO, 'hub/cli.mjs'), 'serve', '-p', String(boardPort)], {
+    env: { ...process.env, HUBD_DIR: SB, HUBD_TEAM_DIR: SB, HUBD_MULTITENANT: '1' }, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  await new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('board did not start')), 8000);
+    board.stdout.on('data', (d) => { if (String(d).includes('hubd kanban')) { clearTimeout(to); resolve(); } });
+  });
+  const rules = await (await fetch(`http://127.0.0.1:${boardPort}/api/rules?t=${tid}`)).json();
+  ok(!/operator rules/.test(rules.text || ''), `board: a tenant without AGENTS.md does not see the operator's (got ${String(rules.text).slice(0, 50)})`);
+  fs.writeFileSync(path.join(SB, 'tenants', tid, 'AGENTS.md'), '# tenant rules\n');
+  const rules2 = await (await fetch(`http://127.0.0.1:${boardPort}/api/rules?t=${tid}`)).json();
+  ok(/tenant rules/.test(rules2.text || ''), 'board: a tenant with its own AGENTS.md sees exactly that');
+  board.kill();
+  fs.rmSync(SB, { recursive: true, force: true });
+}
 
 if (prevFloorEnv === undefined) delete process.env.HUBD_AGENT; else process.env.HUBD_AGENT = prevFloorEnv;
 fs.rmSync(EV, { recursive: true, force: true });
@@ -3001,7 +3048,68 @@ fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
   ok(cliBad.code !== 0 && /unknown flag --bogus/.test(cliBad.out), 'absorb CLI: an unknown flag is refused');
 }
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC]) fs.rmSync(d, { recursive: true, force: true });
+// ── audit pass 2026-09-23: each of these was a live defect ──
+const AUP = mktmp();
+core.setHubBase(AUP);
+{
+  // capOutput: a string cut is reported in characters. The hint read "undefined shown".
+  const c = core.capOutput({ card: 'x'.repeat(20000) }, [['card', 12000]]);
+  ok(/card: 12000 chars shown, 8000 hidden/.test(c.hint) && !/undefined/.test(c.hint), `budget: a cut string is described in chars (got ${c.hint.slice(0, 80)})`);
+
+  // hub_section_add grew a card with no cap — the one write path 0.9.23 did not rotate.
+  fs.writeFileSync(path.join(AUP, 'limits.json'), JSON.stringify({ card: { sectionBytes: 400 } }));
+  core.runCardSet({ project: 'sec', digest: 'state', by: 'dev-t' });
+  let last;
+  for (let i = 0; i < 20; i++) last = core.runSectionAdd({ project: 'sec', section: 'gates', text: `gate line ${i} ` + 'y'.repeat(30), by: 'dev-t' });
+  const gates = core.sectionBody(core.readCard('sec'), 'Gates');
+  ok(Buffer.byteLength(gates, 'utf8') <= 520 && /gate line 19/.test(gates) && /older entries moved to/.test(gates),
+    `section add: an over-cap section rotates on write, newest kept (${Buffer.byteLength(gates, 'utf8')}B)`);
+  ok(/gate line 0 /.test(fs.readFileSync(path.join(AUP, 'projects', 'history', 'sec.md'), 'utf8')) && Array.isArray(last.rotated),
+    'section add: the oldest lines are in history, and the reply says what moved');
+  fs.rmSync(path.join(AUP, 'limits.json'));
+
+  // History files in a shared (group-writable) hub are group-writable too, like every other append.
+  if (process.getuid && process.getuid() !== 0) {
+    fs.chmodSync(path.join(AUP, 'projects', 'history'), 0o2775);
+    core.runCardSet({ project: 'shared', digest: 'one', by: 'dev-t' });
+    core.runCardSet({ project: 'shared', digest: 'two', by: 'dev-t' });
+    const mode = fs.statSync(path.join(AUP, 'projects', 'history', 'shared.md')).mode;
+    ok((mode & 0o060) === 0o060, `history: a digest archived in a shared hub is group rw (mode ${(mode & 0o777).toString(8)})`);
+  }
+
+  // DECIDE: kept only the first two "|" parts.
+  core.runReport({ project: 'dec', by: 'dev-t', text: 'DECIDE: ship it | tests pass | and the owner agreed' });
+  ok(/ship it — tests pass \| and the owner agreed/.test(core.readCard('dec')), 'report: DECIDE splits on the first "|" only, the rest stays in the why');
+  ok(core.journalTail('dec', 3).some(e => e.kind === 'decision' && /and the owner agreed/.test(e.text)), 'report: and the journal copy is whole too');
+
+  // A claim written without ttlMin made the conflict warning throw after the new claim was saved.
+  fs.writeFileSync(path.join(AUP, 'claims.json'), JSON.stringify({ claims: [{ id: 'old', project: 'p', area: 'src/**', agent: 'legacy-agent', since: core.now() }] }));
+  let cl = null, clErr = null;
+  try { cl = core.runClaim({ project: 'p', area: 'src/**', agent: 'dev-t' }); } catch (e) { clErr = e.message; }
+  ok(cl && /claimed by legacy-agent until/.test(cl.warning || ''), `claim: a legacy claim with no ttlMin still yields a warning, not a crash (${clErr || cl.warning})`);
+
+  // A role or subscriber is a path component, checked before any disk access.
+  const qlib = await import(path.join(REPO, 'hub/lib/queue.mjs'));
+  let qe = null; try { qlib.queueSend('../evil', 'x', { from: 'dev-t', root: AUP }); } catch (e) { qe = e.message; }
+  ok(/invalid role/.test(qe || ''), 'queue: send refuses a role with a path separator');
+  qe = null; try { await qlib.queueWait('ok-role', { root: AUP, timeout: 0, subscriber: '../../x' }); } catch (e) { qe = e.message; }
+  ok(/invalid subscriber/.test(qe || ''), 'queue: wait refuses a subscriber that would leave .qstate');
+  qe = null; try { qlib.queueSend('fleet-orchestrator', 'x', { from: 'dev-t', root: AUP }); } catch (e) { qe = e.message; }
+  ok(qe === null, 'queue: an ordinary role name still works');
+
+  // whereami ran the marker's inventory through a shell, where "$(...)" in the path expands.
+  const WI = mktmp();
+  const script = 'inv$(touch pwned).sh';
+  fs.writeFileSync(path.join(WI, script), '#!/bin/sh\necho inventory-ok\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(WI, '.hubd'), 'wi\n' + script + '\n');
+  const w = core.runWhereAmI({ cwd: WI });
+  ok(/inventory-ok/.test((w.localInventory || {}).output || '') && !fs.existsSync(path.join(WI, 'pwned')),
+    `whereami: the inventory script runs without a shell — no $(...) expansion (${JSON.stringify(w.localInventory).slice(0, 80)})`);
+  fs.rmSync(WI, { recursive: true, force: true });
+}
+core.setHubBase(T0);
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
