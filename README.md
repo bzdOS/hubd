@@ -222,12 +222,16 @@ is a folder you own. They are two separate things — and that is the whole poin
   the project card's sections — structure in fields, not one prose blob. "What
   changed" is read from git, not retyped. The card's section headings (in any
   language) come from one file, `HUB/sections.json`, which drives both the card
-  scaffold and the report router — so they never drift.
+  scaffold and the report router — so they never drift. A write reaches the
+  section a card already has under any of its headings, so re-localising a hub
+  never grows a second copy; `hub cards merge-sections` folds old doubles.
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
   prodding them. A queue has one live consumer by default — run a single waiting
   session per role. Roles listed in `<team>/subscriber-roles.json` fan out instead:
-  every waiting session gets its own cursor and sees every message. Crossing
+  every waiting session gets its own cursor and sees every message, keyed by a
+  name that survives a restart (`HUBD_SUBSCRIBER` / `HUBD_SESSION` / `HUBD_AGENT`),
+  so a respawned reader picks up where it left off. Crossing
   machines is a separate, replaceable concern: `scripts/mesh-sync.sh` moves the
   folder over git+ssh, and [mrgd](https://github.com/bzdOS/mrgd) can carry the
   same queues as Matrix room traffic — concurrently, on the same directory. See

@@ -173,7 +173,10 @@ hub_queue_wait(worker) -> task? do it -> hub_report -> hub_heartbeat -> wait aga
 One live waiter per role by default: a message goes to exactly one reader, so
 two sessions on one role split work instead of duplicating it. A role listed in
 `<team>/subscriber-roles.json` broadcasts instead — every waiting session gets
-its own cursor and sees every message. Decisions only a human can make go to an
+its own cursor and sees every message. That cursor is keyed by `HUBD_SUBSCRIBER`,
+else `HUBD_SESSION`, else `HUBD_AGENT`, so a role restarted with the same env
+resumes where it stopped; give two sessions on one machine distinct
+`HUBD_SUBSCRIBER`s if both read the same broadcast. Decisions only a human can make go to an
 owner queue (list those role names in `HUB/owner-roles.json`) and `hub brief`
 rolls them up as "N buttons waiting".
 

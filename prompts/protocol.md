@@ -106,7 +106,12 @@ decisions/facts = many lines (one per line):
 One card per project at `projects/<slug>.md`: `## Digest` plus the sections reports
 route into — Next step / Gates / Metrics / Market / Facts & hypotheses / Decisions /
 Communication. Section headings localise (any language) in ONE file, `sections.json`;
-see `hub sections`. `hub card <slug> -m "<digest>"` sets the digest — and when only one line
+see `hub sections`. A write finds the section the card ALREADY has for that key — under the
+configured heading, the English default, or an alias declared as `{"heading": ..., "aliases":
+[...]}`, case-insensitively — before it creates one, so a card never grows a second copy of a
+section. `hub doctor` names cards that already hold one twice, and `hub cards merge-sections`
+folds them into the live one (dry run first; a superseded next step goes to history).
+`hub card <slug> -m "<digest>"` sets the digest — and when only one line
 of it went stale, patch instead of rewriting the owner's framing: `hub card <slug> --replace
 "<old>" --with "<new>"` / `hub_card_set({replace:[{from,to}], appendLine})`; a `from` that is
 not in the digest is an error, never a silent no-op.
@@ -297,6 +302,12 @@ sessions waiting on one role split the work rather than both doing it. A role na
 session has its own cursor and sees every message. `hub queue wait '*'` taps EVERY role
 at once (own offset — does not consume any role's messages), for a supervisor watching
 the fleet; several supervisors may tap at the same time without competing.
+
+On a broadcast role each reader's position is keyed by a name that survives a restart:
+`HUBD_SUBSCRIBER`, else `HUBD_SESSION`, else `HUBD_AGENT` (CLI: `--as <name>`) — so a respawned
+role resumes where it stopped. Two sessions that share that name would split the broadcast; hubd
+reports it, and the fix is a distinct `HUBD_SUBSCRIBER` per session. Readers idle for a week are
+moved to `.qstate/_archive/` by `hub queue gc --apply` (and `hub gc`), never deleted.
 
 A role name is part of a file name (`queues/<role>.<node>.queue.md`), so it is letters, digits,
 `-` and `_`, starting with a letter or digit — no dots, no slashes. Anything else is refused
