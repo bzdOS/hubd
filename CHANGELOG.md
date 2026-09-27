@@ -4,6 +4,15 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.27 — 2026-09-27
+
+- **`hub presence --json` and `hub log --json`.** The table render truncates names and statuses to
+  a fixed width and the journal line drops fields, so scripts were parsing the text or reading
+  `presence/*.json` behind the hub — re-implementing the cross-node merge as they went. `--json`
+  prints the same object `hub_presence` returns and the journal entries as stored.
+- Orchestrator prompt: an empty queue is a dispatch cycle, and a fleet blocker is re-measured
+  before a lane waits on it.
+
 ## 0.9.26 — 2026-09-23
 
 - **A broadcast reader keeps its place across a respawn** (task maple-99). The cursor of a
