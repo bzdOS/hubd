@@ -378,6 +378,17 @@ OUT17C=$(cd "$TMP/team" && $CLI cards compact 2>&1); RC17C=$?
 [ "$RC17C" -eq 0 ] && echo "$OUT17C" | grep -q "Would compact\|already inside the limit"
 check "cards compact: dry run reports without writing" $?
 
+# ── Case 18: presence and log have a machine-readable form ─────────────────
+# Fleet tooling regex-parsed the one-line renders and, for presence, read the
+# presence/*.json files behind the hub's back (2026-09-27).
+
+$CLI heartbeat json-probe --status "a status longer than the eleven columns of the table" >/dev/null 2>&1
+$CLI presence --json 2>/dev/null | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const a=d.agents.find(x=>x.agent==="json-probe"); process.exit(a && a.status.includes("eleven columns") && "alive" in a && Array.isArray(d.coverage) ? 0 : 1)'
+check "presence --json: full status, alive and coverage, same object as hub_presence" $?
+$CLI report -p jsonproj --agent smoke -k note -m "json log entry" >/dev/null 2>&1
+$CLI log jsonproj -n 5 --json 2>/dev/null | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.exit(d.some(e=>e.agent==="smoke" && e.project==="jsonproj" && e.text.includes("json log entry") && e.ts) ? 0 : 1)'
+check "log --json: entries with ts, project, agent, text" $?
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 
 printf '\n%d pass, %d fail\n' "$PASS" "$FAIL"

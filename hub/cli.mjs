@@ -1052,6 +1052,9 @@ if (cmd === 'whereami' || cmd === 'where') {
 if (cmd === 'log') {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const n = parseInt(getFlag('-n') || '20');
+  // --json: the entries as-is. Scripts were regex-parsing the text line and losing
+  // everything a one-line render drops (fleet head_sense.py, 2026-09-27).
+  if (args.includes('--json')) { console.log(JSON.stringify(journalTail(proj, n))); done(0); }
   for (const e of journalTail(proj, n)) {
     console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}`);
   }
@@ -1259,6 +1262,10 @@ if (cmd === 'heartbeat') {
 if (cmd === 'presence') {
   const roleFlag = getFlag('--role');
   const data = runPresence({ role: (typeof roleFlag === 'string') ? roleFlag : undefined, aliveOnly: args.includes('--alive') });
+  // --json: the same object hub_presence returns. The table truncates names and
+  // statuses to 11-18 columns, so fleet tooling read presence/*.json behind the
+  // hub's back instead — and re-implemented the cross-node merge doing it.
+  if (args.includes('--json')) { console.log(JSON.stringify(data)); done(0); }
   /* Coverage prints even when the agent list is empty, and that is the point: "no presence
    * records" used to be the whole answer on a machine that simply is not where the fleet runs. */
   const cov = (data.coverage || []).map(c => c.self
@@ -2091,7 +2098,7 @@ else if (!cmd) {
     '  inbox [--hours <N>]              what needs a decision now (blocked/overdue/unassigned/stale locks)',
     '  plan [project]                   dependency-graph trajectory: ready now · critical path · unlock order · cycles',
     '  whereami [cwd] [--json]          where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction',
-    '  log [project] [-n 20]            journal tail',
+    '  log [project] [-n 20] [--json]   journal tail',
     '  report [-p <proj>]               structured report → card sections (no input prints the template)',
     '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
     '  decide "<what>" --why "<why>" -p <proj>   append a decision to ## Decisions',
@@ -2115,7 +2122,7 @@ else if (!cmd) {
     '  claim <proj> <area> [-t min]     soft lock',
     '  release <id>                     release a lock',
     '  heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]   record liveness',
-    '  presence [--role r] [--alive]    fleet roster (who has heartbeated, alive/stale)',
+    '  presence [--role r] [--alive] [--json]  fleet roster (who has heartbeated, alive/stale)',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
     '  gc                               remove stale locks and old backups',
     '  install-hook [path]              git post-commit hook',
