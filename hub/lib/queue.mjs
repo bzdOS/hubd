@@ -251,6 +251,34 @@ const writeCursor = (offFile, off, mark) => {
 const BLOCK_HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm;
 const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[m.length - 1] : null; };
 
+// Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <N>`
+const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/m;
+
+// ── Delivery acknowledgement ──
+// When a block is delivered (cursor advanced past it), its id is recorded as "delivered".
+// When the consumer confirms processing, it moves to "acked". The sender can query unacked
+// blocks to detect zombie consumers that read but never responded.
+
+function acksPath(qfile) { return qfile.replace(/\.queue\.md$/, '.acks'); }
+
+function readAcks(acksFile) {
+  try {
+    const raw = fs.readFileSync(acksFile, 'utf8');
+    const out = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try { out.push(JSON.parse(line)); } catch {}
+    }
+    return out;
+  } catch { return []; }
+}
+
+function writeAck(acksFile, id, status) {
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  fs.appendFileSync(acksFile, JSON.stringify({ id, status, ts }) + '\n', 'utf8');
+  shareMode(acksFile);
+}
+
 /* Where the cursor belongs after the file shrank.
  *
  * Resetting to 0 was right for a file that was RECREATED and wrong for one that was PURGED —
@@ -330,6 +358,14 @@ function drainFile(qdir, stateDir, f) {
       if (sz === off) return null;                    // a competitor drained it first
       const chunk = readTail(full, off, sz);
       writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
+      // Record delivery ack for any blocks with ids in the chunk
+      try {
+        const re = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
+        for (const m of (chunk || '').matchAll(re)) {
+          const id = parseInt(m[1], 10);
+          if (id) writeAck(acksPath(path.join(qdir, f)), id, 'delivered');
+        }
+      } catch {}
       return chunk.trim() || null;
     });
   } catch (e) {
@@ -377,10 +413,21 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   const qfile = resolveQueueFile(qdir, role, nd);
 
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  // Block identity: a monotonic counter per file, so the sender can ask "was block N delivered?"
+  // and the consumer can ack individual blocks. Resets when the file is archived/removed.
+  let blockId = 1;
+  try {
+    const existing = fs.readFileSync(qfile, 'utf8');
+    const matches = existing.match(/^## .* · id (\d+)/gm);
+    if (matches) {
+      const nums = matches.map(m => parseInt(m.match(/id (\d+)/)[1], 10));
+      blockId = Math.max(...nums) + 1;
+    }
+  } catch {}
   // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
   // prefix every existing reader (peekQueueDepth, doctor, the archive) keys on.
   const ref = (task ?? '') !== '' ? ` · task #${String(task).trim()}` : '';
-  const entry = `\n## ${ts} · from ${sender}${ref}\n${String(text).trim()}\n`;
+  const entry = `\n## ${ts} · from ${sender} · id ${blockId}${ref}\n${String(text).trim()}\n`;
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
@@ -671,6 +718,73 @@ export function peekQueueDepth(role, { root } = {}) {
     }
   }
   return { pending, oldestWaiting: oldest };
+}
+
+/** Confirm that a delivered block was processed by the consumer.
+ *  Writes "acked" to the blocks ack file, or "delivered" if not yet recorded.
+ *  Idempotent: acking an already-acked block is a no-op.
+ *  @returns {{ ok: true, id: number, status: string }} */
+export function queueAck(role, blockId, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const fileRe = roleFileRe(role);
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { files = []; }
+  // Find the block across all queue files for this role
+  let found = false;
+  for (const f of files) {
+    const af = acksPath(path.join(qdir, f));
+    const acks = readAcks(af);
+    if (acks.some(a => a.id === blockId && a.status === 'acked')) return { ok: true, id: blockId, status: 'acked' };
+    if (acks.some(a => a.id === blockId)) { found = true; break; }
+  }
+  // Write to the first queue file's acks (the block id is unique per file)
+  for (const f of files) {
+    const full = path.join(qdir, f);
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      if (text.includes(`· id ${blockId}`)) {
+        const af = acksPath(full);
+        const acks = readAcks(af);
+        if (!acks.some(a => a.id === blockId)) writeAck(af, blockId, 'delivered');
+        writeAck(af, blockId, 'acked');
+        return { ok: true, id: blockId, status: 'acked' };
+      }
+    } catch {}
+  }
+  if (found) return { ok: true, id: blockId, status: 'acked' }; // already acked
+  throw new Error(`block id ${blockId} not found in any queue file for role ${role}`);
+}
+
+/** Return blocks that have been delivered but not yet acked.
+ *  @returns {{ blocks: Array<{id, status, ts, roleFile}>, total: number }} */
+export function getUnacked(role, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const fileRe = roleFileRe(role);
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { blocks: [], total: 0 }; }
+  const blocks = [];
+  for (const f of files) {
+    const full = path.join(qdir, f);
+    const af = acksPath(full);
+    const acks = readAcks(af);
+    for (const a of acks) {
+      if (a.status === 'delivered') {
+        blocks.push({ id: a.id, status: a.status, ts: a.ts, roleFile: f });
+      }
+    }
+  }
+  return { blocks, total: blocks.length };
+}
+
+/** Extend peekQueueDepth with unacked counts. */
+export function peekQueueDepthWithAcks(role, opts = {}) {
+  const d = peekQueueDepth(role, opts);
+  const u = getUnacked(role, opts);
+  return { ...d, unacked: u.total, unackedBlocks: u.blocks.slice(0, 20) };
 }
 
 /**

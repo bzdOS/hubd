@@ -47,6 +47,19 @@ function resolveHub() {
 export const JOURNAL_NODE = (process.env.HUBD_NODE || os.hostname() || 'node')
   .split('.')[0].toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'node';
 
+// Task ID prefix: by default the same as JOURNAL_NODE, but can be overridden with
+// HUBD_TASK_ID_PREFIX to avoid leaking hostnames into task IDs that get cited in
+// public places (issue trackers, PR branches, chat rooms).
+// The prefix is sanitised the same way as JOURNAL_NODE: lowercase, no dots, max 40.
+// This does NOT change any existing IDs — only new tasks get the new prefix.
+// nextLocalSeq() scans for both the old (JOURNAL_NODE) and new (TASK_ID_PREFIX)
+// patterns so the sequence counter never resets.
+export const TASK_ID_PREFIX = (() => {
+  const raw = process.env.HUBD_TASK_ID_PREFIX;
+  if (!raw) return JOURNAL_NODE;
+  return raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || JOURNAL_NODE;
+})();
+
 // Hub paths derive from a base dir. setHubBase() repoints them — the HTTP transport
 // calls it per request to serve a per-tenant directory (tenants/<hash>); stdio and
 // the CLI just use the one default base. Safe ONLY because every run* tool is fully
@@ -194,9 +207,13 @@ export function shareMode(file) {
 
 export function atomicWrite(file, data) {
   const tmp = file + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, typeof data === 'string' ? data : JSON.stringify(data, null, 1));
-  fs.renameSync(tmp, file);
-  shareMode(file);
+  try {
+    fs.writeFileSync(tmp, typeof data === 'string' ? data : JSON.stringify(data, null, 1));
+    fs.renameSync(tmp, file);
+    shareMode(file);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {} // cleanup on error or after successful rename
+  }
 }
 
 /* projects/history/<name>.md — superseded digests and rotated card sections. Appended by whichever
@@ -1418,6 +1435,46 @@ function projectCards({ includeReserved = false } = {}) {
   return out;
 }
 
+/** Find project cards that likely represent the same real project under different slugs.
+ *  Compares by `path:` frontmatter field (basename) and `repo:` URL. Returns pairs of
+ *  [canonical, duplicate] slugs — the canonical is the one with more journal entries.
+ *  Does NOT modify anything; lint/doctor use this to warn, cards merge uses it to suggest. */
+export function findProjectDuplicates() {
+  const cards = projectCards({ includeReserved: false });
+  const dupes = [];
+  // Group by basename of the `path:` frontmatter field
+  const byPath = new Map();
+  const byRepo = new Map();
+  for (const c of cards) {
+    const pathM = c.text.match(/^- path:\s*(.+)$/m);
+    const repoM = c.text.match(/^- repo:\s*(.+)$/m);
+    if (pathM) {
+      const base = path.basename(pathM[1].trim());
+      if (!byPath.has(base)) byPath.set(base, []);
+      byPath.get(base).push(c.slug);
+    }
+    if (repoM) {
+      const repo = repoM[1].trim().replace(/\.git$/, '').toLowerCase();
+      if (!byRepo.has(repo)) byRepo.set(repo, []);
+      byRepo.get(repo).push(c.slug);
+    }
+  }
+  // Collect pairs from path-based groups
+  for (const [base, slugs] of byPath) {
+    if (slugs.length < 2) continue;
+    for (let i = 1; i < slugs.length; i++) dupes.push([slugs[0], slugs[i]]);
+  }
+  // Add pairs from repo-based groups (skip if already covered by path)
+  for (const [repo, slugs] of byRepo) {
+    if (slugs.length < 2) continue;
+    for (let i = 1; i < slugs.length; i++) {
+      const pair = [slugs[0], slugs[i]];
+      if (!dupes.some(d => d[0] === pair[0] && d[1] === pair[1])) dupes.push(pair);
+    }
+  }
+  return dupes;
+}
+
 /**
  * Every rule that CAN be checked, checked. Read-only, never throws, never files anything.
  * A lint appears in `findings` whether or not it is enforced; `enforced` says which ones the
@@ -1496,11 +1553,21 @@ export function runLint(a = {}) {
     }
   }
 
+  // (5) Duplicate project cards: two slugs for the same repo or working directory.
+  //     A duplicate has already sent a worker into an empty loop.
+  const dupes = findProjectDuplicates();
+  for (const [a, b] of dupes) {
+    findings.push({ id: 'duplicate-project', severity: 'high', project: a,
+      what: `${a}.md and ${b}.md likely describe the same project (same path or repo) — a worker was observed entering an empty loop on a duplicate`,
+      fix: `hub cards merge ${b} ${a} --by <you>  (aliases ${b} → ${a} and archives ${b}.md)` });
+  }
+
   const LINT_DEFAULTS = {
     'gate-without-date': 'A gate is a date plus a criterion; without a date it is an intention.',
     'button-without-prep': 'Work only the owner can do splits into prep (an agent) and the button (the owner).',
     'card-empty': 'A card is what a session reads before it acts; a title is not a card.',
     'card-without-digest': 'A card no check can read is unchecked, however well it reads to a person.',
+    'duplicate-project': 'Two slugs for the same project split its history and tasks between two cards — a worker was seen entering an empty loop.',
   };
   for (const f of findings) {
     const law = lawFor(f.id, LINT_DEFAULTS[f.id] || f.id);
@@ -2312,6 +2379,19 @@ export function ensureProtocol(force) {
      * worth fixing rather than merely wrong. Losing a checkpoint costs one over-long whatsnew
      * window per agent, which is the cheapest possible failure here. */
     ensureGitignored('.checkins.json');
+    // Cleanup stale .tmp.<pid> files from crashed atomicWrite calls.
+    // Only touches files older than 60 seconds, so a currently-running
+    // atomicWrite on another process is never caught in the crossfire.
+    try {
+      const now = Date.now();
+      for (const f of fs.readdirSync(HUB)) {
+        if (!f.includes('.tmp.')) continue;
+        try {
+          const st = fs.statSync(path.join(HUB, f));
+          if (now - st.mtimeMs > 60000) fs.unlinkSync(path.join(HUB, f));
+        } catch {}
+      }
+    } catch {}
   } catch {}
   const body = shippedProtocol();
   if (body == null) return { ok: false };
@@ -2625,6 +2705,7 @@ const REPORT_PREFIX = {
   DONE: 'done', CLOSED: 'done', CLOSE: 'done',
   TASK: 'task', TODO: 'task',
   NOTE: 'note',
+  TO: 'to',   // addressee: a role or "fleet" — the entry is still public, but readers filter
 };
 // Prefixes route to section KEYS, resolved per card by liveHeading(): the heading the card already
 // uses for that key, whichever locale it was written in, before the configured one is created.
@@ -2893,6 +2974,68 @@ export function runCardsMergeSections(a = {}) {
   return { ok: true, apply: !!a.apply, cards };
 }
 
+/** Merge two project cards that describe the same project under different slugs.
+ *  Creates an alias from → into in project-aliases.json; moves from.md to projects/history/.
+ *  The journal entries are untouched (they belong to the old slug via the alias system).
+ *  Non-empty sections from the duplicate card are appended to the canonical card.
+ *  Dry by default; --apply writes and journals. */
+export function runCardsMerge(a = {}) {
+  const from = slugify(a.from);
+  const into = slugify(a.into);
+  const by = a.apply ? requireAuthor(a.by, 'by') : (a.by || null);
+  if (from === into) throw new Error('cannot merge a card into itself');
+  const fromCard = readCard(from);
+  if (!fromCard) throw new Error(`no card: ${from}.md`);
+  const intoCard = readCard(into);
+  if (!intoCard) throw new Error(`no card: ${into}.md`);
+
+  // Collect non-empty sections from the duplicate
+  const sections = [];
+  const headings = fromCard.match(/^## .+$/gm) || [];
+  for (const h of headings) {
+    const body = sectionBody(fromCard, h.replace(/^## /, ''));
+    if (body && !isPlaceholder(body)) {
+      sections.push({ heading: h.replace(/^## /, ''), count: body.split('\n').filter(Boolean).length });
+    }
+  }
+
+  if (!a.apply) {
+    return { ok: true, from, into, sections, aliasExisted: !!canonProject(from), applied: false };
+  }
+
+  // Create alias
+  const af = path.join(HUB, 'project-aliases.json');
+  let aliases = {};
+  try { aliases = JSON.parse(fs.readFileSync(af, 'utf8')); } catch {}
+  const aliasExisted = !!aliases[from];
+  if (!aliasExisted) aliases[from] = into;
+  fs.writeFileSync(af, JSON.stringify(aliases, null, 1));
+
+  // Append sections from duplicate to canonical
+  let text = intoCard;
+  for (const s of sections) {
+    const body = sectionBody(fromCard, s.heading);
+    text = editSection(text, s.heading, body, 'append');
+  }
+
+  // Move duplicate to history
+  const histDir = path.join(PROJ, 'history');
+  fs.mkdirSync(histDir, { recursive: true });
+  const histFile = path.join(histDir, `${from}.md`);
+  let n = 1;
+  while (fs.existsSync(histFile + (n > 1 ? `.${n}` : ''))) n++;
+  fs.renameSync(cardPath(from), n > 1 ? histFile + '.' + n : histFile);
+
+  // Write updated canonical card
+  const rot = rotateCardOverflow(text, into, by);
+  atomicWrite(cardPath(into), rot.text);
+
+  journalAppend({ ts: now(), project: into, agent: by, kind: 'note',
+    text: `cards merged: ${from} → ${into}${sections.length ? ' (' + sections.length + ' section(s) moved)' : ''}` });
+
+  return { ok: true, from, into, sections, aliasExisted, applied: true, moved: rot.moved };
+}
+
 /* The current step of a "## Next step" body: its text, and who set it when, read back from the
  * ` — set <ts> by <who>` stamp runReport writes. A body written before the stamp existed reads
  * as {by: null, at: null} — it is still reported as replaced, just without an owner check,
@@ -2917,7 +3060,7 @@ export function runReport(a) {
   const project = a.project || 'general';
   const slug = slugify(project);
   const by = requireAuthor(a.by ?? a.agent, 'by');
-  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [] };
+  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
   let explicitNote = false;
@@ -2935,7 +3078,7 @@ export function runReport(a) {
   // default, because refusing a write is the harshest thing this engine can do and an upgrade
   // must never start doing it uninvited.
   const noteOnly = b.note.length && !explicitNote && !b.decide.length && !b.fact.length && !b.hypo.length &&
-    !b.comm.length && !b.next.length && !b.done.length && !b.task.length;
+    !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.to.length;
   if (noteOnly && rulesConfig().strict.rejectNoteOnlyReport) {
     throw new Error('strict: this report is prose only. Use a prefix so it lands somewhere a later reader will find it — ' +
       'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: — or, if you are just saying you started, hub claim instead. ' +
@@ -3008,7 +3151,9 @@ export function runReport(a) {
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   if (b.note.length) {
+    const to = b.to.length ? b.to.join(',') : (a.to || undefined);
     const entry = { ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: b.note.join(' · ') };
+    if (to) entry.to = to;
     if (a.private) { journalAppendPrivate(entry); summary.private = true; }
     else journalAppend(entry);
     summary.note = true;
@@ -3572,18 +3717,27 @@ export function runWhereAmI(a = {}) {
 // file — no cross-node knowledge needed, so two offline adds can never collide by
 // construction. Existing bare-numeric ids are left exactly as they are (still
 // protected by the origin-keying fix); nothing here rewrites history.
+//
+// Scans for BOTH the JOURNAL_NODE and TASK_ID_PREFIX patterns so that changing
+// the prefix via HUBD_TASK_ID_PREFIX never resets the sequence counter — new IDs
+// continue from the highest N seen under either prefix.
 function nextLocalSeq() {
-  const esc = JOURNAL_NODE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp('^' + esc + '-(\\d+)$');
   let maxN = 0;
+  const prefixes = TASK_ID_PREFIX === JOURNAL_NODE ? [JOURNAL_NODE] : [TASK_ID_PREFIX, JOURNAL_NODE];
+  const res = prefixes.map(p => {
+    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('^' + esc + '-(\\d+)$');
+  });
   try {
     for (const l of fs.readFileSync(TASK_EVENTS, 'utf8').split('\n')) {
       if (!l.trim()) continue;
       try {
         const e = JSON.parse(l);
         if (e.ev === 'add' && typeof e.id === 'string') {
-          const m = re.exec(e.id);
-          if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+          for (const re of res) {
+            const m = re.exec(e.id);
+            if (m) { maxN = Math.max(maxN, parseInt(m[1], 10)); break; }
+          }
         }
       } catch {}
     }
@@ -3618,7 +3772,7 @@ export function normalizeCat(cat, tags) {
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
   return withLock(TASK_EVENTS, () => {
-    const id = `${JOURNAL_NODE}-${nextLocalSeq()}`;
+    const id = `${TASK_ID_PREFIX}-${nextLocalSeq()}`;
     const norm = normalizeCat(a.cat, a.tags);
     const t = {
       // New work lands on the canonical slug, so an alias never grows a fresh backlog of its own.
@@ -4034,14 +4188,21 @@ export function runInbox(a = {}) {
   const blocked = journalSince(hours).filter(e => e.kind === 'blocked')
     .map(e => ({ ts: e.ts, project: e.project, agent: e.agent, text: (e.text || '').slice(0, 200) }));
 
+  // Entries addressed to a role: when the caller provides their role, surface entries
+  // where `to` matches that role or 'fleet'. This is how a head's signal ("windows done,
+  // NAT can close") reaches the orchestrator without them having to scan the full journal.
+  const role = a.agent || a.role || undefined;
+  const addressed = role ? journalSince(hours).filter(e => e.to && (e.to === role || e.to.includes(role) || e.to === 'fleet'))
+    .map(e => ({ ts: e.ts, project: e.project, agent: e.agent, to: e.to, text: (e.text || '').slice(0, 200) })) : [];
+
   const claims = loadClaims().claims;
   const live = new Set(activeClaims(claims).map(c => `${c.project}\0${c.area}\0${c.agent}`));
   const staleClaims = claims
     .filter(c => (c.ttlMin ?? 240) !== 0 && !live.has(`${c.project}\0${c.area}\0${c.agent}`))
     .map(c => ({ project: c.project, area: c.area, agent: c.agent, since: c.since, ttlMin: c.ttlMin ?? 240 }));
 
-  const counts = { blocked: blocked.length, overdue: overdue.length, unassigned: unassigned.length, staleClaims: staleClaims.length };
-  return { counts, empty: Object.values(counts).every(n => n === 0), blocked, overdue, unassigned, staleClaims, windowHours: hours, generated: now() };
+  const counts = { blocked: blocked.length, overdue: overdue.length, unassigned: unassigned.length, staleClaims: staleClaims.length, addressed: addressed.length };
+  return { counts, empty: Object.values(counts).every(n => n === 0), blocked, overdue, unassigned, staleClaims, addressed, windowHours: hours, generated: now() };
 }
 
 // Deterministic dependency-graph planner over tasks' depends_on — the "probable
