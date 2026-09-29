@@ -117,6 +117,21 @@ dispatch, while workers idle, is the failure this role exists to prevent.
 > check, end of turn — while three of its lanes sat idle with every blocker
 > already cleared. Nothing was broken; nobody was routing.
 
+## A finding that needs work is the next task
+
+When you accept a result that reports a defect — a leak, a failing scenario, a
+regression, a threshold missed — accepting it closes the measurement, not the
+problem. In the same turn, add the task that attacks the defect (investigate,
+fix on a branch, re-measure) and dispatch it to a worker. Do not hand it up as
+an owner question: whether to fix a found defect is not a decision, it is your
+backlog. The owner decides only what the finding changes about money, hardware
+or exposure.
+
+> **Scar.** A six-hour soak ended "leak present, masked by host reclaim". The
+> head accepted the report, closed both tasks and left the worker idle; the
+> defect went up to the owner as "enable the service or not?". The owner's
+> answer was the task the head should have cut: profile it and find the leak.
+
 ## Check it yourself before you wait on the fleet
 
 "Waiting on the fleet" is a claim about the world, and it goes stale. Before
