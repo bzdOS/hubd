@@ -23,7 +23,7 @@ import {
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
-  runCardsMergeSections, cardSectionIssues, requireAuthor,
+  runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces, archiveStaleSubscribers } from './lib/queue.mjs';
@@ -61,7 +61,25 @@ function writeAllSync(fd, text) {
 console.log = (...a) => writeAllSync(1, a.join(' ') + '\n');
 console.error = (...a) => writeAllSync(2, a.join(' ') + '\n');
 console.warn = console.error;
-function done(code = 0) { process.exit(code); }
+function done(code = 0) {
+  if (code === 0 && knownFlags) {
+    const unknowns = [];
+    for (const a of args) {
+      // Only flag patterns: --foo or -x (single letter). Values like "- starts with"
+      // or negative numbers are not flags. Triple-dash --- is also skipped (comments).
+      const isFlag = (a.startsWith('--') && a.length > 2) || (/^-[a-zA-Z]$/.test(a));
+      if (isFlag && !a.startsWith('---') && !knownFlags.has(a)) {
+        unknowns.push(a);
+      }
+    }
+    if (unknowns.length) {
+      console.error('Error: unknown flag' + (unknowns.length > 1 ? 's' : '') + ': ' + unknowns.join(', ') +
+        '.  hub <cmd> --help for the list, or pass text that starts with "-" through --text or stdin.');
+      process.exit(1);
+    }
+  }
+  process.exit(code);
+}
 function die(msg) { console.error('Error: ' + msg); done(1); }
 
 // rulesFile:start
@@ -76,8 +94,32 @@ function rulesFile() {
   return null;
 }
 
+// Known flags for the current command — populated by getFlag/getFlags when they match,
+// plus globally-declared flags that any command may use. Truly unknown flags (typos like
+// --houurs or --digset) are caught by done() on exit.
+let knownFlags = new Set();
+
+// Pre-declare every flag used ANYWHERE in the CLI. Typos won't be here → caught.
+// This is broad but safe: the alternative (per-command declaration) is ~25 manual edits
+// with the same end result for the bugs that matter — silent misbehavior from typos.
+declareFlags(
+  '--json', '--verbose', '--apply', '--force', '--private', '--alive', '--here', '--short',
+  '--set', '--from-now', '--once', '--live', '--help', '--dry-run', '--all',
+  // getFlag/getFlags auto-register their flags on match, but when a flag is absent
+  // (not matched), it would be reported as unknown. Pre-declaring prevents that.
+  '--hours', '-h', '--days', '--project', '-p', '--importance', '-i', '--deadline', '-d',
+  '--needs', '--resource', '--cat', '--tag', '--assignee', '--by', '--from', '--to',
+  '--limit', '-n', '--offset', '--status', '--text', '--message', '-m', '--name',
+  '--slug', '--path', '--dir', '--replace', '--with', '--as', '--label', '--port',
+  '--role', '--type', '--address', '--os', '--provider', '--why', '--digest',
+  '--agent', '--cwd', '--note', '--seconds', '--tokens-in', '--tokens-out', '--ttl',
+  '--model', '--task', '--timeout', '-w', '-k', '-q', '-t', '--link', '--cost',
+  '--src', '--stale-days', '--addr', '--append', '--append-line',
+);
+
 function getFlag(name) {
   const i = args.indexOf(name);
+  if (i !== -1) knownFlags.add(name);
   return i !== -1 ? (args[i + 1] ?? true) : null;
 }
 // repeatable flag: every `--name value` occurrence, plus comma-splitting (so
@@ -85,10 +127,17 @@ function getFlag(name) {
 function getFlags(name) {
   const out = [];
   for (let i = 0; i < args.length; i++)
-    if (args[i] === name && typeof args[i + 1] === 'string')
+    if (args[i] === name && typeof args[i + 1] === 'string') {
+      knownFlags.add(name);
       for (const part of String(args[i + 1]).split(',')) { const v = part.trim(); if (v) out.push(v); }
+    }
   return out;
 }
+
+// Check that no unrecognised --flags remain in args after command processing.
+// Boolean flags (--json, --verbose, --apply, etc.) must be pre-declared via
+// declareFlags() so they are not reported as unknown.
+function declareFlags(...names) { for (const n of names) knownFlags.add(n); }
 
 /* Positional arguments from index `from` on, with every flag and its value skipped wherever
  * they sit. `hub queue send` read its body as args[3] — so `hub queue send hv --from bzdos
@@ -1407,6 +1456,25 @@ if (cmd === 'cards' && args[1] === 'merge-sections') {
   done(0);
 }
 
+// cards merge: merge two project cards that describe the same project under different slugs.
+// Creates an alias b → a in project-aliases.json; archives b.md to projects/history/.
+// Dry by default.
+if (cmd === 'cards' && args[1] === 'merge') {
+  const from = args[2];  // the duplicate slug to fold
+  const into = args[3];  // the canonical slug to keep
+  if (!from || !into) die('cards merge <duplicate> <canonical> [--apply --by <you>]: folds <duplicate>.md into <canonical>.md');
+  const apply = args.includes('--apply');
+  const by = getFlag('--by') || process.env.HUBD_AGENT || null;
+  if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the merge is journaled.');
+  let r; try { r = runCardsMerge({ from, into, apply, by }); } catch (e) { die(e.message); }
+  console.log(`  ${from}.md → ${into}.md  (alias created${r.aliasExisted ? ' — was already aliased' : ''})`);
+  for (const s of r.sections) console.log(`      ${s.heading}: ${s.count} line(s) ${s.moved ? 'moved' : 'in destination already, skipped'}`);
+  console.log(r.applied
+    ? `Merged. ${from} is now an alias of ${into} and ${from}.md has been archived to projects/history/.`
+    : 'Nothing written (dry run — add --apply --by <you>).');
+  done(0);
+}
+
 if (cmd === 'card' && args[1] === 'resolve') {
   const targets = args.slice(2).filter(a => !a.startsWith('-'));
   const files = targets.length
@@ -1791,6 +1859,8 @@ if (cmd === 'gc') {
         try { if (nowMs - fs.statSync(full).mtimeMs > 60000) { fs.unlinkSync(full); console.log('  removed stale lock ' + f); removed++; } } catch {}
       } else if (f.startsWith('tasks.json.bak')) {     // ONLY the generated task-cache backup — never a user .bak file
         try { fs.unlinkSync(full); console.log('  removed backup ' + f); removed++; } catch {}
+      } else if (f.includes('.tmp.')) {                // orphaned .tmp.<pid> from crashed atomicWrite
+        try { if (nowMs - fs.statSync(full).mtimeMs > 60000) { fs.unlinkSync(full); console.log('  removed stale tmp ' + f); removed++; } } catch {}
       }
     }
   } catch (e) { die('cannot read hub dir: ' + e.message); }
@@ -2109,6 +2179,7 @@ else if (!cmd) {
     '  card <slug> -m "<digest>"        set a project card without a folder',
     '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
     '  cards compact [--apply --by <you>]   move the overflow of over-long card sections into projects/history/ (dry run without --apply)',
+    '  cards merge <duplicate> <canonical> [--apply --by <you>]   merge two cards for the same project (dry run without --apply)',
     '  cards merge-sections [--apply --by <you>]   fold a section a card holds twice (same heading, or two locales) into the live one',
     '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
     '  freeze "<why>" --by <you>        stop mesh-sync on THIS node before operating on the hub dir',

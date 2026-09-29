@@ -14,7 +14,7 @@ import {
   runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
   runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth, everConsumedHere } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepth, peekQueueDepthWithAcks, everConsumedHere, queueAck } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -57,6 +57,7 @@ const TOOLS = [
       private: { type: 'boolean', description: 'route this entry to the LOCAL-ONLY life braid (journal.life.jsonl — gitignored, never mesh-synced) and stamp it private. Prose only: DECIDE:/FACT:/COMM:/NEXT: write into a card, and cards are synced, so mixing the two would publish what you asked to keep local.' },
       force: { type: 'boolean', description: 'NEXT: replaces the card\'s next step. If the current step was set by an owner role, a non-owner NEXT: is refused with the step\'s text unless force is true. The response always carries nextReplaced {text, by, at} when a step was replaced, and the card keeps one dated `prev` line.' },
       staleDays: { type: 'integer', description: 'the reply carries digestAgeDays, and digestStale + a hint once the digest trails the project journal by this many days (default 7) — you are the one holding the facts that would fix it' },
+      to: { type: 'string', description: 'addressee: a role ("orchestrator") or "fleet" — the entry stays public but readers filter by it. A TO: prefix inside the text body appends to this; the parameter and the prefix are merged.' },
     }, required: ['project', 'agent', 'text'] } },
 
   { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',
@@ -285,6 +286,7 @@ const TOOLS = [
     description: 'What needs a DECISION right now, distilled from hubd data (not a time window like hub_brief): blocked reports, overdue open tasks, unassigned open tasks, and claim locks whose TTL expired but were never released. Returns {empty:true} when nothing needs attention — poll this instead of re-reading hub_status/hub_brief every cycle.',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'window for blocked-report scan, default 72' },
+      agent: { type: 'string', description: 'your role — surfaces journal entries addressed to you (to: <you> or to: fleet)' },
     } } },
 
   { name: 'hub_trajectory',
@@ -314,6 +316,13 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       timeout: { type: 'integer', description: 'seconds to block, default 45, max 540. The default is deliberately short: MCP clients abort a tool call on their own timeout (commonly ~60s) and hubd cannot see that limit. Raise it only if you know your client tolerates a longer call.' },
     } } },
+
+  { name: 'hub_queue_ack',
+    description: 'Confirm that a delivered queue block was processed, not just read. Without this, a zombie session that reads a block and dies looks exactly like a processed one — the sender sees pending=0 but gets no reply. Ack moves the block from "delivered" to "acked" so the sender can distinguish the two. Call this after you have acted on the block — the ack is your proof of work, and the sender can poll for unacked blocks.',
+    inputSchema: { type: 'object', properties: {
+      role: { type: 'string', description: 'the role whose queue the block was delivered to' },
+      id: { type: 'integer', description: 'block id — the `· id <N>` in the delivered block header' },
+    }, required: ['role', 'id'] } },
 ];
 
 /* Per-tool output budgets (see capOutput in lib/core.mjs). Order matters: the FIRST key of a
@@ -331,7 +340,7 @@ const OUTPUT_PLANS = {
   hub_get:        [['card', 12000], ['journal', 15], ['claims', 20]],
   hub_whatsnew:   [['entries', 50]],
   hub_search:     [['hits', 40]],
-  hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25]],
+  hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25], ['addressed', 25]],
   hub_kanban:     [['inbox', 30], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
   hub_task_list:  [['tasks', 100]],
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
@@ -425,7 +434,7 @@ const DISPATCH = {
     // never said whether anything is reading, and a sender read it as "delivered" — while four
     // roles sat on a day of undelivered orders (task maple-98). A depth that keeps climbing
     // is the sender's own evidence that nobody is consuming.
-    const depth = (() => { try { return peekQueueDepth(a.role, { root: teamRoot() }); } catch { return null; } })();
+    const depth = (() => { try { return peekQueueDepthWithAcks(a.role, { root: teamRoot() }); } catch { return null; } })();
     /* The depth is measured against THIS node's cursor, and that is only evidence when this node is
      * where the role is consumed. A role read on another machine keeps its cursor there — .qstate is
      * node-local and never syncs — so a cross-node queue reads as permanently unconsumed from here.
@@ -439,6 +448,7 @@ const DISPATCH = {
         : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and cursors are node-local — so this is not a backlog, it is the only view this machine can have. Check on the node that runs the role.`;
     return { file, ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }),
       ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
+        unacked: depth.unacked || 0,
         ...(note ? { note } : {}) } : {}) };
   },
   // subscriber: subscriberId() — stable across a respawn (HUBD_SUBSCRIBER / HUBD_SESSION /
@@ -448,6 +458,7 @@ const DISPATCH = {
   // client, and then the cursor stays shared per node exactly as before.
   hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
   hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
+  hub_queue_ack: (a) => queueAck(a.role, a.id, { root: teamRoot() }),
 };
 
 // Where the queues and AGENTS.md live for THIS server. The CLI resolves the team root as
