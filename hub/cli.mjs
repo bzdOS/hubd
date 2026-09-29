@@ -19,7 +19,7 @@ import {
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalTail, journalSince, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
+  journalFiles, journalTail, journalSince, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
@@ -2211,7 +2211,7 @@ else if (!['sync', 'install-hook', '_commit-hook', 'serve', 'queue'].includes(cm
   die('Unknown command: ' + cmd + '. Run hub with no arguments for help.');
 }
 
-/* ── web server (read-only kanban) ── */
+/* ── web server (read-only kanban + timeline) ── */
 function startServer(port) {
   const HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -2227,6 +2227,25 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 #updated{color:#6B6B66;font-size:11px}
 #btn-rules{background:none;border:1px solid #E8590C;color:#E8590C;font-family:inherit;font-size:11px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;border-radius:1px}
 #btn-rules:hover{background:#E8590C;color:#FAFAF8}
+/* mode toggle */
+#mode-bar{display:flex;align-items:center;gap:0;padding:8px 20px;border-bottom:1px solid #E3E3DE}
+.btn-mode{background:none;border:1px solid #D0D0C8;color:#6B6B66;font-family:inherit;font-size:11px;padding:5px 14px;cursor:pointer;letter-spacing:.04em}
+.btn-mode:first-child{border-radius:3px 0 0 3px}
+.btn-mode:last-child{border-radius:0 3px 3px 0;border-left:none}
+.btn-mode.active{background:#E8590C;color:#FAFAF8;border-color:#E8590C}
+/* timeline controls */
+#tl-bar{display:none;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid #E3E3DE}
+#tl-bar.show{display:flex}
+.tl-btn{background:none;border:1px solid #D0D0C8;color:#16181A;font-family:inherit;font-size:12px;padding:4px 10px;cursor:pointer;border-radius:3px}
+.tl-btn:hover{background:#ECECE8}
+.tl-btn:disabled{opacity:.35;cursor:default}
+#tl-slider{flex:1;height:20px;-webkit-appearance:none;appearance:none;background:#ECECE8;border-radius:10px;outline:none;margin:0 4px}
+#tl-slider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#E8590C;cursor:pointer}
+#tl-slider::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#E8590C;cursor:pointer;border:none}
+#tl-range-label{font-size:10px;color:#6B6B66;white-space:nowrap}
+/* playback highlight */
+.tl-entry{display:grid;grid-template-columns:90px 90px 60px 1fr;gap:8px;align-items:baseline;padding:7px 14px;border-bottom:1px solid #E3E3DE;font-size:11px;transition:background .3s}
+.tl-entry.now{background:#FFF4E6}
 .board{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #E3E3DE}
 .col{border-right:1px solid #E3E3DE}
 .col:last-child{border-right:none}
@@ -2245,12 +2264,19 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .e-ts{color:#6B6B66}
 .e-proj{font-weight:600}
 .e-kind{color:#6B6B66}
+.e-text{overflow:hidden;text-overflow:ellipsis}
+#tl-feed{min-height:200px}
+#tl-more{padding:10px 14px;text-align:center}
+#tl-more button{background:none;border:1px solid #D0D0C8;color:#6B6B66;font-family:inherit;font-size:11px;padding:5px 20px;cursor:pointer;border-radius:3px}
+#tl-more button:hover{background:#ECECE8}
+#tl-more button:disabled{opacity:.35}
 #modal{display:none;position:fixed;inset:0;background:rgba(22,24,26,.55);z-index:100;align-items:flex-start;justify-content:center;padding-top:60px}
 #modal.open{display:flex}
 #modal-panel{background:#FAFAF8;border:1px solid #E3E3DE;width:640px;max-width:90vw;max-height:72vh;display:flex;flex-direction:column}
 #modal-head{padding:10px 16px;border-bottom:1px solid #E3E3DE;display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
 #modal-close{background:none;border:none;color:#6B6B66;font-size:18px;cursor:pointer;font-family:inherit;padding:0 2px;line-height:1}
 #modal-body{padding:16px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.6;color:#16181A}
+.hide{display:none!important}
 </style>
 </head>
 <body>
@@ -2261,6 +2287,18 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
     <button id="btn-rules">&#9881; Rules</button>
   </div>
 </header>
+<div id="mode-bar">
+  <button class="btn-mode active" data-mode="live">Live</button>
+  <button class="btn-mode" data-mode="history">History</button>
+</div>
+<div id="tl-bar">
+  <button class="tl-btn" id="tl-start" title="Jump to earliest">&#9664;&#9664;</button>
+  <button class="tl-btn" id="tl-step-back" title="Step back">&#9664;</button>
+  <button class="tl-btn" id="tl-play" title="Play / Pause">&#9654;</button>
+  <input type="range" id="tl-slider" min="0" max="100" value="100">
+  <span id="tl-range-label">now</span>
+</div>
+<div id="live-view">
 <div class="board">
   <div class="col">
     <div class="col-head"><span class="col-title">Queued</span><span class="col-count" id="cnt-q">0</span></div>
@@ -2278,6 +2316,12 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 <div>
   <div class="act-head">Activity</div>
   <div id="activity"></div>
+</div>
+</div>
+<div id="history-view" class="hide">
+  <div class="act-head">Journal</div>
+  <div id="tl-feed"></div>
+  <div id="tl-more"><button id="tl-load-more">Load older</button></div>
 </div>
 <div id="modal">
   <div id="modal-panel">
@@ -2307,7 +2351,7 @@ function renderCol(id,cntId,tasks){
   document.getElementById(cntId).textContent=tasks.length;
   document.getElementById(id).innerHTML=tasks.length?tasks.map(taskEl).join(''):'<div class="empty">no tasks</div>';
 }
-async function load(){
+async function loadLive(){
   try{
     var d=await fetch('/api/kanban'+location.search).then(function(r){return r.json()});
     renderCol('col-q','cnt-q',d.queued);
@@ -2318,11 +2362,156 @@ async function load(){
         '<span class="e-ts">'+esc(e.ts.slice(5,16))+'</span>'+
         '<span class="e-proj">'+esc(e.project)+'</span>'+
         '<span class="e-kind">'+esc(e.kind)+'</span>'+
-        '<span>'+esc((e.text||'').slice(0,120))+'</span></div>';
+        '<span class="e-text">'+esc((e.text||'').slice(0,120))+'</span></div>';
     }).join(''):'<div class="empty" style="padding:14px">no activity</div>';
     document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
   }catch(e){document.getElementById('updated').textContent='error: '+e.message}
 }
+
+/* ── History / Timeline ── */
+var tlMode='live', tlTimer=null, tlEarliest=null, tlNewest=null;
+var tlEntries=[], tlCursor=null, tlHasMore=true, tlLoading=false;
+var tlPlayIdx=-1, tlPlaySpeed=800;
+
+function tlEntryHtml(e,idx){
+  return '<div class="tl-entry'+(idx===tlPlayIdx?' now':'')+'" data-idx="'+idx+'">'+
+    '<span class="e-ts">'+esc(e.ts.slice(5,16))+'</span>'+
+    '<span class="e-proj">'+esc(e.project||'')+'</span>'+
+    '<span class="e-kind">'+esc(e.kind||'')+'</span>'+
+    '<span class="e-text">'+esc((e.text||'').slice(0,140))+'</span></div>';
+}
+
+function renderTlFeed(){
+  var feed=document.getElementById('tl-feed');
+  feed.innerHTML=tlEntries.length?tlEntries.map(function(e,i){return tlEntryHtml(e,i)}).join(''):'<div class="empty" style="padding:14px">no journal entries</div>';
+  document.getElementById('tl-load-more').disabled=!tlHasMore||tlLoading;
+  if(!tlHasMore)document.getElementById('tl-load-more').textContent='End of journal';
+  else document.getElementById('tl-load-more').textContent=tlLoading?'Loading...':'Load older';
+}
+
+async function loadJournal(before,append){
+  if(tlLoading)return;
+  tlLoading=true;
+  try{
+    var q='/api/journal?limit=60'+(before?'&before='+encodeURIComponent(before):'');
+    var d=await fetch(q+location.search).then(function(r){return r.json()});
+    if(append){tlEntries=tlEntries.concat(d.entries)}else{tlEntries=d.entries}
+    tlCursor=d.oldest||null;
+    tlHasMore=d.hasMore;
+    if(d.newest&&(!tlNewest||d.newest>tlNewest))tlNewest=d.newest;
+    if(d.oldest&&(!tlEarliest||d.oldest<tlEarliest))tlEarliest=d.oldest;
+    renderTlFeed();
+    updateSlider();
+    document.getElementById('updated').textContent='journal · '+tlEntries.length+' entries';
+  }catch(e){document.getElementById('updated').textContent='error: '+e.message}
+  tlLoading=false;
+}
+
+function updateSlider(){
+  if(!tlEarliest||!tlNewest)return;
+  var slider=document.getElementById('tl-slider');
+  var total=new Date(tlNewest).getTime()-new Date(tlEarliest).getTime();
+  if(total<=0){slider.value=100;return}
+  if(tlCursor){
+    var pos=100-Math.round(((new Date(tlCursor).getTime()-new Date(tlEarliest).getTime())/total)*100);
+    slider.value=Math.max(0,Math.min(100,pos));
+  }else{slider.value=100}
+  updateRangeLabel();
+}
+
+function updateRangeLabel(){
+  document.getElementById('tl-range-label').textContent=
+    tlCursor?tlCursor.slice(0,16).replace('T',' '):'now';
+}
+
+function stopPlayback(){
+  if(tlTimer){clearInterval(tlTimer);tlTimer=null}
+  tlPlayIdx=-1;
+  document.getElementById('tl-play').innerHTML='&#9654;';
+  renderTlFeed();
+}
+
+function startPlayback(){
+  if(tlTimer)return stopPlayback();
+  if(!tlEntries.length)return;
+  document.getElementById('tl-play').innerHTML='&#9646;&#9646;';
+  tlPlayIdx=0;
+  renderTlFeed();
+  tlTimer=setInterval(function step(){
+    if(tlPlayIdx>=tlEntries.length-1){
+      if(tlHasMore&&!tlLoading){
+        stopPlayback();
+        loadJournal(tlCursor,true).then(function(){
+          tlPlayIdx=tlEntries.length-1;
+          renderTlFeed();
+          tlTimer=setInterval(step,tlPlaySpeed);
+        });
+        return;
+      }
+      stopPlayback();
+      return;
+    }
+    tlPlayIdx++;
+    renderTlFeed();
+    document.getElementById('updated').textContent='playback · '+
+      tlEntries[tlPlayIdx].ts.slice(0,16).replace('T',' ');
+  },tlPlaySpeed);
+}
+
+// Mode switching
+document.querySelectorAll('.btn-mode').forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll('.btn-mode').forEach(function(x){x.classList.remove('active')});
+    this.classList.add('active');
+    tlMode=this.dataset.mode;
+    stopPlayback();
+    if(tlMode==='live'){
+      document.getElementById('live-view').classList.remove('hide');
+      document.getElementById('history-view').classList.add('hide');
+      document.getElementById('tl-bar').classList.remove('show');
+      document.getElementById('mode-bar').style.borderBottom='1px solid #E3E3DE';
+      loadLive();
+      liveTimer=setInterval(loadLive,3000);
+    }else{
+      document.getElementById('live-view').classList.add('hide');
+      document.getElementById('history-view').classList.remove('hide');
+      document.getElementById('tl-bar').classList.add('show');
+      document.getElementById('mode-bar').style.borderBottom='none';
+      if(liveTimer){clearInterval(liveTimer);liveTimer=null}
+      if(!tlEntries.length)loadJournal(null,false);
+    }
+  };
+});
+
+// Timeline controls
+document.getElementById('tl-play').onclick=function(){
+  if(tlTimer)stopPlayback();else startPlayback();
+};
+document.getElementById('tl-step-back').onclick=function(){
+  stopPlayback();
+  if(tlPlayIdx>0){tlPlayIdx--;renderTlFeed();}
+};
+document.getElementById('tl-start').onclick=function(){
+  stopPlayback();
+  tlEntries=[];tlCursor=null;tlHasMore=true;tlEarliest=null;tlNewest=null;
+  loadJournal(null,false);
+};
+document.getElementById('tl-slider').oninput=function(){
+  stopPlayback();
+  if(!tlEarliest||!tlNewest)return;
+  var val=parseInt(this.value);
+  var total=new Date(tlNewest).getTime()-new Date(tlEarliest).getTime();
+  if(total<=0)return;
+  var targetTs=new Date(new Date(tlEarliest).getTime()+Math.round((100-val)/100*total)).toISOString();
+  tlEntries=[];tlCursor=null;tlHasMore=true;
+  loadJournal(targetTs,false);
+};
+document.getElementById('tl-load-more').onclick=function(){
+  stopPlayback();
+  if(tlHasMore&&!tlLoading)loadJournal(tlCursor,true);
+};
+
+var liveTimer=null;
 document.getElementById('btn-rules').onclick=function(){
   fetch('/api/rules'+location.search).then(function(r){return r.json()}).then(function(d){
     document.getElementById('modal-body').textContent=d.text;
@@ -2331,16 +2520,13 @@ document.getElementById('btn-rules').onclick=function(){
 };
 document.getElementById('modal-close').onclick=function(){document.getElementById('modal').classList.remove('open')};
 document.getElementById('modal').onclick=function(e){if(e.target===this)this.classList.remove('open')};
-load();
-setInterval(load,3000);
+loadLive();
+liveTimer=setInterval(loadLive,3000);
 </script>
 </body>
 </html>`;
 
   function getRules() {
-    // A tenant sees its OWN AGENTS.md or none. rulesFile() falls back to the team root — the
-    // server's HUBD_TEAM_DIR or a walk up from the server's cwd — which on a multi-tenant board
-    // handed the operator's constitution to every tenant that had not written one.
     const own = path.join(HUB, 'AGENTS.md');
     const p = MT ? (fs.existsSync(own) ? own : null) : rulesFile();
     if (p) { try { return { text: fs.readFileSync(p, 'utf8') }; } catch {} }
@@ -2348,8 +2534,6 @@ setInterval(load,3000);
   }
 
   // Multi-tenant board (HUBD_MULTITENANT=1): opened by link board.hubd.net/?t=<token>.
-  // The token (or a 40-hex tenant id, which is safe to share) selects the workspace
-  // to render. Read-only either way — this server is GET-only, no writes anywhere.
   const MT = process.env.HUBD_MULTITENANT === '1';
   const TENANTS = path.join(HUB, 'tenants');
   const HOST = process.env.HUBD_HTTP_HOST || '127.0.0.1';
@@ -2360,6 +2544,38 @@ setInterval(load,3000);
     return null;
   };
 
+  // Journal endpoint: paginated, reverse-chronological entries.
+  // before=<ISO> — entries older than this timestamp (exclusive). Omit for newest.
+  // limit=<N> — max entries to return (default 60, max 200).
+  function apiJournal(query) {
+    const before = query.get('before') || null;
+    const limit = Math.min(parseInt(query.get('limit') || '60') || 60, 200);
+    const files = journalFiles();
+    const all = [];
+    for (const f of files) {
+      try {
+        const txt = fs.readFileSync(f, 'utf8');
+        for (const line of txt.split('\n')) {
+          const t = line.trim(); if (!t) continue;
+          try { all.push(JSON.parse(t)); } catch {}
+        }
+      } catch {}
+    }
+    all.sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0));
+    let filtered = all;
+    if (before) {
+      const cutoff = new Date(before).getTime();
+      filtered = all.filter(e => new Date(e.ts).getTime() < cutoff);
+    }
+    const entries = filtered.slice(0, limit);
+    return {
+      entries,
+      hasMore: entries.length === limit && entries.length < filtered.length,
+      newest: all.length ? all[0].ts : null,
+      oldest: entries.length ? entries[entries.length - 1].ts : null,
+    };
+  }
+
   const handler = (req, res) => {
     if (req.method !== 'GET') {
       res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2367,26 +2583,30 @@ setInterval(load,3000);
     }
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (url.pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(HTML);
-      }
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       if (MT) {
         const dir = tenantDir(url);
         if (!dir) { res.writeHead(401); return res.end(JSON.stringify({ error: 'open with ?t=<token>' })); }
-        if (!fs.existsSync(dir)) {                  // read-only board: viewing must never create a tenant (disk-fill guard)
+        if (!fs.existsSync(dir)) {
           if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], generated: now() }));
+          if (url.pathname === '/api/journal') return res.end(JSON.stringify({ entries: [], hasMore: false, newest: null, oldest: null }));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
-        setHubBase(dir);                           // point this request at its tenant; read below is synchronous
+        setHubBase(dir);
+      }
+      if (url.pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(HTML);
       }
       if (url.pathname === '/api/kanban') {
         return res.end(JSON.stringify(runKanban({})));
       }
       if (url.pathname === '/api/rules') {
         return res.end(JSON.stringify(getRules()));
+      }
+      if (url.pathname === '/api/journal') {
+        return res.end(JSON.stringify(apiJournal(url.searchParams)));
       }
       res.writeHead(404);
       res.end(JSON.stringify({ error: 'not found' }));
@@ -2399,6 +2619,7 @@ setInterval(load,3000);
   const server = http.createServer(handler);
   server.listen(port, HOST, () => {
     console.log(`hubd kanban  http://${HOST}:${port}${MT ? '  (multi-tenant — open with ?t=<token>)' : ''}`);
+    console.log('  Live: kanban board   History: timeline scroll + playback');
     console.log('Ctrl+C to stop');
   });
 }
