@@ -1344,6 +1344,22 @@ export function collapseRepeats(entries) {
 }
 
 export function journalSince(hours) { return journalSinceMs(Date.now() - hours * 3600000); }
+
+/** Monthly journal entry counts for the sparkline chart.
+ *  Returns [{month: "2026-01", label: "Jan", count: 42}, ...] sorted chronologically. */
+export function sparklineData() {
+  const months = new Map();
+  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+    if (!e.ts) continue;
+    const m = e.ts.slice(0, 7); // YYYY-MM
+    months.set(m, (months.get(m) || 0) + 1);
+  }
+  const labels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const out = [...months.entries()]
+    .map(([month, count]) => ({ month, label: labels[parseInt(month.slice(5,7),10)-1] || month, count }))
+    .sort((a, b) => a.month < b.month ? -1 : a.month > b.month ? 1 : 0);
+  return out;
+}
 /* Entries at or after an absolute instant. Callers that hold an instant use this rather than
  * converting to hours and back: the round trip through floating point can land a hair past the
  * instant and drop the entry written in that very minute. */
