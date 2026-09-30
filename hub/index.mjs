@@ -6,14 +6,14 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import {
-  VERSION, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
-  runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
-  runBrief, runClaim, runClaimCheck, runRelease, runKanban, setHubBase, HUB,
-  runResourceSet, runResourceList, runResourceGet, runGraph,
-  ensureProtocol, harvestPrompt, runOnboarding, runWhatsNew, runInbox, runContext,
-  runHeartbeat, runPresence, runTrajectory, requireAuthor, envChecks, capOutput, runAudit, runLint,
-  runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet, ownerWaiting,
+  VERSION, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
+  runTaskList, runTaskUpdate, runTaskGet, runBrief, runClaim, runClaimCheck, runRelease, runKanban,
+  setHubBase, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
+  runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
+  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
+import { runUsageAdd, runUsage } from './lib/usage.mjs';
+import { runRecall } from './lib/recall.mjs';
 import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepthWithAcks, everConsumedHere, queueAck } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
 
