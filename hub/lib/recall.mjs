@@ -1,7 +1,7 @@
 /* recall.mjs — "what do we know about X": ranked, dated hits across cards, tasks and the journal. */
 
 import {
-  digestOf, isPlaceholder, journalTail, loadTasks, now, parseTs, projectCards, projectFilter,
+  cardStamp, digestOf, escRe, isPlaceholder, journalTail, loadTasks, now, parseTs, projectCards, projectFilter,
   sectionBody, sectionsConfig, slugify,
 } from './core.mjs';
 
@@ -40,7 +40,7 @@ const RECALL_STOP = new Set([
 /* A term matches at the start of a word — "imm" matches "IMM", "IMM's" and "immediately", never
  * "committing". Prefix rather than whole-word because the hub is written in two inflecting
  * languages; infix never, because that is how "not" inside "note" counted as a hit. */
-const termRe = (t) => new RegExp('(^|[^\\p{L}\\p{N}_])' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+const termRe = (t) => new RegExp('(^|[^\\p{L}\\p{N}_])' + escRe(t), 'iu');
 
 export function runRecall(a = {}) {
   const raw = String(a.query || '').trim();
@@ -84,7 +84,7 @@ export function runRecall(a = {}) {
   };
 
   for (const c of projectCards({ includeReserved: true })) {
-    const touched = (c.text.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/) || [])[1] || null;
+    const touched = cardStamp(c.text).at;
     const dg = digestOf(c.text);
     if (dg) push('digest', `${c.slug} card / Digest`, c.slug, dg, touched);
     for (const s of sectionsConfig()) {
