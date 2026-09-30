@@ -25,7 +25,11 @@ import {
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
   runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor, sparklineData,
 } from './lib/core.mjs';
+import { runBoard } from './lib/board.mjs';
+import { runHubGc } from './lib/gc.mjs';
+import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
+import { roleWork, assertRole } from './lib/queue.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces, archiveStaleSubscribers } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -115,6 +119,7 @@ declareFlags(
   '--agent', '--cwd', '--note', '--seconds', '--tokens-in', '--tokens-out', '--ttl',
   '--model', '--task', '--timeout', '-w', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
+  '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
 );
 
 function getFlag(name) {
@@ -1268,8 +1273,20 @@ if (cmd === 'claim' && args[1] === 'check') {
   done(0);
 }
 
+if (cmd === 'claim' && args.includes('--task')) {
+  // Starting a task from a role's work queue: the claim is on task:<id>, the project is the task's.
+  const task = getFlag('--task');
+  if (typeof task !== 'string') die('Usage: hub claim --task <id> [-t min] [--note "<why>"] --agent <you>');
+  const ttl = parseInt(getFlag('-t') || '240');
+  const note = getFlag('--note');
+  let res; try { res = runClaim({ task, agent: authorOrDie('--agent'), ttlMin: ttl, note: typeof note === 'string' ? note : undefined }); } catch (e) { die(e.message); }
+  if (res.warning) console.warn('⚠  ' + res.warning);
+  console.log(`Started #${task}: ${res.claim.id} (until ${new Date(parseTs(res.claim.since).getTime() + ttl * 60000).toISOString().slice(0, 16).replace('T', ' ')})`);
+  done(0);
+}
+
 if (cmd === 'claim') {
-  const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>   |   hub claim check <path> [-p <proj>]';
+  const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>   |   hub claim --task <id> --agent <you>   |   hub claim check <path> [-p <proj>]';
   let pos;
   try { pos = positionals(1, { values: ['-t', '--agent', '--note'] }); } catch (e) { die(e.message + '\n' + CU); }
   const [proj, area] = pos;
@@ -1286,24 +1303,28 @@ if (cmd === 'claim') {
 
 if (cmd === 'release') {
   const id = args[1] && !args[1].startsWith('-') ? args[1] : null;
-  if (!id) die('Usage: hub release <id>');
-  const res = runRelease({ id });
+  const task = getFlag('--task');
+  if (!id && typeof task !== 'string') die('Usage: hub release <id>   |   hub release --task <id> --agent <you>');
+  let res; try { res = id ? runRelease({ id }) : runRelease({ task, agent: authorOrDie('--agent') }); } catch (e) { die(e.message); }
   console.log(`Locks released: ${res.removed}`);
   done(0);
 }
 
 if (cmd === 'heartbeat') {
   const agent = args[1] && !args[1].startsWith('-') ? args[1] : null;
-  if (!agent) die('Usage: hub heartbeat <agent> [--role <role>] [--status <text>] [--task <id>] [--cwd <path>] [--ttl <min>]');
+  if (!agent) die('Usage: hub heartbeat <agent> [--role <role>] [--status <text>] [--task <id>] [--cwd <path>] [--ttl <min>]\n' +
+    '         [--state turn|waiting|exit] [--turn <n>] [--turn-started <ts|now>] [--empty <n>] [--silent <n>] [--exit-reason <text>]');
   const task = getFlag('--task');
   const ttl = getFlag('--ttl');
-  const res = runHeartbeat({
-    agent, role: (typeof getFlag('--role') === 'string') ? getFlag('--role') : undefined,
-    status: (typeof getFlag('--status') === 'string') ? getFlag('--status') : undefined,
+  const str = (f) => (typeof getFlag(f) === 'string' ? getFlag(f) : undefined);
+  let res; try { res = runHeartbeat({
+    agent, role: str('--role'), status: str('--status'),
     task_id: (typeof task === 'string') ? task : undefined,
-    cwd: (typeof getFlag('--cwd') === 'string') ? getFlag('--cwd') : undefined,
+    cwd: str('--cwd'),
     ttlMin: (typeof ttl === 'string') ? parseInt(ttl, 10) : undefined,
-  });
+    state: str('--state'), turn: str('--turn'), turn_started: str('--turn-started'),
+    empty_count: str('--empty'), silent_count: str('--silent'), exit_reason: str('--exit-reason'),
+  }); } catch (e) { die(e.message); }
   console.log(`Heartbeat: ${res.agent} -> ${res.presence}`);
   done(0);
 }
@@ -1329,7 +1350,10 @@ if (cmd === 'presence') {
     const mark = p.alive ? '●' : '○';
     const where = p.observedOn ? (p.live ? '' : '←' + p.observedOn) : '';
     const also = p.alsoOn && p.alsoOn.length ? ' +' + [...new Set(p.alsoOn)].join(',') : '';
-    console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(p.status || '·', 11)}${p.last_seen}  ${where}${also}`);
+    // a structured state reads as "<state> <minutes in it>"; the free-text status is the fallback
+    const since = p.state_since ? Math.max(0, Math.round((Date.now() - parseTs(p.state_since).getTime()) / 60000)) : null;
+    const st = p.state ? p.state + (since != null ? ' ' + since + 'm' : '') : (p.status || '·');
+    console.log(`  ${mark} ${pad(p.agent, 18)}${pad(p.role || '·', 11)}${pad(st, 11)}${p.last_seen}  ${where}${also}`);
     if (p.elsewhere) console.log(`      ⚠ writes into ${p.elsewhere}, not this hub — same machine, two hubs`);
   }
   console.log(`(${data.agents.length} agents, generated ${data.generated})`);
@@ -1534,19 +1558,27 @@ if (cmd === 'resource' || cmd === 'res') {
   const sub = args[1];
   if (sub === 'set') {
     const slug = args[2] && !args[2].startsWith('-') ? args[2] : null;
-    if (!slug) die('Usage: hub resource set <slug> [-m "<note>"] [--type host] [--addr <ip/url>] [--os <o>] [--provider <p>] [--status live] [--link <rel>:<slug> ...]');
+    if (!slug) die('Usage: hub resource set <slug> [-m "<note>"] [--type host] [--addr <ip/url>] [--os <o>] [--provider <p>] [--status live] [--link <rel>:<slug> ...] [--attr <key>=<value> ...]');
     const edges = {};                                    // --link rel:slug  (rel = runs_on|depends_on|deploys_to|part_of|exposes|connects|...)
     for (const l of getFlags('--link')) {
       const mm = String(l).match(/^([A-Za-z0-9_-]+)[:=](.+)$/);
       if (mm) (edges[mm[1]] = edges[mm[1]] || []).push(mm[2]);
       else die('--link expects <rel>:<slug>, got: ' + l);
     }
-    const res = runResourceSet({
+    // --attr key=value, repeatable; not comma-split like --link, a value may hold a comma
+    const attrs = {};
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] !== '--attr') continue;
+      const mm = String(args[i + 1] ?? '').match(/^([^=]+)=(.*)$/);
+      if (!mm) die('--attr expects <key>=<value> (empty value removes the key), got: ' + (args[i + 1] ?? ''));
+      attrs[mm[1]] = mm[2];
+    }
+    let res; try { res = runResourceSet({
       slug, type: getFlag('--type'), address: getFlag('--addr') || getFlag('--address'),
       os: getFlag('--os'), provider: getFlag('--provider'), status: getFlag('--status'),
       digest: (typeof (getFlag('-m') || getFlag('--digest')) === 'string') ? (getFlag('-m') || getFlag('--digest')) : null,
-      edges, by: authorOrDie('--by'),
-    });
+      edges, attrs, by: authorOrDie('--by'),
+    }); } catch (e) { die(e.message); }
     console.log(`Resource set: ${res.resource} → ${res.card}`);
   } else if (sub === 'list') {
     const data = runResourceList({ type: (typeof getFlag('--type') === 'string') ? getFlag('--type') : undefined });
@@ -1705,6 +1737,86 @@ if (cmd === 'agenda') {
   P('AGENT WORK, READY NOW', r.agentReady, line);
   P('BLOCKED', r.blocked, x => line(x) + '  \u2190 waits on #' + x.waitingOn.join(' #'));
   if (!r.counts.eligible && !r.counts.blocked) console.log('\nnothing open');
+  done(0);
+}
+
+/* `hub sense <head> [events|check|verdict|brief|status]` — a head's sensor (lib/sense.mjs).
+ * The events contract is the one a loop already relies on: exit 0 and text = wake the head with
+ * this text, 1 = no events, anything above 1 = the sensor failed. So this command never goes
+ * through done(): an unknown flag there exits 1, which would read as "nothing happened". */
+if (cmd === 'sense') {
+  const head = args[1] && !args[1].startsWith('-') ? args[1] : null;
+  const sub = args[2] && !args[2].startsWith('-') ? args[2] : 'events';
+  const fail = (m) => { console.error('Error: ' + m); process.exit(3); };
+  if (!head) fail('Usage: hub sense <head> [events | check <branch> | verdict <branch> accept|reject <text> | brief | status] [--json]');
+  const bad = args.slice(1).filter(x => /^--?[A-Za-z]/.test(x) && x !== '--json');
+  if (bad.length) fail('unknown flag ' + bad[0] + ' (hub sense takes only --json)');
+  try {
+    if (sub === 'events') {
+      const r = runSenseEvents(head);
+      if (args.includes('--json')) console.log(JSON.stringify(r)); else if (r.text) console.log(r.text);
+      process.exit(r.code);
+    }
+    if (sub === 'check') {
+      const br = args[3]; if (!br) fail('Usage: hub sense <head> check <branch>');
+      const conf = senseConf(head); if (!conf) fail(`no head "${head}" in the role registry`);
+      const [okv, txt] = checkBranch(conf, br);
+      console.log(txt); process.exit(okv === false ? 1 : 0);
+    }
+    if (sub === 'verdict') {
+      const [br, v, ...rest] = args.slice(3);
+      if (!br || !v || !rest.length) fail('Usage: hub sense <head> verdict <branch> accept|reject "<text>"');
+      const r = runSenseVerdict(head, br, v, rest.join(' '));
+      console.log(r.text); process.exit(r.code);
+    }
+    if (sub === 'brief') { console.log(runSenseBrief(head)); process.exit(0); }
+    if (sub === 'status') { console.log(JSON.stringify({ conf: senseConf(head), config: senseConfig(), state: loadSenseState(head) }, null, 1)); process.exit(0); }
+    fail('hub sense: events | check | verdict | brief | status');
+  } catch (e) { fail(e.message); }
+}
+
+/* `hub board` — the tracks, and what waits for the owner, as text. Same data as the Tracks view of
+ * `hub serve`; lists are cut at --limit rows each (default 8) and say how many they left out. */
+if (cmd === 'board') {
+  const proj = args[1] && !args[1].startsWith('-') ? args[1] : getFlag('-p');
+  const daysF = getFlag('--days');
+  const lim = parseInt(String(getFlag('--limit') || '8'), 10) || 8;
+  const r = runBoard({ project: typeof proj === 'string' ? proj : undefined, days: typeof daysF === 'string' ? daysF : undefined, all: args.includes('--all') });
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  const hm = (ts) => String(ts || '').replace('T', ' ').slice(5, 16);
+  const cut = (s, n) => { s = String(s || '').replace(/\s+/g, ' '); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  const list = (title, rows, fmt) => {
+    if (!rows.length) return;
+    console.log(`  ${title} (${rows.length})`);
+    for (const x of rows.slice(0, lim)) console.log('    ' + fmt(x));
+    if (rows.length > lim) console.log(`    … ${rows.length - lim} more (--limit)`);
+  };
+  const stateOf = (s) => s.kind === 'turn' ? `turn ${s.minutes ?? '?'}m${s.turn != null ? ' #' + s.turn : ''}`
+    : s.kind === 'waiting' ? `waiting ${s.minutes ?? '?'}m` : s.kind === 'silent' ? `SILENT ${s.minutes}m`
+    : s.kind === 'exit' ? `exit${s.reason ? ': ' + s.reason : ''}` : s.kind;
+  const who = (t) => t.assignee ? ` @${t.assignee}${t.assigneeKnown ? (t.assigneeOff ? ' (off)' : '') : ' (not a role)'}` : '';
+  if (!r.registry.roles) console.log('(no roles declared — tracks are projects with open work; declare roles: hub resource set <role> --type role --attr rank=head|worker ...)');
+  for (const t of r.tracks) {
+    console.log(`\n── ${t.project}${t.heads.length ? ' · head ' + t.heads.join(', ') : ''} · done ${r.days}d ${t.counts.done} · next ${t.counts.next} · blocked ${t.counts.blocked}`);
+    for (const w of t.rows) {
+      const step = w.lastStep ? `${hm(w.lastStep.ts)} ${cut(w.lastStep.text, 70)}` : '·';
+      console.log(`    ${w.state.kind === 'silent' || w.state.kind === 'unseen' ? '○' : w.state.kind === 'off' ? '-' : '●'} ${pad(w.role, 18)}${pad(w.rank, 7)}${pad(stateOf(w.state), 16)}${pad(w.task ? '#' + w.task : '', 14)}${step}`);
+    }
+    list('DONE', t.done, x => `${hm(x.done)}  #${x.id}  ${cut(x.title, 60)}${x.acceptance ? '  ← ' + (x.acceptance.agent || '') + ': ' + cut(x.acceptance.text, 60) : ''}`);
+    list('NEXT', t.next, x => `#${x.id}  ${cut(x.title, 70)}${who(x)}${x.deadline ? ' ⏰' + x.deadline : ''}`);
+    list('BLOCKED', t.blocked, x => `#${x.id}  ${cut(x.title, 60)}  ← waits on ${x.waitingOn.map(d => '#' + d.id).join(' ') || '?'}`);
+    list('DECISIONS', t.decisions, x => `${hm(x.ts)}  ${x.verdict.toUpperCase()} ${x.sha.slice(0, 10)}${x.branch ? ' ' + x.branch : ''}${x.agent ? '  (' + x.agent + ')' : ''}`);
+    for (const sn of t.sense || []) console.log(`  SENSOR ${sn.head} (${sn.node}): ${sn.pending.length ? sn.pending.join(' ') : 'nothing standing'}${sn.last ? ' · last woke ' + hm(sn.last.ts) : ''}`);
+  }
+  const w = r.waiting;
+  console.log(`\n── WAITING FOR YOU`);
+  list('owner queue', w.queue, x => `${x.role}  ${x.ageDays ?? '?'}d  from ${x.from}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
+  list('your tasks', w.tasks, x => `#${x.id} [${x.project}]${x.deadline ? ' ⏰' + x.deadline : ''}${x.ready ? '' : ' (blocked)'}  ${cut(x.title, 70)}`);
+  list('owner-go', w.ownerGo, x => `#${x.id} [${x.project}]  ${cut(x.title, 70)}${who(x)}`);
+  list(`escalations to ${r.registry.fleet.join(', ') || 'the fleet'} (${r.days}d)`, [...w.escalations].reverse(), x => `${hm(x.ts)}  ${x.from}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
+  list('answers', [...w.answers].reverse(), x => `${hm(x.ts)}  → ${x.role}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
+  if (!w.queue.length && !w.tasks.length && !w.ownerGo.length && !w.escalations.length) console.log('  nothing');
+  if (r.unknownAssignees.length) console.log(`\n  ⚠ open work on names that are not roles: ${r.unknownAssignees.join(', ')}  (hub lint)`);
   done(0);
 }
 
@@ -1892,6 +2004,30 @@ if (cmd === 'gc') {
     }
   } catch {}
   console.log(removed ? `gc: removed ${removed} item(s)` : 'gc: nothing to clean');
+  /* The classes that are judged by name (lib/gc.mjs): listed first, moved only with --apply --by.
+   * Nothing is ever unlinked from the mesh — a queue goes to queues/archive/ with its bytes intact,
+   * which is the one deletion mesh-sync accepts. */
+  const daysF = getFlag('--days');
+  let g;
+  try { g = runHubGc({ days: typeof daysF === 'string' ? parseInt(daysF, 10) : 14, apply: args.includes('--apply'), by: args.includes('--apply') ? authorOrDie('--by') : undefined }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(g)); done(0); }
+  for (const n of g.notes) console.log('  note: ' + n);
+  const show = (title, rows, fmt) => { if (!rows.length) return; console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); };
+  show(`queues of no live role, untouched ${g.days}d+`, g.queues, q => `${pad(q.file, 44)} ${pad(q.reason, 20)} ${q.idleDays}d  ${q.bytes}B`);
+  show('dead waiter markers', g.waiters, w => `${w.file}  (pid ${w.pid ?? '?'})`);
+  show(`presence of names that are not roles, ${g.days}d+ old`, g.presence, p => `${pad(p.agent, 30)} last ${p.lastSeen}`);
+  show('environment notices whose cause is gone', g.env, e => `${e.kind}: ${e.value}`);
+  show('open tasks on names that are not live roles — decide per project, gc never touches them', g.tasks,
+    t => `${pad(t.assignee, 24)} ${pad(t.reason, 20)} ${t.count} task(s) in ${t.projects.join(', ')}`);
+  if (!g.apply) {
+    if (g.queues.length || g.waiters.length || g.presence.length || g.env.length) console.log(`\ndry run — archive with: hub gc --apply --by <you>${g.days !== 14 ? ' --days ' + g.days : ''}`);
+  } else {
+    console.log(`\narchived ${g.moved.length} queue file(s) to queues/archive/, removed ${g.waitersRemoved} waiter marker(s), archived ${g.presenceMoved} presence record(s), cleared ${g.envCleared} notice(s)`);
+    if (g.commit) console.log(`  one commit: ${g.commit} — mesh-sync carries it to every peer`);
+    else if (g.moved.length) console.log(`  not committed${g.commitError ? ' (' + g.commitError + ')' : ''} — mesh-sync accepts the move on its next run, the bytes are in the archive`);
+    for (const f of g.failed) console.log(`  FAILED ${f.file}: ${f.error}`);
+  }
   done(0);
 }
 
@@ -1959,7 +2095,22 @@ else if (cmd === '_commit-hook') {
   done(0);
 }
 
-else if (cmd === 'queue') {
+/* A role's work queue as text: the tasks it should take, in order, each with what was said about
+ * it. Offered = ready and not started by anyone; in progress = claimed, until the claim lapses. */
+function printWork(role, r) {
+  for (const k of r.skipped || []) console.log(`\n# held back: ${k.header.replace(/^## /, '')} — task ${k.tasks.map((t, i) => '#' + t + ' is ' + k.status[i]).join(', ')}`);
+  const work = r.work || [];
+  if (!work.length) { console.log(`\n# no ready tasks assigned to ${role}`); return; }
+  for (const w of work) {
+    console.log(`\n## task #${w.id} [${w.project}]${w.importance && w.importance !== 'normal' ? ' · ' + w.importance : ''}${w.deadline ? ' · due ' + w.deadline : ''} · ` +
+      (w.claim ? `in progress: ${w.claim.agent} until ${w.claim.until}` : 'OFFERED — start with: hub claim --task ' + w.id + ' --agent ' + role + ' -t <min>'));
+    console.log(w.text);
+    for (const m of w.messages || []) console.log(`  > ${m.ts} from ${m.from}: ${String(m.text).replace(/\s+/g, ' ').slice(0, 300)}`);
+  }
+  console.log(`\n# close a task only by its outcome (hub report DONE: <id>); cancelling it is closing it`);
+}
+
+if (cmd === 'queue') {
   const sub = args[1];
   if (sub === 'send') {
     const USAGE = 'Usage: hub queue send <role> "<text>" --from <who> [--task <id>]\n' +
@@ -1998,7 +2149,7 @@ else if (cmd === 'queue') {
     // otherwise waits on a queue literally named "--timeout" -- which exists as
     // soon as it is asked for, so it blocks forever and looks like a quiet queue
     // rather than a mistake.
-    if (!role || role.startsWith('-')) die('Usage: hub queue wait <role|*> [--timeout <N>] [--as <subscriber>] [--from-now]');
+    if (!role || role.startsWith('-')) die('Usage: hub queue wait <role|*> [--timeout <N>] [--as <subscriber>] [--from-now] [--tasks]');
     const timeoutRaw = getFlag('--timeout');
     const timeout = timeoutRaw ? parseInt(String(timeoutRaw), 10) : 540;
     const subscriber = getFlag('--as') || undefined;
@@ -2025,10 +2176,11 @@ else if (cmd === 'queue') {
       // from the command line -- so the environment notice that says "declare the
       // role and every waiter gets its own cursor" could not actually be acted on
       // by anyone using the CLI, which is every supervisor and every monitor.
-      queueWait(role, { timeout, subscriber, fromNow }).then(result => {
+      queueWait(role, { timeout, subscriber, fromNow, work: args.includes('--tasks') }).then(result => {
         if (result.changed) {
-          console.log(result.text);
+          if (result.text) console.log(result.text);
           if (result.tasks) console.log(`\n# about task(s): ${result.tasks.map(t => '#' + t).join(' ')} — report against them (DONE:/NOTE:) so the task carries the outcome`);
+          if (result.work) printWork(role, result);
           done(0);
         } else {
           console.log('NO_CHANGES');
@@ -2068,6 +2220,15 @@ else if (cmd === 'queue') {
       loop();
     }).catch(e => die(e.message));
     loop();
+  } else if (sub === 'work') {
+    // The work view without waiting on anything: what a supervisor reads to tell "idle with work
+    // offered" from "nothing to do" in one call.
+    const role = args[2];
+    if (!role || role.startsWith('-')) die('Usage: hub queue work <role> [--json]');
+    let work; try { assertRole(role); work = roleWork(role); } catch (e) { die(e.message); }
+    if (args.includes('--json')) { console.log(JSON.stringify({ role, work, offered: work.filter(w => !w.claim).map(w => w.id) })); done(0); }
+    printWork(role, { work });
+    done(0);
   } else if (sub === 'status') {
     const role = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
     const { roles } = queueLedger({ root: resolveQueueRoot(), role });
@@ -2202,7 +2363,9 @@ else if (!cmd) {
     '  queue wait <role> [--timeout <N>] [--as <subscriber>]',
     '  queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]',
     '                                   block until real content, then exit 0',
-    '  serve [-p 7777]                  read-only kanban dashboard',
+    '  board [<project>] [--days 7] [--limit 8] [--all] [--json]  every track: roles, done, next, blocked, and what waits for you',
+    '  sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]  a head\'s sensor: exit 0 = wake with this text, 1 = nothing',
+    '  serve [-p 7777]                  read-only dashboard: tracks, kanban, history',
   ].join('\n'));
   done(0);
 }
@@ -2289,6 +2452,42 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 #modal-close{background:none;border:none;color:#6B6B66;font-size:18px;cursor:pointer;font-family:inherit;padding:0 2px;line-height:1}
 #modal-body{padding:16px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.6;color:#16181A}
 .hide{display:none!important}
+/* tracks */
+#waiting{border-bottom:1px solid #E3E3DE}
+#waiting>summary{padding:10px 20px;cursor:pointer;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#E8590C}
+.w-grid{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #E3E3DE}
+.w-col{border-right:1px solid #E3E3DE;min-width:0;padding-bottom:6px}
+.w-col:last-child{border-right:none}
+.sub-head{padding:8px 14px 4px;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#6B6B66}
+.item{padding:5px 14px;font-size:12px;border-top:1px dashed #ECECE8;overflow-wrap:anywhere}
+details.item>summary{cursor:pointer;list-style:none}
+details.item>summary::-webkit-details-marker{display:none}
+details.item>summary{position:relative;padding-right:14px}
+details.item>summary:after{content:'+';color:#B0B0A8;position:absolute;right:0;top:0}
+details.item[open]>summary:after{content:'\u2212'}
+.clamp-t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.full{white-space:pre-wrap;color:#3A3C3E;font-size:11px;margin-top:4px;padding:6px 8px;background:#F2F2EE;border-radius:2px;max-height:320px;overflow:auto}
+.meta{font-size:11px;color:#6B6B66}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+details.item>summary .meta{font-weight:400}
+.warn{color:#E8590C}
+#track-filter{display:flex;flex-wrap:wrap;gap:6px;padding:10px 20px;border-bottom:1px solid #E3E3DE}
+.chip{background:none;border:1px solid #D0D0C8;color:#6B6B66;font-family:inherit;font-size:11px;padding:3px 10px;cursor:pointer;border-radius:12px}
+.chip.active{background:#16181A;color:#FAFAF8;border-color:#16181A}
+.track{border-bottom:2px solid #D0D0C8}
+.track-head{padding:12px 20px 8px;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+.track-name{font-size:14px;font-weight:700}
+.roles{width:100%;border-collapse:collapse;font-size:11px}
+.roles td{padding:5px 8px;border-top:1px solid #ECECE8;vertical-align:top}
+.roles td:first-child{padding-left:20px;white-space:nowrap;font-weight:600;width:1%}
+.roles td.st{white-space:nowrap;width:1%}
+.roles td.tk{white-space:nowrap;width:1%}
+.st-turn{color:#2B7A0B}.st-waiting,.st-alive{color:#6B6B66}.st-silent,.st-unseen{color:#C92A2A}.st-off{color:#B0B0A8}.st-exit{color:#E8590C}
+.t-grid{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #E3E3DE}
+.t-col{border-right:1px solid #E3E3DE;min-width:0;padding-bottom:6px}
+.t-col:last-child{border-right:none}
+.more{padding:6px 14px;font-size:11px;color:#6B6B66;cursor:pointer;text-decoration:underline}
+@media(max-width:900px){.t-grid,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
 @media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
 </style>
 </head>
@@ -2301,8 +2500,14 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   </div>
 </header>
 <div id="mode-bar">
+  <button class="btn-mode" data-mode="tracks">Tracks</button>
   <button class="btn-mode active" data-mode="live">Live</button>
   <button class="btn-mode" data-mode="history">History</button>
+</div>
+<div id="tracks-view" class="hide">
+  <details id="waiting" open><summary id="waiting-sum">Waiting for you</summary><div class="w-grid" id="waiting-body"></div></details>
+  <div id="track-filter"></div>
+  <div id="tracks"></div>
 </div>
 <div id="live-view">
   <div class="board">
@@ -2334,7 +2539,8 @@ var todayP3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
 function taskEl(t){
   var blocked=t.blocked;
   var dlUrgent=t.deadline&&t.deadline<=todayP3;
-  var h='<div class="task'+(blocked?' task-blocked':'')+'"><div class="task-text">'+(blocked?'&#9939; ':'')+esc(t.text)+'</div>';
+  var body=t.title&&t.title!==String(t.text||'').trim()?'<details><summary>'+esc(t.title)+'</summary><div class="full">'+esc(t.text)+'</div></details>':esc(t.text);
+  var h='<div class="task'+(blocked?' task-blocked':'')+'"><div class="task-text">'+(blocked?'&#9939; ':'')+body+'</div>';
   var meta=[];
   if(t.assignee)meta.push('@'+esc(t.assignee));
   if(t.deadline)meta.push((dlUrgent?'<span style="color:#E8590C">':'')+esc(t.deadline)+(dlUrgent?'</span>':''));
@@ -2451,34 +2657,127 @@ document.getElementById('pb-slider').oninput=function(){
   showEvent();
 };
 
-var liveTimer=null;
-document.querySelectorAll('.btn-mode').forEach(function(b){
-  b.onclick=function(){
-    document.querySelectorAll('.btn-mode').forEach(function(x){x.classList.remove('active')});
-    this.classList.add('active');
-    spMode=this.dataset.mode;
-    stopPlayback();
-    if(spMode==='live'){
-      document.getElementById('live-view').classList.remove('hide');
-      document.getElementById('hist-wrap').classList.remove('show');
-      document.getElementById('mode-bar').style.borderBottom='1px solid #E3E3DE';
-      loadLive();
-      liveTimer=setInterval(loadLive,3000);
-    }else{
-      document.getElementById('live-view').classList.add('hide');
-      document.getElementById('hist-wrap').classList.add('show');
-      document.getElementById('mode-bar').style.borderBottom='none';
-      if(liveTimer){clearInterval(liveTimer);liveTimer=null}
-      if(!spMonths.length){
-        fetch('/api/sparkline'+location.search).then(function(r){return r.json()}).then(function(d){
-          spMonths=d.months||[];
-          renderSparkline();
-          if(spMonths.length){spActive=spMonths.length-1;renderSparkline();loadAllSince(spMonths[spMonths.length-1].month+'-01')}
-        });
-      }
-    }
-  };
+/* ── Tracks ── */
+var bdData=null, bdTrack=(location.hash.match(/track=([^&]+)/)||[])[1]||'', bdTimer=null, bdMore={};
+try{bdTrack=decodeURIComponent(bdTrack)}catch(e){}
+function hm(ts){return String(ts||'').replace('T',' ').slice(5,16)}
+var NL=String.fromCharCode(10);   // a literal newline escape would be eaten by the template this page is built from
+function item(title,full,meta,cls){
+  var m=meta?'<div class="meta clamp2">'+meta+'</div>':'';
+  if(full)return '<details class="item"><summary><div class="clamp2">'+esc(title)+'</div>'+m+'</summary><div class="full">'+esc(full)+'</div></details>';
+  return '<div class="item"><div class="'+(cls||'')+'">'+esc(title)+'</div>'+m+'</div>';
+}
+function who(t){
+  if(!t.assignee)return '';
+  var w='@'+esc(t.assignee);
+  if(!t.assigneeKnown)return '<span class="warn" title="not a declared role">'+w+' (not a role)</span>';
+  if(t.assigneeOff)return '<span class="warn" title="this role is switched off">'+w+' (off)</span>';
+  return w;
+}
+function listBlock(key,title,rows,fmt,limit){
+  limit=limit||8;
+  var open=bdMore[key], shown=open?rows:rows.slice(0,limit);
+  var h='<div class="sub-head">'+esc(title)+' ('+rows.length+')</div>';
+  if(!rows.length)return h+'<div class="empty">none</div>';
+  h+=shown.map(fmt).join('');
+  if(rows.length>limit)h+='<div class="more" data-more="'+esc(key)+'">'+(open?'show less':'+'+(rows.length-limit)+' more')+'</div>';
+  return h;
+}
+function stateText(s){
+  if(s.kind==='turn')return 'turn '+(s.minutes==null?'?':s.minutes)+'m'+(s.turn!=null?' #'+s.turn:'');
+  if(s.kind==='waiting')return 'waiting '+(s.minutes==null?'?':s.minutes)+'m';
+  if(s.kind==='silent')return 'silent '+s.minutes+'m';
+  if(s.kind==='exit')return 'exit'+(s.reason?': '+esc(s.reason):'');
+  if(s.kind==='unseen')return 'no heartbeat';
+  return esc(s.kind);
+}
+function meta(parts){return parts.filter(Boolean).join(' &middot; ')}
+function roleTr(r){
+  return '<tr><td>'+esc(r.role)+'<div class="meta">'+meta([esc(r.rank),r.node?esc(r.node):''])+'</div></td>'+
+    '<td class="st st-'+esc(r.state.kind)+'">'+stateText(r.state)+(r.statusText&&r.state.kind!=='off'?'<div class="meta" title="'+esc(r.statusText)+'">'+esc(String(r.statusText).slice(0,40))+'</div>':'')+'</td>'+
+    '<td class="tk">'+(r.task?'#'+esc(r.task):'')+(r.tasks.length?'<div class="meta">'+r.tasks.length+' open'+(r.offered?' &middot; <span class="warn" title="ready and not started">'+r.offered+' offered</span>':'')+'</div>':'')+'</td>'+
+    '<td><div class="clamp2">'+(r.lastStep?'<span class="meta">'+hm(r.lastStep.ts)+'</span> '+esc(r.lastStep.text):'<span class="meta">no journal entry</span>')+'</div>'+
+    (r.handoff?'<details><summary class="meta" style="cursor:pointer">handoff</summary><div class="full">'+esc(r.handoff)+'</div></details>':'')+'</td></tr>';
+}
+function trackEl(t,d){
+  var k=t.project+':';
+  return '<section class="track"><div class="track-head"><span class="track-name">'+esc(t.project)+'</span><span class="meta">'+
+    meta([t.heads.length?'head '+esc(t.heads.join(', ')):'','done '+d.days+'d: '+t.counts.done,'next: '+t.counts.next,'blocked: '+t.counts.blocked])+'</span></div>'+
+    (t.rows.length?'<table class="roles">'+t.rows.map(roleTr).join('')+'</table>':'')+
+    (t.sense&&t.sense.length?t.sense.map(function(s){
+      var ev=(s.last&&s.last.events)||[];
+      return '<details class="item" style="padding-left:20px"><summary><span class="meta">sensor '+esc(s.head)+' ('+esc(s.node||'')+'): '+
+        (s.pending.length?'<span class="warn">'+s.pending.length+' standing</span> '+esc(s.pending.join(' ')):'nothing standing')+
+        (s.last?' &middot; last woke '+hm(s.last.ts):'')+'</span></summary><div class="full">'+
+        esc(ev.map(function(e){return (e.crit?'[CRITICAL] ':'')+e.text}).join(NL+NL)||'no events yet')+
+        ((s.escalations||[]).length?NL+NL+'escalated:'+NL+esc(s.escalations.map(function(x){return x.ts+' '+x.text}).join(NL)):'')+'</div></details>';
+    }).join(''):'')+
+    '<div class="t-grid"><div class="t-col">'+
+      listBlock(k+'done','Done, '+d.days+' days',t.done,function(x){return item('#'+x.id+' '+x.title,null,meta([hm(x.done),x.acceptance?esc(x.acceptance.agent||'')+': '+esc(x.acceptance.text):'no acceptance line']))})+
+    '</div><div class="t-col">'+
+      listBlock(k+'next','Next',t.next,function(x){return item('#'+x.id+' '+x.title,x.text,meta([who(x),x.importance&&x.importance!=='normal'?esc(x.importance):'',x.deadline?(x.overdue?'<span class="warn">'+esc(x.deadline)+'</span>':esc(x.deadline)):'',x.owner?'<span class="warn">yours</span>':'']))})+
+    '</div><div class="t-col">'+
+      listBlock(k+'blocked','Blocked',t.blocked,function(x){return item('#'+x.id+' '+x.title,x.text,'waits on '+x.waitingOn.map(function(w){return '#'+esc(w.id)+' '+esc(w.title)}).join('; '))})+
+      listBlock(k+'dec','Branch decisions',t.decisions,function(x){return '<div class="item"><span class="'+(x.verdict==='accept'?'st-turn':'warn')+'">'+x.verdict.toUpperCase()+'</span> '+esc(x.sha.slice(0,10))+' '+esc(x.branch||'')+'<div class="meta">'+meta([hm(x.ts),esc(x.agent||'')])+'</div></div>'},5)+
+    '</div></div></section>';
+}
+function renderTracks(){
+  var d=bdData; if(!d)return;
+  var w=d.waiting;
+  document.getElementById('waiting-sum').textContent='Waiting for you: '+w.queue.length+' in your queue, '+w.tasks.length+' tasks, '+w.ownerGo.length+' owner-go, '+w.escalations.length+' escalations in '+d.days+'d';
+  document.getElementById('waiting-body').innerHTML=
+    '<div class="w-col">'+listBlock('w:q','Your queue',w.queue,function(x){return item(x.subject,null,meta([esc(x.role),(x.ageDays==null?'?':x.ageDays)+'d','from '+esc(x.from),x.task?'#'+esc(x.task):'']),'clamp-t')},5)+'</div>'+
+    '<div class="w-col">'+listBlock('w:t','Your tasks',w.tasks,function(x){return item('#'+x.id+' '+x.title,x.text,meta([esc(x.project),x.deadline?esc(x.deadline):'',x.ready?'':'blocked']))},5)+
+      listBlock('w:g','owner-go',w.ownerGo,function(x){return item('#'+x.id+' '+x.title,x.text,meta([esc(x.project),who(x)]))},5)+'</div>'+
+    '<div class="w-col">'+listBlock('w:e','Escalations',w.escalations.slice().reverse(),function(x){return item(x.subject,x.text,meta([hm(x.ts),esc(x.from)+' &rarr; '+esc(x.role),x.task?'#'+esc(x.task):'']))},5)+
+      listBlock('w:a','Answers',w.answers.slice().reverse(),function(x){return item(x.subject,x.text,meta([hm(x.ts),'&rarr; '+esc(x.role),x.task?'#'+esc(x.task):'']))},5)+'</div>';
+  var names=d.tracks.map(function(t){return t.project});
+  if(bdTrack&&names.indexOf(bdTrack)<0)bdTrack='';
+  document.getElementById('track-filter').innerHTML=(names.length>1?'<button class="chip'+(bdTrack?'':' active')+'" data-track="">all tracks</button>'+
+    names.map(function(n){return '<button class="chip'+(bdTrack===n?' active':'')+'" data-track="'+esc(n)+'">'+esc(n)+'</button>'}).join(''):'')+
+    (d.unknownAssignees.length?'<span class="meta warn" style="margin-left:auto" title="hub lint: assignee-outside-roster">open work on names that are not roles: '+esc(d.unknownAssignees.join(', '))+'</span>':'');
+  var shown=d.tracks.filter(function(t){return !bdTrack||t.project===bdTrack});
+  document.getElementById('tracks').innerHTML=shown.length?shown.map(function(t){return trackEl(t,d)}).join(''):
+    '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>';
+}
+function loadTracks(){
+  return fetch('/api/board'+location.search).then(function(r){return r.json()}).then(function(d){
+    if(d.error)throw new Error(d.error);
+    bdData=d; renderTracks();
+    document.getElementById('updated').textContent='tracks '+new Date().toLocaleTimeString();
+    return d;
+  }).catch(function(e){document.getElementById('updated').textContent='error: '+e.message});
+}
+document.getElementById('tracks-view').addEventListener('click',function(e){
+  var c=e.target.closest('[data-track]');
+  if(c){bdTrack=c.dataset.track;location.hash=bdTrack?'track='+encodeURIComponent(bdTrack):'';renderTracks();return}
+  var m=e.target.closest('[data-more]');
+  if(m){bdMore[m.dataset.more]=!bdMore[m.dataset.more];renderTracks()}
 });
+
+var liveTimer=null;
+function setMode(mode){
+  spMode=mode;
+  document.querySelectorAll('.btn-mode').forEach(function(x){x.classList.toggle('active',x.dataset.mode===mode)});
+  stopPlayback();
+  if(liveTimer){clearInterval(liveTimer);liveTimer=null}
+  if(bdTimer){clearInterval(bdTimer);bdTimer=null}
+  document.getElementById('live-view').classList.toggle('hide',mode!=='live');
+  document.getElementById('tracks-view').classList.toggle('hide',mode!=='tracks');
+  document.getElementById('hist-wrap').classList.toggle('show',mode==='history');
+  document.getElementById('mode-bar').style.borderBottom=mode==='history'?'none':'1px solid #E3E3DE';
+  try{localStorage.setItem('hubd-mode',mode)}catch(e){}
+  if(mode==='live'){loadLive();liveTimer=setInterval(loadLive,3000)}
+  else if(mode==='tracks'){loadTracks();bdTimer=setInterval(loadTracks,30000)}
+  else if(!spMonths.length){
+    fetch('/api/sparkline'+location.search).then(function(r){return r.json()}).then(function(d){
+      spMonths=d.months||[];
+      renderSparkline();
+      if(spMonths.length){spActive=spMonths.length-1;renderSparkline();loadAllSince(spMonths[spMonths.length-1].month+'-01')}
+    });
+  }
+}
+document.querySelectorAll('.btn-mode').forEach(function(b){b.onclick=function(){setMode(this.dataset.mode)}});
 
 document.getElementById('btn-rules').onclick=function(){
   fetch('/api/rules'+location.search).then(function(r){return r.json()}).then(function(d){
@@ -2488,8 +2787,13 @@ document.getElementById('btn-rules').onclick=function(){
 };
 document.getElementById('modal-close').onclick=function(){document.getElementById('modal').classList.remove('open')};
 document.getElementById('modal').onclick=function(e){if(e.target===this)this.classList.remove('open')};
-loadLive();
-liveTimer=setInterval(loadLive,3000);
+/* First screen: the mode last used here; else Tracks when the hub declares heads, Live when not. */
+(function(){
+  var saved=null; try{saved=localStorage.getItem('hubd-mode')}catch(e){}
+  if(saved==='live'||saved==='history'||saved==='tracks'){setMode(saved);return}
+  if(bdTrack){setMode('tracks');return}
+  loadTracks().then(function(d){setMode(d&&d.registry&&d.registry.heads?'tracks':'live')});
+})();
 </script>
 </body>
 </html>`;
@@ -2532,6 +2836,8 @@ liveTimer=setInterval(loadLive,3000);
           if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], generated: now() }));
           if (url.pathname === '/api/sparkline') return res.end(JSON.stringify({ months: [] }));
           if (url.pathname === '/api/journal-since') return res.end(JSON.stringify({ entries: [] }));
+          if (url.pathname === '/api/board') return res.end(JSON.stringify({ days: 7, registry: { roles: 0, heads: 0, fleet: [] }, tracks: [], allTracks: [],
+            waiting: { queue: [], tasks: [], ownerGo: [], escalations: [], answers: [] }, unknownAssignees: [], generated: now() }));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
@@ -2542,6 +2848,10 @@ liveTimer=setInterval(loadLive,3000);
       if (url.pathname === '/api/rules') return res.end(JSON.stringify(getRules()));
       if (url.pathname === '/api/sparkline') return res.end(JSON.stringify(apiSparkline()));
       if (url.pathname === '/api/journal-since') return res.end(JSON.stringify(apiJournalSince(url.searchParams)));
+      // A tenant's queues are its own directory; the default resolution could reach the operator's.
+      if (url.pathname === '/api/board') return res.end(JSON.stringify(runBoard({
+        days: url.searchParams.get('days') || undefined, project: url.searchParams.get('project') || undefined,
+        queueRoot: MT ? HUB : undefined })));
       res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
   };
@@ -2549,7 +2859,7 @@ liveTimer=setInterval(loadLive,3000);
   const server = http.createServer(handler);
   server.listen(port, HOST, () => {
     console.log('hubd kanban  http://' + HOST + ':' + port + (MT ? '  (multi-tenant — open with ?t=<token>)' : ''));
-    console.log('  Live: kanban   History: sparkline + event playback');
+    console.log('  Tracks: roles, done, next, waiting for you   Live: kanban   History: sparkline + event playback');
     console.log('Ctrl+C to stop');
   });
 }

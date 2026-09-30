@@ -104,6 +104,8 @@ intake for agents, over the network.
 - Every other tool (tasks, journal, status, search, brief, claims, cards,
   resources, graph) behaves exactly as over stdio — the transport is the only
   difference.
+- The board (`hub serve` in multi-tenant mode, `?t=<token>`) reads a tenant's
+  own queues for its "waiting for you" block, never the operator's.
 
 ## Environment
 
@@ -114,6 +116,8 @@ intake for agents, over the network.
 | `HUBD_DIR` | `~/.hubd` | where data lives |
 | `HUBD_TEAM_DIR` | = `HUBD_DIR` | queues and `AGENTS.md`; set alone it is the data dir too (one directory) |
 | `HUBD_SUBSCRIBER` | — | stdio only: the reader name for broadcast-role cursors (else `HUBD_SESSION`, else `HUBD_AGENT`, else the client process) |
+| `HUBD_TASK_ID_PREFIX` | the node name | prefix of new task ids (`<prefix>-<n>`), when the hostname should not appear in them |
+| `HUBD_SENSE_DIR` | `<hub>/.sense` | where `hub sense` keeps each head's sensor state (node-local) |
 | `HUBD_HTTP_HOST` | `127.0.0.1` | bind address (keep it localhost behind a TLS proxy) |
 | `HUBD_HTTP_PORT` | `8787` | port (or pass `--http <port>`) |
 | `HUBD_RATE_LIMIT` | `120` | max POSTs per minute per client IP (over the limit → 429) |

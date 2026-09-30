@@ -199,7 +199,8 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, area: { type: 'string', description: 'a path glob relative to the project root; several joined with " + "' }, agent: { type: 'string' },
       ttlMin: { type: 'integer', description: 'default 240' }, note: { type: 'string' },
-    }, required: ['project', 'area', 'agent'] } },
+      task: { type: ['string', 'integer'], description: 'start a task from your work queue instead: the claim is on task:<id> in the task\'s project (project and area are then not needed). While it holds the task is in progress and not offered again; when it lapses the task is offered again.' },
+    }, required: ['agent'] } },
 
   { name: 'hub_claim_check',
     description: 'Before editing a file: is it inside somebody\'s live claim? Returns {free, holders:[{agent, area, since, note}], mine, unmatchable} — `mine` are your own claims covering it (pass agent), `unmatchable` the prose claims on the project that no path can be tested against. Pure read. The lock is soft by constitution: this informs, it does not forbid — coordinate with the holder.',
@@ -210,10 +211,11 @@ const TOOLS = [
     }, required: ['path'] } },
 
   { name: 'hub_release',
-    description: 'Release a soft-lock. Pass id, or project+area+agent.',
+    description: 'Release a soft-lock. Pass id, or project+area+agent, or task+agent (give a started task back to the work queue).',
     inputSchema: { type: 'object', properties: {
       id: { type: 'string' },
       project: { type: 'string' }, area: { type: 'string' }, agent: { type: 'string' },
+      task: { type: ['string', 'integer'] },
     } } },
 
   { name: 'hub_heartbeat',
@@ -225,6 +227,12 @@ const TOOLS = [
       task_id: { type: ['integer', 'string'], description: 'the task/id you are currently on, optional' },
       cwd: { type: 'string', description: 'your absolute working directory, optional' },
       ttlMin: { type: 'integer', description: 'minutes before this record counts as stale, default 15' },
+      state: { type: 'string', description: 'what the loop is doing, as a field a supervisor reads without parsing status: turn | waiting | exit. The hub keeps state_since — when this state began — across heartbeats that repeat it.' },
+      turn: { type: 'integer', description: 'number of the current or last turn' },
+      turn_started: { type: 'string', description: 'when the current turn began, or "now"; carried while the turn number stays the same' },
+      empty_count: { type: 'integer', description: 'consecutive empty polls while waiting' },
+      silent_count: { type: 'integer', description: 'consecutive restarts of a model that produced no output' },
+      exit_reason: { type: 'string', description: 'one line, with state=exit' },
     }, required: ['agent'] } },
 
   { name: 'hub_presence',
@@ -248,6 +256,7 @@ const TOOLS = [
       status: { type: 'string', description: 'live | down | planned | retired' },
       digest: { type: 'string', description: 'one-line description (keep prose minimal)' },
       edges: { type: 'object', description: 'typed relationships, merged with existing: {"runs_on":["hubd"],"depends_on":["postgres"]}. Values are target slugs.', additionalProperties: { type: 'array', items: { type: 'string' } } },
+      attrs: { type: 'object', description: 'any other one-line attributes, merged with existing; an empty value removes the key. A role is a card of type "role": {"rank":"worker","project":"api","head":"[[api-head]]","idle_min":"40"}', additionalProperties: { type: 'string' } },
       by: { type: 'string', description: 'who is writing' },
     }, required: ['slug', 'by'] } },
 
@@ -309,6 +318,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       role: { type: 'string' },
       timeout: { type: 'integer', description: 'seconds to block, default 45, max 540. The default is deliberately short: MCP clients abort a tool call on their own timeout (commonly ~60s) and hubd cannot see that limit. Raise it only if you know your client tolerates a longer call.' },
+      tasks: { type: 'boolean', description: 'work mode: also return `work` — your open, ready tasks, most urgent first, each with its claim and the latest messages about it — and wake as soon as one is offered (ready, not started). Start one with hub_claim({task, agent, ttlMin}); a lapsed claim offers it again, so a turn that did nothing loses nothing. Messages about a task that is already closed are held back (`skipped`): cancelling is closing.' },
     }, required: ['role'] } },
 
   { name: 'hub_queue_wait_all',
@@ -456,7 +466,7 @@ const DISPATCH = {
   // Resolved from THIS process, never from the caller's arguments — the
   // model cannot forget it or invent a different one mid-loop. Null on an unknown
   // client, and then the cursor stays shared per node exactly as before.
-  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
+  hub_queue_wait: (a) => queueWait(a.role, { timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId(), work: !!a.tasks }),
   hub_queue_wait_all: (a) => queueWaitAll({ timeout: Math.min(a.timeout || 45, 540), root: teamRoot(), subscriber: subscriberId() }),
   hub_queue_ack: (a) => queueAck(a.role, a.id, { root: teamRoot() }),
 };

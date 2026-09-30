@@ -152,11 +152,14 @@ Two habits that pay for themselves the first week:
 ```bash
 hub brief           # morning brief: tasks by deadline, journal, locks, queues
 hub inbox           # only what needs a DECISION: blocked/overdue/unassigned
-hub serve           # read-only kanban on localhost:7777
+hub board           # every track: roles, done this week, next, what waits for you
+hub serve           # read-only board on localhost:7777 (Tracks, Live, History)
 ```
 
 The board's only button is ⚙ Rules, and it opens AGENTS.md. Cards move because
-agents move them; you manage the rules, not the agents.
+agents move them; you manage the rules, not the agents. Tracks appear once roles
+are declared as cards — `hub resource set <role> --type role --attr rank=head
+--attr project=<slug> --by <you>`, and `--link head:<head>` for a worker.
 
 ## 7. Queues — make an agent addressable
 
@@ -198,7 +201,18 @@ hub queue gc --apply      # move them to queues/archive/ (moved, never deleted)
 ```
 
 An owner's own queue is never collected: a human reads it as a file, so having
-no cursor is normal there.
+no cursor is normal there. Once roles are declared, `hub gc` lists the rest of what
+piles up — queues of names that are no live role, dead waiter markers, stale
+presence — and `hub gc --apply --by <you>` archives it in one commit. Never `rm` a
+queue in a mesh hub: mesh-sync refuses a deleted log (it would delete that history
+on every peer) and accepts only a move into `queues/archive/` with the bytes intact.
+
+A role can take its tasks, not only its messages, from the queue:
+
+```bash
+hub queue wait worker --tasks        # messages, plus the open ready tasks assigned to worker
+hub claim --task 42 --agent worker -t 60   # started: not offered again until the claim lapses
+```
 
 ## 8. A second machine
 
