@@ -4,6 +4,15 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.29 — 2026-09-30
+
+- **`hub sense` does not re-raise a branch the journal already judged.** Its own state was the only
+  memory of past verdicts, so a fresh state — a new node, the first pass of a run in parallel with
+  another sensor — raised every open task branch as critical, including ones rejected hours ago. A
+  `decision` entry `ACCEPT|REJECT <full sha>` for that branch and sha now counts as decided.
+- The sensor's state directory and escalation log keep the group bits on a shared hub, so a head's
+  loop and an operator running as different users can both write them.
+
 ## 0.9.28 — 2026-09-30
 
 A fleet asked for four things that all needed the same missing piece — the hub knew every role only

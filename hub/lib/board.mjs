@@ -14,21 +14,12 @@
  */
 import {
   now, parseTs, slugify, loadTasks, loadClaims, activeClaims, readCard, sectionBody, projectSlugSet,
-  journalSinceMs, roleRegistry, ownerRoles, runPresence, eligibleOpen, byUrgency, isOwnerTask, taskTitle, taskClaimArea,
+  journalSinceMs, roleRegistry, ownerRoles, runPresence, eligibleOpen, byUrgency, isOwnerTask, taskTitle, taskClaimArea, parseVerdict,
 } from './core.mjs';
 
-export { taskTitle };
+export { taskTitle, parseVerdict };
 import { ownerQueueItems, recentBlocks } from './queue.mjs';
 import { senseSnapshots } from './sense.mjs';
-
-/** A head's verdict on a branch, as written into the journal: "ACCEPT <sha> <branch> ..." or the
- *  same with a leading "decision:". Null for anything else. */
-export function parseVerdict(text) {
-  const m = /^\s*(?:decision:\s*)?(ACCEPT|REJECT)\s+([0-9a-f]{7,40})\b(?:\s+([^\s:]+))?/.exec(String(text || ''));
-  if (!m) return null;
-  const branch = m[3] && !/^[→>-]+$/.test(m[3]) ? m[3] : null;
-  return { verdict: m[1].toLowerCase(), sha: m[2], branch };
-}
 
 const firstLine = (s, n) => {
   const l = String(s || '').split('\n').map(x => x.trim()).find(Boolean) || '';
