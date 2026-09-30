@@ -392,12 +392,12 @@ function drainFile(qdir, stateDir, f) {
   if (sizeOf() === readCursor(offFile).off) return null;   // nothing new — don't even lock
   try {
     return withLock(offFile, () => {
-      const { off, mark } = readCursor(offFile), sz = sizeOf();   // re-read under the lock
-      if (sz < off) {
+      let { off, mark } = readCursor(offFile);
+      const sz = sizeOf();   // both re-read under the lock
+      if (sz < off) {        // the file shrank: resume after the watermark, and deliver from there now
         let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
-        const resumed = Math.min(offsetAfterShrink(text, mark), sz);
-        writeCursor(offFile, resumed, mark);
-        return null;
+        off = Math.min(offsetAfterShrink(text, mark), sz);
+        writeCursor(offFile, off, mark);
       }
       if (sz === off) return null;                    // a competitor drained it first
       const chunk = readTail(full, off, sz);
