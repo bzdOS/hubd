@@ -6,7 +6,7 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import {
-  VERSION, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
+  VERSION, tenantKey, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
   runTaskList, runTaskUpdate, runTaskGet, runBrief, runClaim, runClaimCheck, runRelease, runKanban,
   setHubBase, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
@@ -683,7 +683,6 @@ async function serveHttp(port) {
   }
   const host = process.env.HUBD_HTTP_HOST || '127.0.0.1';
   const MAX_BODY = 512 * 1024;
-  const sha = (s) => crypto2.createHash('sha256').update(s).digest('hex');
 
   // ── abuse guards (matter most on a public multi-tenant endpoint) ──
   // Without these, anyone can spray random tokens to mint unbounded tenant dirs
@@ -710,7 +709,7 @@ async function serveHttp(port) {
     const m = /^Bearer (.+)$/.exec(header || '');
     if (!m) return null;
     const tok = m[1];
-    if (MT) return tok.length >= 16 ? path.join(TENANTS, sha(tok).slice(0, 40)) : null;
+    if (MT) return tok.length >= 16 ? path.join(TENANTS, tenantKey(tok)) : null;
     const a = Buffer.from(tok), b = Buffer.from(TOKEN);
     return (a.length === b.length && crypto2.timingSafeEqual(a, b)) ? SERVER_BASE : null;
   };

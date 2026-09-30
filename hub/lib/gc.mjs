@@ -37,10 +37,10 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   HUB, PRESENCE, JOURNAL_NODE, now, parseTs, slugify, loadTasks, roleRegistry, ownerRoles, loadPresence, presenceSnapshots, requireAuthor,
-  liveMeshNodes, shardHold,
+  liveMeshNodes, shardHold, presenceAlive, nodeKey, readJson, staleEnvSessions,
   envObservations, clearEnvObservation, journalAppend,
 } from './core.mjs';
-import { resolveQueueRoot, subscriberRoles, pidAlive, subscriberNamespaces, archiveStaleSubscribers } from './queue.mjs';
+import { resolveQueueRoot, subscriberRoles, pidAlive, subscriberNamespaces, archiveStaleSubscribers, listShards, archiveQueueFile } from './queue.mjs';
 
 const DAY = 86400000;
 
@@ -65,7 +65,6 @@ function newestBlockMs(file, size) {
   } catch { return null; }
 }
 
-const WEEK = 7 * DAY;
 
 /** This node's own litter (see the header). Read-only. */
 export function localLitter({ root } = {}) {
@@ -81,13 +80,7 @@ export function localLitter({ root } = {}) {
     else if (f.includes('.tmp.')) { if (age > 60000) out.tmp.push(f); }             // a crashed atomicWrite
   }
   try { out.readers = subscriberNamespaces({ root: r, days: 7 }).filter(n => n.stale).map(n => (n.tap ? '__watchall__/' : '') + n.name); } catch {}
-  try {
-    const st = JSON.parse(fs.readFileSync(path.join(HUB, '.env-state.json'), 'utf8'));
-    for (const rec of Object.values(st.sessions || {})) {
-      const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
-      if (!at || nowMs - at > WEEK) out.sessions++;
-    }
-  } catch {}
+  out.sessions = staleEnvSessions({ days: 7 });
   return out;
 }
 
@@ -96,20 +89,7 @@ function applyLocalLitter(l, r) {
   for (const f of [...l.locks, ...l.backups, ...l.tmp]) { try { fs.unlinkSync(path.join(HUB, f)); removed++; } catch {} }
   let readers = 0;
   if (l.readers.length) { try { readers = archiveStaleSubscribers({ root: r, days: 7 }).moved.length; } catch {} }
-  let sessions = 0;
-  if (l.sessions) {
-    try {
-      const esf = path.join(HUB, '.env-state.json');
-      const st = JSON.parse(fs.readFileSync(esf, 'utf8'));
-      const keep = {}, nowMs = Date.now();
-      for (const [sid, rec] of Object.entries(st.sessions || {})) {
-        const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
-        if (at && nowMs - at <= WEEK) keep[sid] = rec; else sessions++;
-      }
-      st.sessions = keep;
-      fs.writeFileSync(esf, JSON.stringify(st, null, 1));
-    } catch {}
-  }
+  const sessions = l.sessions ? staleEnvSessions({ days: 7, apply: true }) : 0;
   return { removed, readers, sessions };
 }
 
@@ -126,18 +106,13 @@ export function hubGcPlan({ root, days = 14 } = {}) {
   const qdir = path.join(r, 'queues'), st = path.join(r, '.qstate');
   // alive anywhere in the mesh: this node's registry and every other node's published snapshot
   const everyone = [...loadPresence(), ...presenceSnapshots().flatMap(sn => sn.agents)];
-  const aliveOf = (name) => everyone.some(p => p && (p.agent === name || p.role === name) &&
-    nowMs < parseTs(p.last_seen).getTime() + (p.ttlMin ?? 15) * 60000);
+  const aliveOf = (name) => everyone.some(p => p && (p.agent === name || p.role === name) && presenceAlive(p, nowMs));
   const live = liveMeshNodes({ root: r, days: Math.max(days, 30) });
-  const waiterAlive = (role) => { try { return pidAlive(JSON.parse(fs.readFileSync(path.join(st, `${role}.waiter`), 'utf8')).pid); } catch { return false; } };
+  const waiterAlive = (role) => { const w = readJson(path.join(st, `${role}.waiter`)); return !!(w && pidAlive(w.pid)); };
 
   const queues = [], skipped = [];
   if (roles.size) {
-    let files = [];
-    try { files = fs.readdirSync(qdir).filter(f => f.endsWith('.queue.md')); } catch {}
-    for (const f of files) {
-      const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
-      const role = m ? m[1] : f;
+    for (const { file: f, role, node } of listShards(qdir)) {
       if (owners.has(role) || fanout.has(role) || known(role) || aliveOf(role) || waiterAlive(role)) continue;
       let stt; try { stt = fs.statSync(path.join(qdir, f)); } catch { continue; }
       // The newest block header, not the file's mtime: a git checkout or pull stamps every file it
@@ -146,11 +121,10 @@ export function hubGcPlan({ root, days = 14 } = {}) {
       const idleDays = Math.floor((nowMs - (last ?? stt.mtimeMs)) / DAY);
       if (idleDays < days) continue;
       const reg = roles.get(slugify(role));
-      const node = m && m[2] ? m[2] : null;
       const row = { file: f, role, node, bytes: stt.size, idleDays, reason: reg ? 'role is off' : 'not a declared role' };
       const hold = shardHold(node, last == null ? 0 : 1, live);
       if (hold) { skipped.push({ ...row, why: hold }); continue; }
-      row.whose = !node ? 'no node in its name' : String(node).toLowerCase().replace(/[^a-z0-9_-]+/g, '-') === JOURNAL_NODE ? 'this node' : live ? `node ${node} writes no more` : 'no mesh';
+      row.whose = !node ? 'no node in its name' : nodeKey(node) === JOURNAL_NODE ? 'this node' : live ? `node ${node} writes no more` : 'no mesh';
       queues.push(row);
     }
   }
@@ -160,7 +134,7 @@ export function hubGcPlan({ root, days = 14 } = {}) {
     let ents = []; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
       if (e.isFile() && e.name.endsWith('.waiter')) {
-        let pid = null; try { pid = JSON.parse(fs.readFileSync(path.join(dir, e.name), 'utf8')).pid; } catch {}
+        const pid = (readJson(path.join(dir, e.name)) || {}).pid || null;
         if (!pid || !pidAlive(pid)) waiters.push({ file: prefix + e.name, pid });
       } else if (e.isDirectory() && !e.name.startsWith('_') && !prefix) scanWaiters(path.join(dir, e.name), e.name + '/');
     }
@@ -212,17 +186,9 @@ export function runHubGc({ root, days = 14, apply = false, by } = {}) {
   const author = requireAuthor(by, 'by');
   const r = plan.root;
   const moved = [], failed = [];
-  const adir = path.join(r, 'queues', 'archive'), cdir = path.join(r, '.qstate', '_archive');
   for (const q of plan.queues) {
-    try {
-      fs.mkdirSync(adir, { recursive: true });
-      let dest = path.join(adir, q.file);
-      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(adir, q.file.replace(/\.queue\.md$/, `.${n}.queue.md`));
-      fs.renameSync(path.join(r, 'queues', q.file), dest);
-      moved.push({ from: path.join('queues', q.file), to: path.relative(r, dest) });
-      const cur = path.join(r, '.qstate', `${q.file}.offset`);
-      if (fs.existsSync(cur)) { fs.mkdirSync(cdir, { recursive: true }); fs.renameSync(cur, path.join(cdir, path.basename(dest) + '.offset')); }
-    } catch (e) { failed.push({ file: q.file, error: e.message }); }
+    try { moved.push({ from: path.join('queues', q.file), to: path.relative(r, archiveQueueFile(r, q.file)) }); }
+    catch (e) { failed.push({ file: q.file, error: e.message }); }
   }
   let waitersRemoved = 0;
   for (const w of plan.waiters) { try { fs.unlinkSync(path.join(r, '.qstate', w.file)); waitersRemoved++; } catch {} }

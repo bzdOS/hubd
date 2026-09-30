@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  PROJ, appendHistory, atomicWrite, cardLimits, cardPath, CONFLICT_RE, editSection, HUB, isPlaceholder,
+  PROJ, appendHistory, readJson, atomicWrite, cardLimits, cardPath, CONFLICT_RE, editSection, HUB, isPlaceholder,
   journalAppend, liveHeading, MOVED_MARK, NO_ROTATE, now, projectAliases, readCard, requireAuthor,
   rotateCardOverflow, sectionBody, sectionHeadings, sectionsConfig, slugify,
 } from './core.mjs';
@@ -187,8 +187,7 @@ export function runCardsMerge(a = {}) {
 
   // Create alias
   const af = path.join(HUB, 'project-aliases.json');
-  let aliases = {};
-  try { aliases = JSON.parse(fs.readFileSync(af, 'utf8')); } catch {}
+  const aliases = readJson(af, {});
   const aliasExisted = !!aliases[from];
   if (!aliasExisted) aliases[from] = into;
   fs.writeFileSync(af, JSON.stringify(aliases, null, 1));

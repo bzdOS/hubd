@@ -13,7 +13,7 @@
  * Kept out of core.mjs because it needs the queue module, which imports core.
  */
 import {
-  now, parseTs, slugify, loadTasks, loadClaims, activeClaims, readCard, sectionBody, projectSlugSet,
+  now, parseTs, slugify, escRe, loadTasks, loadClaims, activeClaims, readCard, sectionBody, projectSlugSet,
   journalSinceMs, roleRegistry, ownerRoles, runPresence, eligibleOpen, byUrgency, isOwnerTask, taskTitle, taskClaimArea, parseVerdict,
 } from './core.mjs';
 
@@ -25,7 +25,6 @@ const firstLine = (s, n) => {
   const l = String(s || '').split('\n').map(x => x.trim()).find(Boolean) || '';
   return l.length > n ? l.slice(0, n - 1) + '…' : l;
 };
-const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function runBoard(a = {}) {
   const nowMs = Date.now();

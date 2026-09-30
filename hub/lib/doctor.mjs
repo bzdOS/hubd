@@ -13,12 +13,13 @@ import {
   HUB, HUB_VIA, PROJ, RESOURCES, VERSION, now, parseTs, sh, projectAliases, loadTasks, loadClaims,
   activeClaims, journalFiles, taskEventFiles, journalNodeOf, taskEventNodeOf, writerVersions,
   cmpVersion, envChecks, runPresence, runGraph, gitignoreAddedThisRun, trackedNodeLocal, readFreeze,
-  rulesFilePath,
+  rulesFilePath, readJson,
 } from './core.mjs';
 import { conflictedFiles } from './conflicts.mjs';
 import { cardSectionIssues } from './cards.mjs';
 import {
   resolveQueueRoot, resolveQueueRootInfo, subscriberRoles, subscriberNamespaces, queueInventory, strandedQueues, outOfBandTrims,
+  listShards, readCursor, pidAlive,
 } from './queue.mjs';
 
 /** Raw vs distinct line counts per node log family — exactly what readLogEntries drops, so the
@@ -503,25 +504,20 @@ export function runDoctor() {
   if (hasQueues) {
     const qdir = path.join(teamRoot, 'queues');
     const qstateDir = path.join(teamRoot, '.qstate');
-    const qfiles = (() => { try { return fs.readdirSync(qdir).filter(f => f.endsWith('.queue.md')); } catch { return []; } })();
-    if (qfiles.length) {
+    const shards = listShards(qdir);
+    if (shards.length) {
       console.log('');
       console.log('queues:');
       const nowMs = Date.now();
       const fanoutRoles = new Set(subscriberRoles(teamRoot));
-      for (const qf of qfiles) {
+      for (const { file: qf, role } of shards) {
         // Files are per-host: <role>.<node>.queue.md (legacy <role>.queue.md still read).
         // The offset is keyed by the FULL filename (.qstate/<file>.offset — lib/queue.mjs
         // offPath) and the waiter marker by the bare ROLE. Both used to be derived from
         // filename-minus-suffix, i.e. read paths that never exist — doctor showed offset 0
         // and pending = size on a fully-consumed queue, and never saw a live waiter.
-        const role = (qf.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/) || [, qf.replace('.queue.md', '')])[1];
-        const qfull = path.join(qdir, qf);
-        const sz = (() => { try { return fs.statSync(qfull).size; } catch { return 0; } })();
-        const off = (() => {
-          try { return parseInt(fs.readFileSync(path.join(qstateDir, qf + '.offset'), 'utf8').trim(), 10) || 0; }
-          catch { return 0; }
-        })();
+        const sz = (() => { try { return fs.statSync(path.join(qdir, qf)).size; } catch { return 0; } })();
+        const { off } = readCursor(path.join(qstateDir, qf + '.offset'));
         const pending = Math.max(0, sz - off);
         const beyondSize = off > sz;   // counted once, by the out-of-band trims below
         let line = '  ' + qf + ':  size ' + sz + 'B, offset ' + off + ', pending ' + pending + 'B';
@@ -529,16 +525,8 @@ export function runDoctor() {
         if (beyondSize) line += '  offset beyond file size (the file shrank: see the cursors past the end below)';
 
         // live waiter check — the marker is per role, not per file
-        const waiterFile = path.join(qstateDir, role + '.waiter');
-        try {
-          const w = JSON.parse(fs.readFileSync(waiterFile, 'utf8'));
-          const ageMsW = nowMs - new Date(w.since).getTime();
-          if (ageMsW < 10000) {
-            let alive = false;
-            try { process.kill(w.pid, 0); alive = true; } catch (e) { if (e.code === 'EPERM') alive = true; }
-            if (alive) line += '  live waiter: pid ' + w.pid;
-          }
-        } catch {}
+        const w = readJson(path.join(qstateDir, role + '.waiter'));
+        if (w && nowMs - new Date(w.since).getTime() < 10000 && pidAlive(w.pid)) line += '  live waiter: pid ' + w.pid;
 
         console.log(line);
       }
@@ -554,7 +542,8 @@ export function runDoctor() {
        * Four live roles held 12-43 KB of undelivered orders for a day this way, while each wait
        * answered NO_CHANGES and each send answered "delivered" (task maple-98). First in the
        * block because it is the only queue condition that is losing work right now. */
-      const stalledQ = queueInventory({ root: teamRoot }).filter(x => x.stalled);
+      const inventory = queueInventory({ root: teamRoot });
+      const stalledQ = inventory.filter(x => x.stalled);
       if (stalledQ.length) {
         warnings++;
         console.log('  ' + stalledQ.length + ' queue cursor(s) THIS USER CANNOT WRITE — delivery is stopped  WARNING');
@@ -624,7 +613,7 @@ export function runDoctor() {
       }
       // Ghost roll-up: files nobody ever consumed, nobody is present for, and that are not a
       // human's queue. They inflate every pending number in the hub until they are archived.
-      const ghosts = queueInventory({ root: teamRoot }).filter(x => x.ghost);
+      const ghosts = inventory.filter(x => x.ghost);
       if (ghosts.length) {
         warnings++;
         console.log('  ' + ghosts.length + ' ghost queue(s) — never consumed, no agent present, older than 30d  WARNING');
@@ -640,7 +629,7 @@ export function runDoctor() {
     // Parse the ROLE out of per-host filenames (<role>.<node>.queue.md) — filename-minus-
     // suffix would compare "worker.pine" against role files and flag every real queue
     // as orphaned. Same regex as the queues section above; Set dedupes across nodes.
-    const qNames = (() => { try { return [...new Set(fs.readdirSync(path.join(teamRoot, 'queues')).filter(f => f.endsWith('.queue.md')).map(f => (f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/) || [, f.replace('.queue.md', '')])[1]))]; } catch { return []; } })();
+    const qNames = [...new Set(listShards(path.join(teamRoot, 'queues')).map(s => s.role))];
     const rolesNoQueue = roleNames.filter(r => !qNames.includes(r));
     const queuesNoRole = qNames.filter(q => !roleNames.includes(q));
     if (rolesNoQueue.length || queuesNoRole.length) {

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  PROJ, RESOURCES, HUB, journalAppend, now, rebuildTaskCache, requireAuthor, shareMode, VERSION,
+  PROJ, RESOURCES, HUB, escRe, journalAppend, now, rebuildTaskCache, requireAuthor, shareMode, VERSION,
 } from './core.mjs';
 
 /* ── Absorb: fold a hub base that was written in isolation into this one ──
@@ -67,7 +67,7 @@ export function runAbsorb(a = {}) {
   for (const f of [`tasks.${label}.events.jsonl`, `journal.${label}.jsonl`, `usage.${label}.jsonl`, path.join('absorbed', label)]) {
     if (fs.existsSync(path.join(HUB, f))) taken.push(f);
   }
-  try { for (const f of fs.readdirSync(HUB)) if (new RegExp('^journal\\.' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d{4}-\\d{2}').test(f)) taken.push(f); } catch {}
+  try { for (const f of fs.readdirSync(HUB)) if (new RegExp('^journal\\.' + escRe(label) + '-\\d{4}-\\d{2}').test(f)) taken.push(f); } catch {}
   if (taken.length) refusals.push('label already used here: ' + taken.join(', ') + ' - pick another, an absorb happens once');
   const hardRefusals = refusals.filter(r => !a.force || r.startsWith('label already used'));
   if (hardRefusals.length) throw new Error('refused: ' + hardRefusals.join('; '));
@@ -98,7 +98,7 @@ export function runAbsorb(a = {}) {
   // In prose only node-scoped ids are safe to rename: a bare "7" is a number before it is an id.
   const proseIds = [...idMap.keys()].filter(id => id.includes('-')).sort((x, y) => y.length - x.length);
   const proseRe = proseIds.length
-    ? new RegExp('(?<![A-Za-z0-9_-])(' + proseIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![0-9])', 'g')
+    ? new RegExp('(?<![A-Za-z0-9_-])(' + proseIds.map(escRe).join('|') + ')(?![0-9])', 'g')
     : null;
   const renameText = (s) => (proseRe ? s.replace(proseRe, (m) => idMap.get(m)) : s);
   const renameValue = (v, key) => {

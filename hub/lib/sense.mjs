@@ -40,7 +40,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, runPresence,
-  runReport, atomicWrite, withLock, parseVerdict, shareMode,
+  runReport, atomicWrite, withLock, parseVerdict, shareMode, readJson,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
 
@@ -67,8 +67,7 @@ export const OPEN_STATUSES = new Set(['open', 'doing', 'in_progress', 'active'])
 const BUILD_RE = /(^|\/)(build|out|obj|target|node_modules)\/|\.(o|a|so|dylib|dSYM|pyc)$/;
 
 export function senseConfig() {
-  let o = {};
-  try { o = JSON.parse(fs.readFileSync(path.join(HUB, 'sense.json'), 'utf8')) || {}; } catch {}
+  const o = readJson(path.join(HUB, 'sense.json'), {});
   const c = { ...SENSE_DEFAULTS };
   for (const k of Object.keys(SENSE_DEFAULTS)) if (o[k] != null) c[k] = o[k];
   c.quietRe = regexList(c.quietJournal);
@@ -93,7 +92,7 @@ export function senseDir() {
   return d;
 }
 const statePath = (head) => path.join(senseDir(), `head.${slugify(head)}.json`);
-export function loadSenseState(head) { try { return JSON.parse(fs.readFileSync(statePath(head), 'utf8')) || {}; } catch { return {}; } }
+export function loadSenseState(head) { return readJson(statePath(head), {}); }
 function saveSenseState(head, st) { atomicWrite(statePath(head), st); }
 export function escalationsPath() { return process.env.HUBD_SENSE_ESCALATIONS || path.join(senseDir(), 'escalations.log'); }
 function escalate(head, text, nowS) {
@@ -356,7 +355,7 @@ function publish(head, ev, st, esc) {
   const f = path.join(HUB, `sense.${JOURNAL_NODE}.json`);
   try {
     withLock(f, () => {
-      let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')) || {}; } catch {}
+      const o = readJson(f, {});
       const heads = o.heads || {};
       const prevHead = heads[head] || {};
       const cur = {

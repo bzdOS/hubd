@@ -25,7 +25,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
+import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
   loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
@@ -113,8 +113,38 @@ function assertSubscriber(sub) {
 
 /** Every file that carries this role: <role>.queue.md (legacy) and <role>.<node>.queue.md. */
 function roleFileRe(role) {
-  const esc = String(role).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const esc = escRe(role);
   return new RegExp(`^${esc}(\\.[^.]+)?\\.queue\\.md$`);
+}
+
+/* A queue file is <role>.<node>.queue.md, or <role>.queue.md from before per-node files (still
+ * read, never written). A role holds no dot, so the split is exact. */
+const SHARD_RE = /^(.+?)(?:\.([^.]+))?\.queue\.md$/;
+/** Every queue file in `qdir` as {file, role, node}; [] when there is no such directory. */
+export function listShards(qdir) {
+  let names = [];
+  try { names = fs.readdirSync(qdir); } catch {}
+  const out = [];
+  for (const file of names) { const m = SHARD_RE.exec(file); if (m) out.push({ file, role: m[1], node: m[2] || null }); }
+  return out;
+}
+
+/** Move one queue file into queues/archive/ (a numbered name when that one is taken), and its
+ *  shared cursor into .qstate/_archive/. Moved, never deleted: the mesh guard accepts a removed
+ *  queue file only when an identical blob sits in an archive. Returns the archived path. */
+export function archiveQueueFile(root, file) {
+  const adir = path.join(root, 'queues', 'archive');
+  fs.mkdirSync(adir, { recursive: true });
+  let dest = path.join(adir, file);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(adir, file.replace(/\.queue\.md$/, `.${n}.queue.md`));
+  fs.renameSync(path.join(root, 'queues', file), dest);
+  const cur = path.join(root, '.qstate', `${file}.offset`);
+  if (fs.existsSync(cur)) {
+    const cdir = path.join(root, '.qstate', '_archive');
+    fs.mkdirSync(cdir, { recursive: true });
+    fs.renameSync(cur, path.join(cdir, path.basename(dest) + '.offset'));
+  }
+  return dest;
 }
 
 /** The bytes of `file` from `off` to `size`, decoded — cursors are byte offsets, never string ones. */
@@ -236,7 +266,7 @@ export function resolveQueueFile(qdir, role, node) {
  * Format-compatible on purpose: every existing reader does parseInt(trim(contents)), and parseInt
  * stops at the first non-digit, so an older hubd on the same node still reads the offset and
  * ignores the rest. .qstate is node-local and gitignored, so none of this reaches the mesh. */
-const readCursor = (offFile) => {
+export const readCursor = (offFile) => {
   try {
     const raw = fs.readFileSync(offFile, 'utf8');
     const nl = raw.indexOf('\n');
@@ -253,6 +283,21 @@ const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[
 
 // Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <N>`
 const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
+
+/* Every block in `text`, header fields and body. The header is the one queueSend writes,
+ * `## <ts> · from <sender>[ · id <n>][ · task #<ids>]`, matched whole so that a timestamp quoted
+ * inside a message body never starts a block. */
+const BLOCK_RE = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id (\d+))?(?: · task #([^\n]+))?$/gm;
+function blocksIn(text) {
+  const out = [];
+  let prev = null;
+  for (const m of text.matchAll(BLOCK_RE)) {
+    if (prev) out.push({ ...prev.h, body: text.slice(prev.end, m.index) });
+    prev = { h: { ts: m[1], from: m[2].trim(), id: m[3] ? Number(m[3]) : null, task: m[4] ? m[4].trim() : null }, end: m.index + m[0].length };
+  }
+  if (prev) out.push({ ...prev.h, body: text.slice(prev.end) });
+  return out;
+}
 
 // ── Delivery acknowledgement ──
 // When a block is delivered (cursor advanced past it), its id is recorded as "delivered".
@@ -274,8 +319,7 @@ function readAcks(acksFile) {
 }
 
 function writeAck(acksFile, id, status) {
-  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  fs.appendFileSync(acksFile, JSON.stringify({ id, status, ts }) + '\n', 'utf8');
+  fs.appendFileSync(acksFile, JSON.stringify({ id, status, ts: now() }) + '\n', 'utf8');
   shareMode(acksFile);
 }
 
@@ -411,7 +455,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   const nd = node || nodeName();
   const qfile = resolveQueueFile(qdir, role, nd);
 
-  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const ts = now();
   // Block identity: a monotonic counter per file, so the sender can ask "was block N delivered?"
   // and the consumer can ack individual blocks. Resets when the file is archived/removed.
   let blockId = 1;
@@ -766,7 +810,7 @@ export function peekQueueDepth(role, { root } = {}) {
 
   let pending = 0, oldest = null;
   for (const f of files) {
-    let off = 0; try { off = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10) || 0; } catch {}
+    const { off } = readCursor(path.join(stateDir, `${f}.offset`));
     let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
     if (size <= off) continue;
     // A file this user cannot read is a stall for doctor to name, not a crash inside hub_brief.
@@ -927,14 +971,9 @@ export function transportHealth({ root } = {}) {
 export function queueSummaryForBrief({ root } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
-  let files;
-  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
-
-  const roles = new Set();
-  for (const f of files) {
-    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
-    if (m) roles.add(m[1]);
-  }
+  const shards = listShards(qdir);
+  if (!shards.length) return [];
+  const roles = new Set(shards.map(s => s.role));
 
   let presence = [];
   try { presence = loadPresence(); } catch {}
@@ -943,11 +982,7 @@ export function queueSummaryForBrief({ root } = {}) {
 
   // Which roles were ever consumed at all — the difference between "N waiting for someone who
   // is away" and "N waiting for someone who has never existed". Both used to print identically.
-  const everRead = new Set();
-  for (const f of files) {
-    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
-    if (m && queueCursorSeen(r, f)) everRead.add(m[1]);
-  }
+  const everRead = new Set(shards.filter(s => queueCursorSeen(r, s.file)).map(s => s.role));
 
   return [...roles].sort().map(role => {
     // A declared broadcast role is consumed through PER-READER cursors
@@ -1006,17 +1041,14 @@ export function queueCursorSeen(root, file) {
 export function queueInventory({ root, days = 30 } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
-  let files;
-  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
+  const shards = listShards(qdir);
+  if (!shards.length) return [];
   let presence = [];
   try { presence = loadPresence(); } catch {}
   const owners = new Set(ownerRoles());
   const nowMs = Date.now();
 
-  return files.map(f => {
-    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
-    const role = m ? m[1] : f.replace(/\.queue\.md$/, '');
-    const node = m ? (m[2] || null) : null;
+  return shards.map(({ file: f, role, node }) => {
     const full = path.join(qdir, f);
     let text = '', bytes = 0, mtimeMs = nowMs;
     try { text = fs.readFileSync(full, 'utf8'); } catch {}
@@ -1119,22 +1151,19 @@ export function queueLedger({ root, role } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   const stateDir = path.join(r, '.qstate');
-  let files;
-  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return { roles: [] }; }
+  const shards = listShards(qdir);
   const fanoutRoles = new Set(subscriberRoles(r));
   const owners = new Set(ownerRoles());
   const HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm;
   const countHeads = (s) => (s.match(HEAD) || []).length;
 
   const byRole = new Map();
-  for (const f of files) {
-    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
-    const rl = m ? m[1] : f.replace(/\.queue\.md$/, '');
+  for (const { file: f, role: rl, node } of shards) {
     if (role && rl !== role) continue;
     let buf = Buffer.alloc(0);
     try { buf = fs.readFileSync(path.join(qdir, f)); } catch {}
-    let cursor = null;
-    try { cursor = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10); } catch {}
+    const offFile = path.join(stateDir, `${f}.offset`);
+    const cursor = fs.existsSync(offFile) ? readCursor(offFile).off : null;
     const off = Math.min(Math.max(0, cursor || 0), buf.length);
     const total = countHeads(buf.toString('utf8'));
     const delivered = countHeads(buf.subarray(0, off).toString('utf8'));
@@ -1143,15 +1172,13 @@ export function queueLedger({ root, role } = {}) {
     // number that is true for nobody.
     const readers = [];
     for (const d of subscriberDirs(stateDir)) {
-      try {
-        const c = parseInt(fs.readFileSync(path.join(stateDir, d, `${f}.offset`), 'utf8').trim(), 10) || 0;
-        readers.push({ subscriber: d, delivered: countHeads(buf.subarray(0, Math.min(c, buf.length)).toString('utf8')) });
-      } catch {}
+      const c = path.join(stateDir, d, `${f}.offset`);
+      if (fs.existsSync(c)) readers.push({ subscriber: d, delivered: countHeads(buf.subarray(0, Math.min(readCursor(c).off, buf.length)).toString('utf8')) });
     }
     if (!byRole.has(rl)) byRole.set(rl, { role: rl, fanout: fanoutRoles.has(rl), isButton: owners.has(rl), total: 0, delivered: 0, pending: 0, files: [], readers: [] });
     const agg = byRole.get(rl);
     agg.total += total; agg.delivered += delivered; agg.pending += total - delivered;
-    agg.files.push({ file: f, node: m && m[2] ? m[2] : null, total, delivered, pending: total - delivered, cursor: cursor == null ? null : off, bytes: buf.length });
+    agg.files.push({ file: f, node, total, delivered, pending: total - delivered, cursor: cursor == null ? null : off, bytes: buf.length });
     for (const rd of readers) {
       const found = agg.readers.find(x => x.subscriber === rd.subscriber);
       if (found) found.delivered += rd.delivered; else agg.readers.push({ ...rd });
@@ -1245,15 +1272,9 @@ export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 
     subscriberDays, staleSubscribers };
   const subs = archiveStaleSubscribers({ root: r, days: subscriberDays });
   const dir = path.join(r, 'queues', 'archive');
-  fs.mkdirSync(dir, { recursive: true });
   const moved = [], failed = [];
   for (const g of ghosts) {
-    try {
-      let dest = path.join(dir, g.file);
-      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(dir, g.file.replace(/\.queue\.md$/, `.${n}.queue.md`));
-      fs.renameSync(path.join(r, 'queues', g.file), dest);
-      moved.push(g.file);
-    } catch { failed.push(g.file); }
+    try { archiveQueueFile(r, g.file); moved.push(g.file); } catch { failed.push(g.file); }
   }
   return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts, held,
     subscriberDays, staleSubscribers, subscribersArchived: subs.moved, subscribersFailed: subs.failed };
@@ -1311,15 +1332,10 @@ export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } 
   const stateDir = path.join(r, '.qstate');
   const want = new Set(roles && roles.length ? roles : ownerRoles());
   if (!want.size) return [];
-  let files;
-  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
-
   const out = [];
-  for (const f of files) {
-    const m = f.match(/^(.+?)(?:\.[^.]+)?\.queue\.md$/);
-    if (!m || !want.has(m[1])) continue;
-    let off = 0;
-    try { off = parseInt(fs.readFileSync(path.join(stateDir, `${f}.offset`), 'utf8').trim(), 10) || 0; } catch {}
+  for (const { file: f, role } of listShards(qdir)) {
+    if (!want.has(role)) continue;
+    const { off } = readCursor(path.join(stateDir, `${f}.offset`));
     let text;
     try {
       const size = fs.statSync(path.join(qdir, f)).size;
@@ -1327,26 +1343,17 @@ export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } 
       text = readTail(path.join(qdir, f), off, size);
     } catch { continue; }
 
-    // Same header shape peekQueueDepth counts, so the list and the count can never disagree —
-    // including the block id queueSend stamps between the sender and the task ref. Without it
-    // every block written since ids exist matched nothing here, and the owner's list went empty
-    // while the count said there was work.
-    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id \d+)?(?: · task #([^\n]+))?$/gm;
-    let mm, prev = null;
-    const push = (h, body) => {
-      const subject = String(body || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+    // The full header, block id included: without the id every block written since ids exist
+    // matched nothing here, and the owner's list went empty while the count said there was work.
+    for (const h of blocksIn(text)) {
+      const subject = h.body.split('\n').map(l => l.trim()).find(Boolean) || '';
       const ms = parseTs(h.ts).getTime();
       out.push({
-        role: m[1], file: f, ts: h.ts, from: h.from, task: h.task,
+        role, file: f, ts: h.ts, from: h.from, task: h.task,
         ageDays: Number.isFinite(ms) ? Math.floor((Date.now() - ms) / 86400000) : null,
         subject: subject.length > subjectChars ? subject.slice(0, subjectChars) + '…' : subject,
       });
-    };
-    while ((mm = re.exec(text)) !== null) {
-      if (prev) push(prev.h, text.slice(prev.end, mm.index));
-      prev = { h: { ts: mm[1], from: mm[2].trim(), task: mm[3] ? mm[3].trim() : null }, end: re.lastIndex };
     }
-    if (prev) push(prev.h, text.slice(prev.end));
   }
   out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));   // oldest first: that is the queue
   return limit > 0 ? out.slice(0, limit) : out;
@@ -1365,12 +1372,8 @@ export function recentBlocks({ root, to, from, sinceMs = 0, tailBytes = 262144, 
   const qdir = path.join(r, 'queues');
   const toSet = to ? new Set(to) : null;
   const fromSet = from ? new Set(from) : null;
-  let files;
-  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
   const out = [];
-  for (const f of files) {
-    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
-    const role = m ? m[1] : f;
+  for (const { file: f, role, node } of listShards(qdir)) {
     if (toSet && !toSet.has(role)) continue;
     let text;
     try {
@@ -1379,23 +1382,16 @@ export function recentBlocks({ root, to, from, sinceMs = 0, tailBytes = 262144, 
       if (!size) continue;
       text = readTail(file, Math.max(0, size - tailBytes), size);
     } catch { continue; }
-    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id (\d+))?(?: · task #([^\n]+))?$/gm;
-    let mm, prev = null;
-    const push = (h, body) => {
+    for (const h of blocksIn(text)) {
       const ms = parseTs(h.ts).getTime();
-      if (!(ms >= sinceMs)) return;
-      if (fromSet && !fromSet.has(h.from)) return;
-      const b = String(body || '').trim();
+      if (!(ms >= sinceMs)) continue;
+      if (fromSet && !fromSet.has(h.from)) continue;
+      const b = h.body.trim();
       const subject = b.split('\n').map(l => l.trim()).find(Boolean) || '';
-      out.push({ role, node: m && m[2] ? m[2] : null, ts: h.ts, from: h.from, id: h.id, task: h.task,
+      out.push({ role, node, ts: h.ts, from: h.from, id: h.id, task: h.task,
         subject: subject.length > subjectChars ? subject.slice(0, subjectChars) + '…' : subject,
         text: b.length > textChars ? b.slice(0, textChars) + '…' : b });
-    };
-    while ((mm = re.exec(text)) !== null) {
-      if (prev) push(prev.h, text.slice(prev.end, mm.index));
-      prev = { h: { ts: mm[1], from: mm[2].trim(), id: mm[3] ? Number(mm[3]) : null, task: mm[4] ? mm[4].trim() : null }, end: re.lastIndex };
     }
-    if (prev) push(prev.h, text.slice(prev.end));
   }
   out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
   return out;
