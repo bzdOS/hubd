@@ -1333,7 +1333,7 @@ export function collapseRepeats(entries) {
   const seen = new Map();
   const out = [];
   for (const e of entries) {
-    const k = [e.kind, e.project, e.agent, e.text].join(' ');
+    const k = [e.kind, e.project, e.agent, e.text].join('\u0000');
     const cur = seen.get(k);
     if (cur) { cur.times = (cur.times || 1) + 1; cur.firstTs = e.ts; continue; }
     const copy = { ...e };
