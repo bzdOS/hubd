@@ -1028,12 +1028,12 @@ fs.mkdirSync(path.join(QR, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(QR, 'subscriber-roles.json'), JSON.stringify(['fanout']));
 qSend('fanout', 'one message for everybody', { from: 'test', root: QR });
 
-const subA = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-a' });
-const subB = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-b' });
+const subA = await qWait('fanout', { timeout: 0, root: QR, subscriber: 'sess-a' });
+const subB = await qWait('fanout', { timeout: 0, root: QR, subscriber: 'sess-b' });
 ok(subA.changed && /one message for everybody/.test(subA.text), 'cursor: first subscriber receives the message');
 ok(subB.changed && /one message for everybody/.test(subB.text),
   `cursor: SECOND subscriber receives the same message (fan-out, got changed=${subB.changed})`);
-const subAagain = await qWait('fanout', { timeout: 1, root: QR, subscriber: 'sess-a' });
+const subAagain = await qWait('fanout', { timeout: 0, root: QR, subscriber: 'sess-a' });
 ok(!subAagain.changed, 'cursor: a subscriber does not re-read what it already consumed');
 ok(fs.existsSync(path.join(QR, '.qstate', 'sess-a')) && fs.existsSync(path.join(QR, '.qstate', 'sess-b')),
   'cursor: each subscriber gets its own .qstate namespace');
@@ -1042,8 +1042,8 @@ ok(fs.existsSync(path.join(QR, '.qstate', 'sess-a')) && fs.existsSync(path.join(
 // otherwise every work queue silently became a broadcast the moment the caller was a
 // long-lived MCP server, and two sessions would both do the task and both claim it.
 qSend('worker', 'exactly one of you takes this', { from: 'test', root: QR });
-const wk1 = await qWait('worker', { timeout: 1, root: QR, subscriber: 'sess-a' });
-const wk2 = await qWait('worker', { timeout: 1, root: QR, subscriber: 'sess-b' });
+const wk1 = await qWait('worker', { timeout: 0, root: QR, subscriber: 'sess-a' });
+const wk2 = await qWait('worker', { timeout: 0, root: QR, subscriber: 'sess-b' });
 ok(wk1.changed && !wk2.changed,
   `cursor: an undeclared role stays competing-worker even with subscribers (${wk1.changed}/${wk2.changed})`);
 const strayWorker = fs.readdirSync(path.join(QR, '.qstate', 'sess-a')).filter(f => f.startsWith('worker.'));
@@ -1052,8 +1052,8 @@ ok(strayWorker.length === 0,
 
 // No subscriber → the shared per-node cursor, i.e. today's behaviour untouched.
 qSend('shared', 'for whoever gets there first', { from: 'test', root: QR });
-const sh1 = await qWait('shared', { timeout: 1, root: QR });
-const sh2 = await qWait('shared', { timeout: 1, root: QR });
+const sh1 = await qWait('shared', { timeout: 0, root: QR });
+const sh2 = await qWait('shared', { timeout: 0, root: QR });
 ok(sh1.changed && !sh2.changed, `cursor: without a subscriber the node cursor is still shared (${sh1.changed}/${sh2.changed})`);
 const sharedOffsets = fs.readdirSync(path.join(QR, '.qstate')).filter(f => f.startsWith('shared.') && f.endsWith('.offset'));
 ok(sharedOffsets.length === 1,
@@ -1070,7 +1070,7 @@ fs.mkdirSync(path.join(FB, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(FB, 'subscriber-roles.json'), JSON.stringify(['announce']));
 fs.writeFileSync(path.join(FB, 'owner-roles.json'), JSON.stringify(['announce']));
 qSend('announce', 'to everybody', { from: 'test', root: FB });
-await qWait('announce', { timeout: 1, root: FB, subscriber: 'sess-a' });   // fully consumed by a subscriber
+await qWait('announce', { timeout: 0, root: FB, subscriber: 'sess-a' });   // fully consumed by a subscriber
 core.runHeartbeat({ agent: 'agent-a', role: 'announce' });
 const fbRows = queueLib.queueSummaryForBrief({ root: FB });
 const fbRow = fbRows.find(r => r.role === 'announce');
@@ -1093,7 +1093,7 @@ fs.mkdirSync(path.join(LK, '.qstate'), { recursive: true });
 const lkNode = core.JOURNAL_NODE;
 const lkLock = path.join(LK, '.qstate', `locked.${lkNode}.queue.md.offset.lock`);
 fs.writeFileSync(lkLock, '');   // someone else is mid-drain on this cursor
-const lkBlocked = await qWait('locked', { timeout: 1, root: LK });
+const lkBlocked = await qWait('locked', { timeout: 0, root: LK });
 ok(lkBlocked.changed === false,
   `queue: a held cursor lock skips the poll instead of double-delivering or throwing (got ${JSON.stringify(lkBlocked)})`);
 fs.unlinkSync(lkLock);
@@ -1375,19 +1375,19 @@ fs.mkdirSync(path.join(QC, 'queues'), { recursive: true });
 fs.mkdirSync(path.join(QC, '.qstate'), { recursive: true });
 fs.writeFileSync(path.join(QC, '.qstate', 'busy.waiter'),
   JSON.stringify({ pid: process.ppid, since: new Date().toISOString() }));
-await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+await qWait('busy', { timeout: 0, root: QC, subscriber: 'sess-a' });
 ok(has(core.envChecks(), 'queue-fanout-undeclared'),
   'envChecks: two waiters on one cursor become an actionable item, not a stderr line nobody sees');
 // A work queue back to a single waiter clears it too: the competitor is gone, so is the finding.
 fs.rmSync(path.join(QC, '.qstate', 'busy.waiter'), { force: true });
-await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+await qWait('busy', { timeout: 0, root: QC, subscriber: 'sess-a' });
 ok(!has(core.envChecks(), 'queue-fanout-undeclared'),
   'envChecks: one waiter again clears the conflict — a notice must not outlive its cause');
 fs.writeFileSync(path.join(QC, '.qstate', 'busy.waiter'),
   JSON.stringify({ pid: process.ppid, since: new Date().toISOString() }));
-await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+await qWait('busy', { timeout: 0, root: QC, subscriber: 'sess-a' });
 fs.writeFileSync(path.join(QC, 'subscriber-roles.json'), JSON.stringify(['busy']));
-await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+await qWait('busy', { timeout: 0, root: QC, subscriber: 'sess-a' });
 ok(!has(core.envChecks(), 'queue-fanout-undeclared'),
   'envChecks: declaring the role clears it — no acknowledgement needed, the condition is gone');
 fs.rmSync(QC, { recursive: true, force: true });
@@ -1636,7 +1636,7 @@ const wmQ = path.join(WM, 'queues', 'w.n1.queue.md');
 const wmOff = path.join(WM, '.qstate', 'w.n1.queue.md.offset');
 const blk = (ts, txt) => `\n## ${ts} · from alice\n${txt}\n`;
 fs.writeFileSync(wmQ, blk('2026-09-01 10:00', 'one') + blk('2026-09-01 10:01', 'two'));
-const wmFirst = await q.queueWait('w', { timeout: 1, root: WM });
+const wmFirst = await q.queueWait('w', { timeout: 0, root: WM });
 ok(wmFirst.changed && /one/.test(wmFirst.text) && /two/.test(wmFirst.text),
   'watermark: a first drain delivers everything');
 const wmCur = fs.readFileSync(wmOff, 'utf8');
@@ -1649,18 +1649,18 @@ ok(parseInt(wmCur.trim(), 10) === fs.statSync(wmQ).size,
 
 // PURGE: drop the first block, keep the second — the watermark is still in the file.
 fs.writeFileSync(wmQ, blk('2026-09-01 10:01', 'two'));
-ok(!(await q.queueWait('w', { timeout: 1, root: WM })).changed,
+ok(!(await q.queueWait('w', { timeout: 0, root: WM })).changed,
   'watermark: after a purge that kept the last delivered block, nothing is re-delivered');
 ok(parseInt(fs.readFileSync(wmOff, 'utf8').trim(), 10) === fs.statSync(wmQ).size,
   'watermark: and the cursor resumes at the end of that block, not at 0');
 fs.appendFileSync(wmQ, blk('2026-09-01 10:02', 'three'));
-const wmNext = await q.queueWait('w', { timeout: 1, root: WM });
+const wmNext = await q.queueWait('w', { timeout: 0, root: WM });
 ok(wmNext.changed && /three/.test(wmNext.text) && !/two/.test(wmNext.text),
   'watermark: the next append is delivered, and only it');
 
 // PURGE PAST the watermark: it went too, so every remaining block postdates it.
 fs.writeFileSync(wmQ, blk('2026-09-01 11:00', 'later'));
-const wmAfter = await q.queueWait('w', { timeout: 1, root: WM });
+const wmAfter = await q.queueWait('w', { timeout: 0, root: WM });
 ok(wmAfter.changed && /later/.test(wmAfter.text),
   'watermark: when the watermark itself was purged, what remains is newer and IS delivered');
 
@@ -1670,7 +1670,7 @@ fs.writeFileSync(wmQ, blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:00', '
 fs.writeFileSync(wmOff, `${fs.statSync(wmQ).size}\n## 2026-09-02 09:00 · from alice\n`);
 fs.writeFileSync(wmQ, blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:00', 'dup') + blk('2026-09-02 09:05', 'new'));
 fs.writeFileSync(wmOff, `999999\n## 2026-09-02 09:00 · from alice\n`);
-const wmDup = await q.queueWait('w', { timeout: 1, root: WM });
+const wmDup = await q.queueWait('w', { timeout: 0, root: WM });
 ok(!wmDup.changed || !/dup/.test(wmDup.text),
   'watermark: a repeated header resolves to its LAST occurrence, so nothing already seen repeats');
 
@@ -1681,7 +1681,7 @@ fs.writeFileSync(wmOff, '999999');
 const trims = q.outOfBandTrims({ root: WM });
 ok(trims.length === 1 && trims[0].file === 'w.n1.queue.md' && trims[0].hasMark === false,
   `outOfBandTrims: a cursor past the end of its file is found, and its missing watermark noted (got ${JSON.stringify(trims)})`);
-const wmLegacy = await q.queueWait('w', { timeout: 1, root: WM });
+const wmLegacy = await q.queueWait('w', { timeout: 0, root: WM });
 ok(wmLegacy.changed && /legacy-a/.test(wmLegacy.text),
   'watermark: with no watermark there is nothing to do better than restart from 0');
 ok(q.outOfBandTrims({ root: WM }).length === 0,
@@ -1842,7 +1842,7 @@ ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t(?: · id \d+)? · task #pine
 ok(q.peekQueueDepth('worker', { root: QT }).pending === 2,
   'queue task ref: the existing depth reader is unaffected by the extra field');
 ok(q.parseTaskRefs(qtText).join(',') === 'pine-3', 'queue task ref: parsed back out of delivered text');
-const qtWait = await q.queueWait('worker', { timeout: 1, root: QT });
+const qtWait = await q.queueWait('worker', { timeout: 0, root: QT });
 ok(qtWait.changed && qtWait.tasks && qtWait.tasks[0] === 'pine-3',
   'queue task ref: the consumer is told which task the message is about');
 
@@ -1857,12 +1857,12 @@ if (process.getuid && process.getuid() !== 0) {
   fs.mkdirSync(path.join(QS, '.qstate'), { recursive: true });
   core.setHubBase(QS);
   q.queueSend('stuck', 'order one', { from: 'orch', root: QS, node: 'n1' });
-  ok((await q.queueWait('stuck', { timeout: 1, root: QS })).changed, 'stall: setup — the first order is delivered normally');
+  ok((await q.queueWait('stuck', { timeout: 0, root: QS })).changed, 'stall: setup — the first order is delivered normally');
   q.queueSend('stuck', 'order two, sent while the cursor is read-only', { from: 'orch', root: QS, node: 'n1' });
   const offFile = path.join(QS, '.qstate', 'stuck.n1.queue.md.offset');
   fs.chmodSync(offFile, 0o444);
   let stallErr = null;
-  try { await q.queueWait('stuck', { timeout: 1, root: QS }); } catch (e) { stallErr = e; }
+  try { await q.queueWait('stuck', { timeout: 0, root: QS }); } catch (e) { stallErr = e; }
   ok(stallErr && stallErr.name === 'QueueStalled',
     `stall: a wait on an unwritable cursor throws instead of reporting NO_CHANGES (got ${stallErr ? stallErr.name : 'no error'})`);
   ok(stallErr && /silently held forever/.test(stallErr.message) && /chmod/.test(stallErr.message),
@@ -1871,15 +1871,15 @@ if (process.getuid && process.getuid() !== 0) {
     'stall: the inventory doctor reads carries it too, so it is visible without waiting');
   // A second role in the same hub stays deliverable: one broken cursor must not hide the rest.
   q.queueSend('fine', 'unrelated order', { from: 'orch', root: QS, node: 'n1' });
-  const okRole = await q.queueWait('fine', { timeout: 1, root: QS });
+  const okRole = await q.queueWait('fine', { timeout: 0, root: QS });
   ok(okRole.changed && /unrelated order/.test(okRole.text), 'stall: another role in the same hub still delivers');
   fs.chmodSync(offFile, 0o644);
-  const recovered = await q.queueWait('stuck', { timeout: 1, root: QS });
+  const recovered = await q.queueWait('stuck', { timeout: 0, root: QS });
   ok(recovered.changed && /order two/.test(recovered.text), 'stall: once writable, the held order is delivered — nothing was lost');
   // A marker left by a process that is gone is litter, and it used to stay forever.
   const waiter = path.join(QS, '.qstate', 'stuck.waiter');
   fs.writeFileSync(waiter, JSON.stringify({ pid: 999999, since: new Date().toISOString() }));
-  await q.queueWait('stuck', { timeout: 1, root: QS });
+  await q.queueWait('stuck', { timeout: 0, root: QS });
   ok(!fs.existsSync(waiter), 'stall: a waiter marker whose process is dead is cleared, not reported as a competitor');
   fs.rmSync(QS, { recursive: true, force: true });
 }
@@ -1894,7 +1894,7 @@ q.queueSend('w', 'one', { from: 'dev-t', root: QL, node: 'hostA' });
 // a JS string instead of a Buffer would miscount delivered/pending on any non-ASCII message.
 q.queueSend('w', 'two — a multi-byte dash · and a bullet', { from: 'dev-t', root: QL, node: 'hostA' });
 q.queueSend('w', 'three', { from: 'dev-t', root: QL, node: 'hostB' });
-const drained = await q.queueWait('w', { timeout: 1, root: QL });   // consumes hostA + hostB
+const drained = await q.queueWait('w', { timeout: 0, root: QL });   // consumes hostA + hostB
 ok(drained.changed, 'ledger: setup consumed the queue');
 q.queueSend('w', 'four, arrived after the read', { from: 'dev-t', root: QL, node: 'hostA' });
 const led = q.queueLedger({ root: QL }).roles.find(x => x.role === 'w');
@@ -2924,7 +2924,7 @@ fs.rmSync(ML, { recursive: true, force: true });
   core.setHubBase(FL);
   q.queueSend('head', 'one', { from: 'orch', root: FL, node: 'n1' });
   q.queueSend('head', 'two', { from: 'orch', root: FL, node: 'n1' });
-  await q.queueWait('head', { timeout: 1, root: FL, subscriber: 'reader-a' });    // reads both
+  await q.queueWait('head', { timeout: 0, root: FL, subscriber: 'reader-a' });    // reads both
   q.queueSend('head', 'three', { from: 'orch', root: FL, node: 'n1' });
   const row = q.queueLedger({ root: FL }).roles.find(r => r.role === 'head');
   ok(row.fanout && row.pending === null && row.delivered === null,
@@ -2950,7 +2950,7 @@ if (process.getuid && process.getuid() !== 0) {
   const groupRW = (f) => (fs.statSync(f).mode & 0o060) === 0o060;
   core.setHubBase(SH);
   q.queueSend('w', 'an order', { from: 'orch', root: SH, node: 'n1' });
-  await q.queueWait('w', { timeout: 1, root: SH });
+  await q.queueWait('w', { timeout: 0, root: SH });
   core.journalAppend({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'x' });
   ok(groupRW(path.join(SH, 'queues', 'w.n1.queue.md')), 'shared hub: a queue file is group-writable');
   ok(groupRW(path.join(SH, '.qstate', 'w.n1.queue.md.offset')), 'shared hub: so is the cursor — the file the stall was about');
@@ -3217,10 +3217,10 @@ core.setHubBase(SUBQ);
 
   fs.writeFileSync(path.join(SUBQ, 'subscriber-roles.json'), JSON.stringify(['chat']));
   qlib.queueSend('chat', 'one', { from: 'dev-t', root: SUBQ });
-  const w1 = await qlib.queueWait('chat', { root: SUBQ, timeout: 1, subscriber: sess.subscriberId() });
+  const w1 = await qlib.queueWait('chat', { root: SUBQ, timeout: 0, subscriber: sess.subscriberId() });
   qlib.queueSend('chat', 'two', { from: 'dev-t', root: SUBQ });
   sess.resetSessionId();                                   // "respawn": same env, new process identity
-  const w2 = await qlib.queueWait('chat', { root: SUBQ, timeout: 1, subscriber: sess.subscriberId() });
+  const w2 = await qlib.queueWait('chat', { root: SUBQ, timeout: 0, subscriber: sess.subscriberId() });
   ok(/one/.test(w1.text) && /two/.test(w2.text) && !/one/.test(w2.text), 'subscriber: after a respawn the reader resumes at its own position — not from zero, not from the end');
 
   // Two live sessions on one stable id split a broadcast — seen and reported, not silent.
@@ -3424,24 +3424,24 @@ core.setHubBase(WK);
   const a2 = core.runTaskAdd({ project: 'p', text: 'second job', assignee: 'w1', by: 'dev-t' }).task.id;
   const a3 = core.runTaskAdd({ project: 'p', text: 'after the first', assignee: 'w1', depends_on: [a1], by: 'dev-t' }).task.id;
   core.runTaskAdd({ project: 'p', text: 'someone else\'s', assignee: 'w2', by: 'dev-t' });
-  const w1 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  const w1 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(w1.changed && w1.offered.join(',') === [a1, a2].join(',') && !w1.work.some(w => w.id === a3),
     'work: the view is the role\'s ready tasks, most urgent first — a task waiting on an open one is not offered');
-  const w2 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  const w2 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(w2.changed && w2.offered.includes(a1), 'work: reading the view consumes nothing — a turn that did nothing with a task gets it again');
   core.runClaim({ task: a1, agent: 'w1', ttlMin: 30 });
   core.runClaim({ task: a2, agent: 'w1', ttlMin: 30 });
-  const w3 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  const w3 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(!w3.changed, 'work: a started (claimed) task is in progress and does not wake the role again');
   const db = core.loadClaims(); for (const c of db.claims) if (c.area === core.taskClaimArea(a1)) c.since = '2020-01-01 00:00';
   fs.writeFileSync(path.join(WK, 'claims.json'), JSON.stringify(db));
-  const w4 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  const w4 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(w4.changed && w4.offered.join(',') === String(a1), 'work: when the claim lapses — a dead session, an abandoned turn — the task is offered again');
   queueLib.queueSend('w1', 'clarification: use the staging db', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
   queueLib.queueSend('w1', 'ORDER: do the second job now', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
   core.runTaskUpdate({ id: a2, status: 'done', by: 'head-x' });   // the cancellation
   queueLib.queueSend('w1', 'general note, no task', { from: 'head-x', root: WK, node: 'n1' });
-  const w5 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  const w5 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(w5.changed && !/second job now/.test(w5.text) && /general note/.test(w5.text) && w5.skipped.length === 2 && w5.skipped[0].status[0] === 'done',
     'work: an order about a task that was closed meanwhile is held back — cancelling is closing, and nothing is left to execute');
   queueLib.queueSend('w1', 'note on the first: tests live in ci/', { from: 'head-x', root: WK, node: 'n1', task: String(a1) });
@@ -3454,7 +3454,7 @@ core.setHubBase(WK);
   ok(!core.activeClaims(core.loadClaims().claims).some(c => c.area === core.taskClaimArea(a1)), 'work: release --task gives a started task back');
   // without work mode nothing changes: the closed task's order is delivered like any message
   queueLib.queueSend('w9', 'plain order', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
-  const w6 = await queueLib.queueWait('w9', { timeout: 1, root: WK });
+  const w6 = await queueLib.queueWait('w9', { timeout: 0, root: WK });
   ok(w6.changed && /plain order/.test(w6.text) && !('work' in w6), 'work: a wait without work mode delivers exactly as before');
   const cli = run(`queue work w1 --json`, { HUBD_DIR: WK, HUBD_TEAM_DIR: WK, HUBD_NODE: 'n1' });
   ok(cli.code === 0 && JSON.parse(cli.out).offered.includes(a1), 'work: hub queue work reads the view without waiting');
