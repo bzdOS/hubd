@@ -2660,7 +2660,7 @@ ok(fs.readFileSync(path.join(qcolDir, 'hv.Pine.queue.md'), 'utf8').includes('sen
 const qcolOwn = core.JOURNAL_NODE;
 const qcolFlipped = qcolOwn.charAt(0).toUpperCase() + qcolOwn.slice(1);
 fs.writeFileSync(path.join(qcolDir, `hv3.${qcolFlipped}.queue.md`), '');
-queueLib.queueWait('hv3', { root: QCOL, timeoutSec: 0, subscriber: 'x' });
+await queueLib.queueWait('hv3', { root: QCOL, timeout: 0, subscriber: 'x' });
 const qcW = fs.readdirSync(qcolDir).filter(f => /^hv3\./i.test(f));
 ok(qcW.length === 1,
   `queueWait: waiting does not create a second spelling either (got ${qcW.join(', ')})`);
@@ -3718,6 +3718,40 @@ const WR = mktmp();
   ok(good === 0, 'hub: the wrapper runs the CLI as before');
 }
 
+// ── acks: an acked block leaves the unacked list, and id 1 is not id 12 ──
+const AK = mktmp();
+{
+  for (let i = 1; i <= 12; i++) queueLib.queueSend('ak', 'order ' + i, { from: 'dev-t', root: AK, node: 'n1' });
+  await queueLib.queueWait('ak', { root: AK, timeout: 0 });
+  ok(queueLib.peekQueueDepthWithAcks('ak', { root: AK }).unacked === 12, 'acks: a delivered block is unacked until acked');
+  queueLib.queueAck('ak', 12, { root: AK });
+  queueLib.queueAck('ak', '3', { root: AK });
+  const u = queueLib.peekQueueDepthWithAcks('ak', { root: AK });
+  ok(u.unacked === 10 && !u.unackedBlocks.some(b => b.id === 12 || b.id === 3),
+    `acks: an acked block leaves the unacked count, a string id included (it only ever grew; got ${u.unacked})`);
+  // a trimmed shard that still holds id 12 but not id 1, read before the shard that holds id 1
+  fs.writeFileSync(path.join(AK, 'queues', 'ak2.a.queue.md'), '## 2026-09-01 10:00 · from dev-t · id 12\nlate\n');
+  fs.writeFileSync(path.join(AK, 'queues', 'ak2.b.queue.md'), '## 2026-09-01 10:00 · from dev-t · id 1\nfirst\n');
+  queueLib.queueAck('ak2', 1, { root: AK });
+  ok(!fs.existsSync(path.join(AK, 'queues', 'ak2.a.acks')) && fs.existsSync(path.join(AK, 'queues', 'ak2.b.acks')),
+    'acks: id 1 is acked in the shard that holds id 1, not in one that holds id 12');
+  let bad = null; try { queueLib.queueAck('ak', 'x1', { root: AK }); } catch (e) { bad = e.message; }
+  ok(/positive integer/.test(bad || ''), 'acks: a block id that is not a number is refused, not searched for');
+}
+
+// ── cards merge: the dry run says whether the alias exists, not always yes ──
+core.setHubBase(AK);
+{
+  core.runCardSet({ project: 'mg-a', digest: 'dup', by: 'dev-t' });
+  core.runCardSet({ project: 'mg-b', digest: 'canon', by: 'dev-t' });
+  ok(core.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === false, 'cards merge: a dry run without an alias says so');
+  fs.writeFileSync(path.join(AK, 'project-aliases.json'), JSON.stringify({ 'mg-a': 'mg-b' }));
+  ok(core.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
+  const fl = run('report --message x', { HUBD_DIR: AK, HUBD_AGENT: 'dev-t' });
+  ok(fl.code === 1 && /unknown flag: --message/.test(fl.out), 'cli: a flag no command reads is an error, not silently dropped (use -m)');
+}
+core.setHubBase(T0);
+
 // ── the board in the browser: nothing from the hub is markup ──
 const XS = mktmp();
 core.setHubBase(XS);
@@ -3762,7 +3796,7 @@ core.setHubBase(XS);
 }
 core.setHubBase(T0);
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL, RG, BD, WK, SN, HG, RD, GI, WR, XS]) fs.rmSync(d, { recursive: true, force: true });
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL, RG, BD, WK, SN, HG, RD, GI, WR, AK, XS]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
