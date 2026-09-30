@@ -1361,6 +1361,14 @@ fs.writeFileSync(path.join(QC, '.qstate', 'busy.waiter'),
 await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
 ok(has(core.envChecks(), 'queue-fanout-undeclared'),
   'envChecks: two waiters on one cursor become an actionable item, not a stderr line nobody sees');
+// A work queue back to a single waiter clears it too: the competitor is gone, so is the finding.
+fs.rmSync(path.join(QC, '.qstate', 'busy.waiter'), { force: true });
+await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
+ok(!has(core.envChecks(), 'queue-fanout-undeclared'),
+  'envChecks: one waiter again clears the conflict — a notice must not outlive its cause');
+fs.writeFileSync(path.join(QC, '.qstate', 'busy.waiter'),
+  JSON.stringify({ pid: process.ppid, since: new Date().toISOString() }));
+await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
 fs.writeFileSync(path.join(QC, 'subscriber-roles.json'), JSON.stringify(['busy']));
 await qWait('busy', { timeout: 1, root: QC, subscriber: 'sess-a' });
 ok(!has(core.envChecks(), 'queue-fanout-undeclared'),
