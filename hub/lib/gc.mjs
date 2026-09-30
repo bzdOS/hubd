@@ -10,7 +10,10 @@
  * Classes, each listed before anything moves:
  *   queues    queue files of a name that is not a declared role, or of a role that is switched
  *             off — untouched for `days`, never an owner or broadcast role, never one somebody is
- *             waiting on right now. Archived to queues/archive/, their cursors to .qstate/_archive/.
+ *             waiting on right now, on any node. Archived to queues/archive/, their cursors to
+ *             .qstate/_archive/. Only files this node may move (see shardHold in core): its own
+ *             shards, and shards with no writer left; never another live node's, never an empty
+ *             one. What is held back is listed as `skipped`, with the reason.
  *   waiters   .waiter markers of processes that are gone (node-local litter). Removed.
  *   presence  presence records of names that are not roles, older than `days`. Node-local;
  *             moved to presence/_archive/.
@@ -18,6 +21,13 @@
  *             stopped waiting). Cleared.
  *   tasks     open tasks assigned to a name that is not a role. LISTED ONLY: reassigning or closing
  *             them is the project head's decision, never a cleanup's.
+ *   local     this node's own litter, which never travels: locks older than a minute, the task
+ *             cache's backups, orphaned .tmp.<pid> files of a crashed write, reader namespaces idle
+ *             for a week (moved to .qstate/_archive/), session records older than a week.
+ *
+ * Without --apply NOTHING is touched, the local class included. It used to be removed on every run
+ * of a command whose other half was a dry run, and printed ahead of the listing, so `hub gc --json`
+ * was not JSON.
  *
  * With no roles declared the name-based classes check nothing and say so — without a registry
  * every role would look like a stranger.
@@ -26,10 +36,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
-  HUB, PRESENCE, now, parseTs, slugify, loadTasks, roleRegistry, ownerRoles, loadPresence, requireAuthor,
+  HUB, PRESENCE, JOURNAL_NODE, now, parseTs, slugify, loadTasks, roleRegistry, ownerRoles, loadPresence, presenceSnapshots, requireAuthor,
+  liveMeshNodes, shardHold,
   envObservations, clearEnvObservation, journalAppend,
 } from './core.mjs';
-import { resolveQueueRoot, subscriberRoles, pidAlive } from './queue.mjs';
+import { resolveQueueRoot, subscriberRoles, pidAlive, subscriberNamespaces, archiveStaleSubscribers } from './queue.mjs';
 
 const DAY = 86400000;
 
@@ -38,16 +49,68 @@ function newestBlockMs(file, size) {
   try {
     const fd = fs.openSync(file, 'r');
     try {
-      const n = Math.min(size, 65536), buf = Buffer.alloc(n);
-      fs.readSync(fd, buf, 0, n, size - n);
-      let best = null;
-      for (const m of buf.toString('utf8').matchAll(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from /gm)) {
-        const ms = parseTs(m[1]).getTime();
-        if (Number.isFinite(ms) && (best == null || ms > best)) best = ms;
+      // the tail first; the whole file only when one message is longer than the tail
+      for (const n of [Math.min(size, 65536), Math.min(size, 16 * 1048576)]) {
+        const buf = Buffer.alloc(n);
+        fs.readSync(fd, buf, 0, n, size - n);
+        let best = null;
+        for (const m of buf.toString('utf8').matchAll(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from /gm)) {
+          const ms = parseTs(m[1]).getTime();
+          if (Number.isFinite(ms) && (best == null || ms > best)) best = ms;
+        }
+        if (best != null || n === size) return best;
       }
-      return best;
+      return null;
     } finally { fs.closeSync(fd); }
   } catch { return null; }
+}
+
+const WEEK = 7 * DAY;
+
+/** This node's own litter (see the header). Read-only. */
+export function localLitter({ root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const nowMs = Date.now();
+  const out = { locks: [], backups: [], tmp: [], readers: [], sessions: 0 };
+  let names = [];
+  try { names = fs.readdirSync(HUB); } catch {}
+  for (const f of names) {
+    let age; try { age = nowMs - fs.statSync(path.join(HUB, f)).mtimeMs; } catch { continue; }
+    if (f.endsWith('.lock')) { if (age > 60000) out.locks.push(f); }                 // live ones are stolen after 30s
+    else if (f.startsWith('tasks.json.bak')) out.backups.push(f);                     // ONLY the cache's own backups, never a user .bak
+    else if (f.includes('.tmp.')) { if (age > 60000) out.tmp.push(f); }             // a crashed atomicWrite
+  }
+  try { out.readers = subscriberNamespaces({ root: r, days: 7 }).filter(n => n.stale).map(n => (n.tap ? '__watchall__/' : '') + n.name); } catch {}
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(HUB, '.env-state.json'), 'utf8'));
+    for (const rec of Object.values(st.sessions || {})) {
+      const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
+      if (!at || nowMs - at > WEEK) out.sessions++;
+    }
+  } catch {}
+  return out;
+}
+
+function applyLocalLitter(l, r) {
+  let removed = 0;
+  for (const f of [...l.locks, ...l.backups, ...l.tmp]) { try { fs.unlinkSync(path.join(HUB, f)); removed++; } catch {} }
+  let readers = 0;
+  if (l.readers.length) { try { readers = archiveStaleSubscribers({ root: r, days: 7 }).moved.length; } catch {} }
+  let sessions = 0;
+  if (l.sessions) {
+    try {
+      const esf = path.join(HUB, '.env-state.json');
+      const st = JSON.parse(fs.readFileSync(esf, 'utf8'));
+      const keep = {}, nowMs = Date.now();
+      for (const [sid, rec] of Object.entries(st.sessions || {})) {
+        const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
+        if (at && nowMs - at <= WEEK) keep[sid] = rec; else sessions++;
+      }
+      st.sessions = keep;
+      fs.writeFileSync(esf, JSON.stringify(st, null, 1));
+    } catch {}
+  }
+  return { removed, readers, sessions };
 }
 
 export function hubGcPlan({ root, days = 14 } = {}) {
@@ -61,11 +124,14 @@ export function hubGcPlan({ root, days = 14 } = {}) {
   if (!roles.size) notes.push('no roles are declared (resource cards of type "role"): queues, presence and tasks were not judged by name');
 
   const qdir = path.join(r, 'queues'), st = path.join(r, '.qstate');
-  const presence = new Map(loadPresence().map(p => [p.agent, p]));
-  const aliveOf = (name) => { const p = presence.get(name); return !!p && nowMs < parseTs(p.last_seen).getTime() + (p.ttlMin ?? 15) * 60000; };
+  // alive anywhere in the mesh: this node's registry and every other node's published snapshot
+  const everyone = [...loadPresence(), ...presenceSnapshots().flatMap(sn => sn.agents)];
+  const aliveOf = (name) => everyone.some(p => p && (p.agent === name || p.role === name) &&
+    nowMs < parseTs(p.last_seen).getTime() + (p.ttlMin ?? 15) * 60000);
+  const live = liveMeshNodes({ root: r, days: Math.max(days, 30) });
   const waiterAlive = (role) => { try { return pidAlive(JSON.parse(fs.readFileSync(path.join(st, `${role}.waiter`), 'utf8')).pid); } catch { return false; } };
 
-  const queues = [];
+  const queues = [], skipped = [];
   if (roles.size) {
     let files = [];
     try { files = fs.readdirSync(qdir).filter(f => f.endsWith('.queue.md')); } catch {}
@@ -80,7 +146,12 @@ export function hubGcPlan({ root, days = 14 } = {}) {
       const idleDays = Math.floor((nowMs - (last ?? stt.mtimeMs)) / DAY);
       if (idleDays < days) continue;
       const reg = roles.get(slugify(role));
-      queues.push({ file: f, role, node: m && m[2] ? m[2] : null, bytes: stt.size, idleDays, reason: reg ? 'role is off' : 'not a declared role' });
+      const node = m && m[2] ? m[2] : null;
+      const row = { file: f, role, node, bytes: stt.size, idleDays, reason: reg ? 'role is off' : 'not a declared role' };
+      const hold = shardHold(node, last == null ? 0 : 1, live);
+      if (hold) { skipped.push({ ...row, why: hold }); continue; }
+      row.whose = !node ? 'no node in its name' : String(node).toLowerCase().replace(/[^a-z0-9_-]+/g, '-') === JOURNAL_NODE ? 'this node' : live ? `node ${node} writes no more` : 'no mesh';
+      queues.push(row);
     }
   }
 
@@ -129,7 +200,7 @@ export function hubGcPlan({ root, days = 14 } = {}) {
         projects: [...new Set(list.map(x => x.project))].sort(), ids: list.map(x => x.id) });
     }
   }
-  return { root: r, days, queues, waiters, presence: stalePresence, env, tasks, notes, generated: now() };
+  return { root: r, days, node: JOURNAL_NODE, queues, skipped, waiters, presence: stalePresence, env, tasks, local: localLitter({ root: r }), notes, generated: now() };
 }
 
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -161,6 +232,7 @@ export function runHubGc({ root, days = 14, apply = false, by } = {}) {
     try { fs.mkdirSync(pdir, { recursive: true }); fs.renameSync(path.join(PRESENCE, slugify(p.agent) + '.json'), path.join(pdir, slugify(p.agent) + '.json')); presenceMoved++; } catch {}
   }
   for (const e of plan.env) clearEnvObservation(e.kind, e.value);
+  const local = applyLocalLitter(plan.local, r);
 
   /* One commit for the whole move, so every peer receives it as one change it can read. When
    * that is not possible (not a repo, a sync holding the index right now) the files stay moved and
@@ -179,5 +251,5 @@ export function runHubGc({ root, days = 14, apply = false, by } = {}) {
     journalAppend({ ts: now(), project: 'hub', agent: author, kind: 'note',
       text: `hub gc: archived ${moved.length} queue file(s), removed ${waitersRemoved} dead waiter marker(s), archived ${presenceMoved} presence record(s), cleared ${plan.env.length} stale observation(s)` });
   }
-  return { apply: true, ...plan, moved, failed, waitersRemoved, presenceMoved, envCleared: plan.env.length, commit, commitError };
+  return { apply: true, ...plan, moved, failed, waitersRemoved, presenceMoved, envCleared: plan.env.length, localRemoved: local, commit, commitError };
 }

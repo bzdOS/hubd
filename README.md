@@ -71,6 +71,7 @@ hub doctor           # hub base, team root, locks, queues, ghost queues, writer 
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
 hub queue gc         # list queues nobody ever consumed (--apply archives them)
+hub gc               # everything that piled up, by class; touches nothing without --apply --by
                      # doctor also flags: work dispatched to a role with nobody
                      # home, and queues trimmed outside hubd (which used to
                      # re-deliver everything that survived the trim)
@@ -249,9 +250,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   is a track. `hub board` puts every track on one screen for the owner — each
   role's state, what got done this week and why it was accepted, what is next,
   what waits for you. `hub sense <head>` measures the head's workers and branches
-  without a model and wakes the head only on an event. A loop reports its state
-  as heartbeat fields (`--state`, `--turn`, `--empty` ...), so nothing parses its
-  wording.
+  without a model and wakes the head only on an event; with no private patterns
+  declared it passes no branch. A loop reports its state as heartbeat fields
+  (`--state`, `--turn`, `--empty` ...), so nothing parses its wording.
 - **Resources & relationships** — infra is a card too: hosts, vms, services,
   endpoints, providers under `resources/`, with structured frontmatter
   (type, address, os, provider, status) and **typed `[[wikilink]]` edges**

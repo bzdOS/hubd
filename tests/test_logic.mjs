@@ -79,8 +79,14 @@ fs.rmSync(T0, { recursive: true, force: true });
 const T1 = mktmp();
 fs.writeFileSync(path.join(T1, 'tasks.json.bak.20260101T000000Z'), 'old cache');
 fs.writeFileSync(path.join(T1, 'mynote.bak.md'), 'a card the user backed up by hand');
-run('gc', { HUBD_DIR: T1 });
-ok(!fs.existsSync(path.join(T1, 'tasks.json.bak.20260101T000000Z')), 'gc: removes tasks.json.bak.*');
+const gcDryT1 = run('gc', { HUBD_DIR: T1 });
+ok(fs.existsSync(path.join(T1, 'tasks.json.bak.20260101T000000Z')) && /task cache backup tasks\.json\.bak/.test(gcDryT1.out) && /dry run, nothing touched/.test(gcDryT1.out),
+  'gc: without --apply the local litter is listed and nothing is removed');
+const gcJsonT1 = run('gc --json', { HUBD_DIR: T1 });
+let gcJsonOk = false; try { gcJsonOk = JSON.parse(gcJsonT1.out).local.backups.length === 1; } catch {}
+ok(gcJsonOk, 'gc: --json prints JSON and nothing else');
+run('gc --apply --by dev-t', { HUBD_DIR: T1 });
+ok(!fs.existsSync(path.join(T1, 'tasks.json.bak.20260101T000000Z')), 'gc: --apply removes tasks.json.bak.*');
 ok(fs.existsSync(path.join(T1, 'mynote.bak.md')), 'gc: keeps a user .bak file (precise matcher, no data loss)');
 fs.rmSync(T1, { recursive: true, force: true });
 
@@ -1179,7 +1185,7 @@ for (const p of [['role-sub'], ['__watchall__', 'tap-sub'], ['fresh-sub']]) {
   if (p[p.length - 1] !== 'fresh-sub') fs.utimesSync(f, monthOld, monthOld);
 }
 fs.writeFileSync(path.join(GC, '.qstate', 'shared.queue.md.offset'), '0');   // a shared cursor, must survive
-const gcOut = run('gc', { HUBD_DIR: GC, HUBD_TEAM_DIR: GC });
+const gcOut = run('gc --apply --by dev-t', { HUBD_DIR: GC, HUBD_TEAM_DIR: GC });
 ok(!fs.existsSync(path.join(GC, '.qstate', 'role-sub')), 'gc: sweeps a stale role-subscriber cursor');
 ok(!fs.existsSync(path.join(GC, '.qstate', '__watchall__', 'tap-sub')),
   `gc: sweeps a stale fleet-tap cursor under __watchall__ too (out=${gcOut.out.trim().split('\n').pop()})`);
@@ -1385,7 +1391,7 @@ const stG = JSON.parse(fs.readFileSync(esf, 'utf8'));
 stG.sessions = { fresh: { protocolAcked: '9.9.9', at: new Date().toISOString() },
                  old: { protocolAcked: '9.9.9', at: new Date(Date.now() - 30 * 86400000).toISOString() } };
 fs.writeFileSync(esf, JSON.stringify(stG, null, 1));
-run('gc', { HUBD_DIR: EV, HUBD_TEAM_DIR: EV });
+run('gc --apply --by dev-t', { HUBD_DIR: EV, HUBD_TEAM_DIR: EV });
 const stAfter = JSON.parse(fs.readFileSync(esf, 'utf8'));
 ok(!stAfter.sessions.old && !!stAfter.sessions.fresh,
   `gc: sweeps a stale session record and keeps a fresh one (left ${Object.keys(stAfter.sessions)})`);
@@ -1682,13 +1688,27 @@ ok(/NO watermark — will restart from 0/.test(run('doctor', { HUBD_DIR: WM, HUB
   'doctor: and says which of them will re-deliver, rather than letting it happen quietly');
 fs.rmSync(WM, { recursive: true, force: true });
 
+// this node's own shard (the tests run as node "cedar"), and an empty one of its own
+fs.writeFileSync(path.join(QG, 'queues', 'ghost.cedar.queue.md'), oldMsg);
+fs.writeFileSync(path.join(QG, 'queues', 'hollow.cedar.queue.md'), '');
+const qgOld = new Date(Date.now() - 60 * 86400000);
+fs.utimesSync(path.join(QG, 'queues', 'hollow.cedar.queue.md'), qgOld, qgOld);
 const gcDry = q.runQueueGc({ root: QG, days: 30 });
-ok(gcDry.apply === false && fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
+ok(gcDry.apply === false && fs.existsSync(path.join(QG, 'queues', 'ghost.cedar.queue.md')),
   'queue gc: the dry run moves nothing');
+ok(gcDry.held.map(h => h.file).join() === 'hollow.cedar.queue.md' && /no message/.test(gcDry.held[0].why),
+  `queue gc: an empty file is held back, with its reason; with no git mesh every other ghost is this node's to move (${gcDry.held.map(h => h.file)})`);
+// who may move what, in a mesh: own shards and writerless ones, never a live node's, never an empty file
+const liveSet = new Set(['cedar', 'n1']);
+ok(/still writes to the mesh/.test(core.shardHold('n1', 2, liveSet)) && core.shardHold('Cedar', 2, liveSet) === null &&
+  core.shardHold('gone', 2, liveSet) === null && core.shardHold(null, 2, liveSet) === null && /no message/.test(core.shardHold('cedar', 0, liveSet)) &&
+  core.shardHold('n1', 2, null) === null,
+  'shardHold: a live node\'s shard is held; this node\'s (any case), a gone node\'s, a node-less one move; an empty one never');
 const gcRun = q.runQueueGc({ root: QG, days: 30, apply: true });
-ok(gcRun.moved.length === 2 && !fs.existsSync(path.join(QG, 'queues', 'ghost.n1.queue.md')),
-  `queue gc: apply archives the ghosts (moved ${gcRun.moved.length})`);
-ok(fs.readFileSync(path.join(QG, 'queues', 'archive', 'ghost.n1.queue.md'), 'utf8') === oldMsg,
+ok(gcRun.moved.sort().join() === 'ghost.cedar.queue.md,ghost.n1.queue.md,tapped.n1.queue.md' && !fs.existsSync(path.join(QG, 'queues', 'ghost.cedar.queue.md')) &&
+  fs.existsSync(path.join(QG, 'queues', 'hollow.cedar.queue.md')),
+  `queue gc: apply archives the ghosts that hold a message and leaves the empty one (moved ${gcRun.moved})`);
+ok(fs.readFileSync(path.join(QG, 'queues', 'archive', 'ghost.cedar.queue.md'), 'utf8') === oldMsg,
   'queue gc: archived content is byte-identical — moved, never deleted');
 ok(fs.existsSync(path.join(QG, 'queues', 'live.n1.queue.md')) && fs.existsSync(path.join(QG, 'queues', 'boss.n1.queue.md')),
   'queue gc: live and owner queues stay put');
@@ -3499,6 +3519,8 @@ core.setHubBase(SN);
   sense.collectEvents(conf, stD, nowS, deadP, [], [], null, null, {}, cfg);
   const rD = sense.collectEvents(conf, stD, nowS + 1900, deadP, [], [], null, null, {}, cfg);
   ok(!rD.ev.length && rD.esc.length === 2, 'sense: a worker that is not running goes to the fleet, never to the head');
+  const rO = sense.collectEvents(conf, { waiting: { a: nowS - 20 * 60 } }, nowS, presI, [{ id: 't1', assignee: 'a', status: 'open' }, { id: 't2', assignee: 'a', status: 'in_progress' }, { id: 't3', assignee: 'a', status: 'done' }], [], null, null, {}, cfg);
+  ok(/open on it: t1, t2\./.test(rO.ev[0][2]), 'sense: a task in progress is still open work on the worker; a done one is not');
   const stB = { wakes: [nowS - 10, nowS - 20, nowS - 30, nowS - 40] };
   ok(!sense.budgetOk(stB, nowS, false, cfg) && sense.budgetOk(stB, nowS, true, cfg), 'sense: past the hourly budget only critical events wake the head');
 
@@ -3512,7 +3534,12 @@ core.setHubBase(SN);
   sh(`git clone -q ${G}/canon.git review`, G);
   core.runResourceSet({ slug: 'h1', type: 'role', attrs: { rank: 'head', project: 'p', repo: path.join(G, 'canon.git'), base: 'main', review: path.join(G, 'review') }, by: 'dev-t' });
   core.runResourceSet({ slug: 'w1', type: 'role', attrs: { rank: 'worker', project: 'p' }, edges: { head: ['h1'] }, by: 'dev-t' });
+  // before any pattern is declared: a check with nothing to check with is not a pass
+  const [okn, txtn] = sense.checkBranch(sense.senseConf('h1'), 'task/feat');
+  ok(okn === false && /FAIL no private patterns declared/.test(txtn), 'sense: with no private patterns declared, a branch fails the checklist — nothing was checked, so nothing passes');
+  ok(core.runLint().findings.some(f => f.id === 'private-check-undeclared' && f.role === 'h1'), 'lint: a head that accepts branches of a repo with no private patterns is a finding');
   fs.writeFileSync(path.join(SN, 'sense.json'), JSON.stringify({ private: ['secret-host-[0-9]+'] }));
+  ok(!core.runLint().findings.some(f => f.id === 'private-check-undeclared'), 'lint: and declaring them in sense.json clears it');
   const sc = sense.senseConf('h1');
   ok(sc && sc.workers.join(',') === 'w1' && Object.keys(sense.remoteBranches(sc.repo)).join(',') === 'task/feat', 'sense: the head\'s repo and workers come from the registry; task branches are listed');
   const [okc, txt] = sense.checkBranch(sc, 'task/feat');
@@ -3540,6 +3567,42 @@ core.setHubBase(SN);
   ok(cliR.code === 1, `sense: the CLI keeps the loop contract — 1 when there is nothing new (got ${cliR.code})`);
   const cliE = run('sense nobody', { HUBD_DIR: SN, HUBD_TEAM_DIR: SN });
   ok(cliE.code >= 2, 'sense: a failure is never mistaken for "no events" (exit above 1)');
+
+  /* A wake held back by the budget puts back everything the pass moved. The journal marks were put
+   * back and the fingerprints of the mark's minute were not: the held-back report then counted as
+   * seen, and the head never got it. */
+  core.runResourceSet({ slug: 'h2', type: 'role', attrs: { rank: 'head', project: 'p2' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'w2', type: 'role', attrs: { rank: 'worker', project: 'p2' }, edges: { head: ['h2'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'w3', type: 'role', attrs: { rank: 'worker', project: 'p2' }, edges: { head: ['h2'] }, by: 'dev-t' });
+  core.runHeartbeat({ agent: 'w2', state: 'turn', turn: 1, turn_started: 'now' });
+  const T = core.now();
+  core.journalAppend({ ts: T, project: 'p2', agent: 'w2', kind: 'note', text: 'first report of the minute' });
+  ok(sense.runSenseEvents('h2').code === 1, 'sense budget: the first pass only marks the journal');
+  core.journalAppend({ ts: T, project: 'p2', agent: 'w2', kind: 'note', text: 'second report of the same minute' });
+  const sp = path.join(sense.senseDir(), 'head.h2.json');
+  const busy = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  const hBefore = JSON.stringify(busy.journal_h);
+  busy.wakes = [1, 2, 3, 4].map(i => Date.now() / 1000 - i * 60);
+  fs.writeFileSync(sp, JSON.stringify(busy));
+  const held = sense.runSenseEvents('h2');
+  const after = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  ok(held.code === 1 && JSON.stringify(after.journal_h) === hBefore && after.journal.w2 === busy.journal.w2,
+    `sense budget: a held-back wake restores the journal mark AND the minute's fingerprints (${JSON.stringify(after.journal_h)})`);
+  after.wakes = []; fs.writeFileSync(sp, JSON.stringify(after));
+  const late = sense.runSenseEvents('h2');
+  ok(late.code === 0 && /second report of the same minute/.test(late.text) && !/first report of the minute/.test(late.text),
+    'sense budget: the held-back report arrives on the next pass, once');
+  ok(sense.runSenseEvents('h2').code === 1, 'sense budget: and is not repeated after that');
+  // escalations go to the file the monitor reads when HUBD_SENSE_ESCALATIONS names it
+  const escLog = path.join(SN, 'monitor-escalations.log');
+  process.env.HUBD_SENSE_ESCALATIONS = escLog;
+  const dead = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  dead.pending['dead:w3'] = { first: Date.now() / 1000 - 2000, last: Date.now() / 1000 - 2000, esc: 0 };
+  fs.writeFileSync(sp, JSON.stringify(dead));
+  sense.runSenseEvents('h2');
+  delete process.env.HUBD_SENSE_ESCALATIONS;
+  ok(fs.existsSync(escLog) && /^\d+\th2\tworker w3 not running/m.test(fs.readFileSync(escLog, 'utf8')) && !fs.existsSync(path.join(sense.senseDir(), 'escalations.log')),
+    'sense: escalations are appended to HUBD_SENSE_ESCALATIONS when set, in the line format a monitor reads, and nowhere else');
   fs.rmSync(G, { recursive: true, force: true });
 }
 core.setHubBase(T0);
@@ -3558,9 +3621,17 @@ core.setHubBase(HG);
   core.runResourceSet({ slug: 'old-w', type: 'role', status: 'off', attrs: { rank: 'worker', project: 'p' }, by: 'dev-t' });
   fs.writeFileSync(path.join(HG, 'owner-roles.json'), '["boss"]');
   const old = '\n## 2026-01-01 00:00 · from x\nold order\n';
-  for (const f of ['ghost.n1.queue.md', 'old-w.n1.queue.md', 'live-w.n1.queue.md', 'boss.n1.queue.md']) fs.writeFileSync(path.join(q, f), old);
-  fs.writeFileSync(path.join(q, 'fresh.n1.queue.md'), `\n## ${core.now()} · from x\nnew\n`);
-  fs.writeFileSync(path.join(st, 'ghost.n1.queue.md.offset'), '10');
+  // the tests run as node "cedar": .cedar. files are this node's shards, .n2. another node's
+  for (const f of ['ghost.cedar.queue.md', 'old-w.cedar.queue.md', 'live-w.cedar.queue.md', 'boss.cedar.queue.md', 'ghost.n2.queue.md', 'remote-w.cedar.queue.md',
+    'ghost.gone.queue.md', 'legacy.queue.md']) fs.writeFileSync(path.join(q, f), old);
+  fs.writeFileSync(path.join(q, 'fresh.cedar.queue.md'), `\n## ${core.now()} · from x\nnew\n`);
+  fs.writeFileSync(path.join(q, 'hollow.cedar.queue.md'), '');
+  const longAgo = new Date(Date.now() - 60 * 86400000);
+  fs.utimesSync(path.join(q, 'hollow.cedar.queue.md'), longAgo, longAgo);
+  fs.writeFileSync(path.join(st, 'ghost.cedar.queue.md.offset'), '10');
+  // alive on another node, as that node published it: not a role, but not gone either
+  fs.writeFileSync(path.join(HG, 'presence.n2.json'), JSON.stringify({ node: 'n2', written: core.now(), agents: [{ agent: 'remote-w', last_seen: core.now(), ttlMin: 15, node: 'n2' }] }));
+  fs.writeFileSync(path.join(HG, 'tasks.json.bak.1'), 'cache backup');
   fs.writeFileSync(path.join(st, 'gone.waiter'), JSON.stringify({ pid: 999999, since: '2020-01-01' }));
   fs.mkdirSync(path.join(HG, 'presence'), { recursive: true });
   fs.writeFileSync(path.join(HG, 'presence', 'stranger.json'), JSON.stringify({ agent: 'stranger', last_seen: '2026-01-01 00:00', ttlMin: 15 }));
@@ -3568,32 +3639,130 @@ core.setHubBase(HG);
   core.runTaskAdd({ project: 'p', text: 'on an off role', assignee: 'old-w', by: 'dev-t' });
   sh0('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed', HG);
   const plan = gc.hubGcPlan({ root: HG });
-  ok(plan.queues.map(x => x.file).sort().join(',') === 'ghost.n1.queue.md,old-w.n1.queue.md',
-    'gc: queues of a name that is no role and of a role switched off are listed; live, owner and freshly written ones are not');
+  ok(plan.queues.map(x => x.file).sort().join(',') === 'ghost.cedar.queue.md,ghost.gone.queue.md,legacy.queue.md,old-w.cedar.queue.md',
+    `gc: queues of a name that is no role and of a role switched off are listed — this node's, a gone node's, a node-less one; live, owner, fresh and alive-elsewhere ones are not (${plan.queues.map(x => x.file)})`);
+  ok(plan.skipped.some(x => x.file === 'ghost.n2.queue.md' && /shard of node n2, which still writes/.test(x.why)) && plan.skipped.some(x => x.file === 'hollow.cedar.queue.md' && /no message/.test(x.why)),
+    'gc: a live node\'s shard and an empty file are left where they are, each with its reason');
+  ok(plan.local.backups.join() === 'tasks.json.bak.1' && fs.existsSync(path.join(HG, 'tasks.json.bak.1')), 'gc: this node\'s litter is listed by the dry run and left in place');
   ok(plan.waiters.length === 1 && plan.presence.map(p => p.agent).join() === 'stranger' && plan.env.some(e => e.value === 'ghost'),
     'gc: dead waiter markers, stale presence of non-roles and notices whose cause is gone are listed');
   ok(plan.tasks.length === 1 && plan.tasks[0].assignee === 'old-w' && plan.tasks[0].reason === 'role is off', 'gc: open tasks on a role that is off are listed for the head to decide');
-  ok(fs.existsSync(path.join(q, 'ghost.n1.queue.md')), 'gc: the dry run moves nothing');
+  ok(fs.existsSync(path.join(q, 'ghost.cedar.queue.md')), 'gc: the dry run moves nothing');
   let eb = null; try { gc.runHubGc({ root: HG, apply: true }); } catch (e) { eb = e.message; }
   ok(/by required/.test(eb || ''), 'gc: --apply needs an author');
   const res = gc.runHubGc({ root: HG, apply: true, by: 'dev-t' });
-  ok(res.moved.length === 2 && fs.readFileSync(path.join(q, 'archive', 'ghost.n1.queue.md'), 'utf8') === old && !fs.existsSync(path.join(q, 'ghost.n1.queue.md')),
+  ok(res.moved.length === 4 && fs.readFileSync(path.join(q, 'archive', 'ghost.cedar.queue.md'), 'utf8') === old && !fs.existsSync(path.join(q, 'ghost.cedar.queue.md')),
     'gc: --apply moves the queue into queues/archive/ with its bytes intact');
-  ok(fs.existsSync(path.join(st, '_archive', 'ghost.n1.queue.md.offset')) && !fs.existsSync(path.join(st, 'gone.waiter')) &&
+  ok(fs.existsSync(path.join(q, 'ghost.n2.queue.md')) && fs.existsSync(path.join(q, 'hollow.cedar.queue.md')), 'gc: --apply leaves another node\'s shard and the empty file alone');
+  ok(fs.existsSync(path.join(st, '_archive', 'ghost.cedar.queue.md.offset')) && !fs.existsSync(path.join(st, 'gone.waiter')) &&
     fs.existsSync(path.join(HG, 'presence', '_archive', 'stranger.json')), 'gc: its cursor goes along, the dead marker goes, the stale presence is archived');
+  ok(!fs.existsSync(path.join(HG, 'tasks.json.bak.1')) && res.localRemoved.removed >= 1, 'gc: --apply clears this node\'s litter');
   ok(core.loadTasks().tasks.find(t => t.assignee === 'old-w').status === 'open', 'gc: tasks are never touched');
-  ok(!!res.commit && sh0('git log -1 --format=%s', HG).trim() === 'hub gc: archived 2 queue file(s) by dev-t', 'gc: the move is one commit that says what it was');
+  ok(!!res.commit && sh0('git log -1 --format=%s', HG).trim() === 'hub gc: archived 4 queue file(s) by dev-t', 'gc: the move is one commit that says what it was');
   // mesh-sync's guard, run against the same move left uncommitted
   sh0('git reset -q --soft HEAD~1 && git reset -q', HG);
   let rc = 0; try { execSync(`sh ${REPO}/scripts/mesh-sync.sh`, { env: { ...process.env, HUBD_DIR: HG }, stdio: 'pipe' }); } catch (e) { rc = e.status; }
   ok(rc === 0, `gc: mesh-sync accepts an archived queue even uncommitted — the bytes are in the archive (got ${rc})`);
-  fs.rmSync(path.join(q, 'live-w.n1.queue.md'));
+  fs.rmSync(path.join(q, 'live-w.cedar.queue.md'));
   rc = 0; try { execSync(`sh ${REPO}/scripts/mesh-sync.sh`, { env: { ...process.env, HUBD_DIR: HG }, stdio: 'pipe' }); } catch (e) { rc = e.status; }
   ok(rc === 4, `gc: while an rm of a queue is still refused (got ${rc})`);
 }
 core.setHubBase(T0);
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL, RG, BD, WK, SN, HG]) fs.rmSync(d, { recursive: true, force: true });
+// ── two readers of one work queue, across nodes ──
+const RD = mktmp();
+core.setHubBase(RD);
+{
+  core.runResourceSet({ slug: 'rw', type: 'role', attrs: { rank: 'worker', project: 'p' }, by: 'dev-t' });
+  core.runHeartbeat({ agent: 'rw', role: 'rw' });
+  const nobody = core.queueReaderConflicts();
+  ok(!nobody.length, 'readers: one live session of a role is no conflict');
+  fs.writeFileSync(path.join(RD, 'presence.n2.json'), JSON.stringify({ node: 'n2', written: core.now(), agents: [{ agent: 'rw', role: 'rw', last_seen: core.now(), ttlMin: 15, node: 'n2' }] }));
+  const two = core.queueReaderConflicts();
+  ok(two.length === 1 && two[0].how === 'nodes' && two[0].nodes.join() === 'cedar,n2', `readers: the same role alive on two nodes is two readers (${JSON.stringify(two)})`);
+  ok(core.runLint().findings.some(f => f.id === 'two-readers-one-queue' && /alive on 2 nodes/.test(f.what)), 'lint: and a finding');
+  const au = core.runAudit({ git: false });
+  ok(au.findings.some(f => f.id === 'two-readers-one-queue' && f.key === 'two-readers-one-queue:rw:nodes'), 'audit: and an audit finding with a stable key');
+  fs.writeFileSync(path.join(RD, 'subscriber-roles.json'), '["rw"]');
+  ok(!core.queueReaderConflicts().length, 'readers: a broadcast role has many readers by design');
+}
+core.setHubBase(T0);
+
+// ── node-local files stay node-local: the hub's .gitignore is completed, not only created ──
+const GI = mktmp();
+{
+  fs.writeFileSync(path.join(GI, '.gitignore'), 'node_modules/\n');
+  const fr = run('freeze "testing the ignore lines" --by dev-t', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  const gi = fs.readFileSync(path.join(GI, '.gitignore'), 'utf8');
+  ok(fr.code === 0 && /^\.mesh-freeze$/m.test(gi) && /^\.qstate\/$/m.test(gi) && /^node_modules\/$/m.test(gi), 'gitignore: an existing .gitignore gets the node-local lines it lacked, its own kept');
+  run('unfreeze', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  execSync('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed && echo "{}" > .mesh-freeze && git add -f .mesh-freeze && git -c user.name=t -c user.email=t@t commit -q -m oops && rm .mesh-freeze', { cwd: GI, stdio: 'pipe' });
+  const doc = run('doctor', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  ok(/TRACKED anyway {2}WARNING — \.mesh-freeze/.test(doc.out), 'doctor: a node-local file git tracks anyway is a warning, with how to untrack it');
+  const fr2 = run('freeze "again" --by dev-t', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  ok(/WARNING: \.mesh-freeze is TRACKED/.test(fr2.out), 'freeze: says so when its marker would travel with a hand-made commit');
+  run('unfreeze', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+}
+
+// ── `hub` itself: a CLI that cannot load still exits with a code that means failure ──
+const WR = mktmp();
+{
+  fs.cpSync(path.join(REPO, 'hub'), path.join(WR, 'hub'), { recursive: true });
+  fs.copyFileSync(path.join(REPO, 'package.json'), path.join(WR, 'package.json'));
+  fs.rmSync(path.join(WR, 'hub', 'lib', 'sense.mjs'));
+  const wr = (a) => { try { execSync(`node ${WR}/hub/hub.mjs ${a}`, { stdio: 'pipe', env: { ...process.env, HUBD_DIR: WR } }); return { code: 0, err: '' }; } catch (e) { return { code: e.status, err: String(e.stderr || '') }; } };
+  const bs = wr('sense h1');
+  ok(bs.code === 3 && /sense\.mjs/.test(bs.err), `hub: a module that fails to load exits 3 for hub sense, with the error printed — never 1, "no events" (got ${bs.code})`);
+  ok(wr('version').code === 1, 'hub: every other command keeps the exit code a crash always had');
+  let good = 0; try { execSync(`node ${REPO}/hub/hub.mjs version`, { stdio: 'pipe' }); } catch (e) { good = e.status; }
+  ok(good === 0, 'hub: the wrapper runs the CLI as before');
+}
+
+// ── the board in the browser: nothing from the hub is markup ──
+const XS = mktmp();
+core.setHubBase(XS);
+{
+  core.runResourceSet({ slug: 'h9', type: 'role', attrs: { rank: 'head', project: 'px' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'w9', type: 'role', attrs: { rank: 'worker', project: 'px' }, edges: { head: ['h9'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'w8', type: 'role', attrs: { rank: 'worker', project: 'px' }, edges: { head: ['h9'] }, by: 'dev-t' });
+  const evil = 'ok" autofocus onfocus="alert(1)';
+  core.runHeartbeat({ agent: 'w9', status: evil, state: 'waiting' });
+  core.runHeartbeat({ agent: 'w8', status: 'plain loop' });
+  core.runTaskAdd({ project: 'px', text: `title "><img src=x onerror=alert(2)> it's`, assignee: 'w9', by: 'dev-t' });
+  const port = 18900 + (process.pid % 90);
+  const srvB = spawn('node', [path.join(REPO, 'hub/cli.mjs'), 'serve', '-p', String(port)], { env: { ...process.env, HUBD_DIR: XS, HUBD_TEAM_DIR: XS }, stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('board server did not start')), 8000);
+    srvB.stdout.on('data', (d) => { if (String(d).includes('hubd kanban')) { clearTimeout(to); resolve(); } });
+  });
+  try {
+    const page = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    const script = page.slice(page.indexOf('<script>') + 8, page.lastIndexOf('</script>'));
+    const vm = await import('node:vm');
+    const els = {};
+    const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
+    const ctx = vm.createContext({
+      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [] },
+      localStorage: { getItem: (k) => (k === 'hubd-mode' ? 'tracks' : null), setItem() {} },
+      location: { search: '', hash: '' },
+      fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),
+      setInterval: () => 0, clearInterval: () => {}, console,
+    });
+    vm.runInContext(script, ctx);
+    for (let i = 0; i < 100 && !(els.tracks && els.tracks.innerHTML); i++) await new Promise(r => setTimeout(r, 30));
+    const html = (els.tracks ? els.tracks.innerHTML : '') + (els['waiting-body'] ? els['waiting-body'].innerHTML : '');
+    ok(vm.runInContext('esc(`"\'<>&`)', ctx) === '&quot;&#39;&lt;&gt;&amp;', 'serve: esc() escapes both quotes as well as <, > and &');
+    ok(html.includes('ok&quot; autofocus onfocus=&quot;alert(1)') && !html.includes(evil),
+      'serve: a heartbeat status with quotes stays inside its title attribute (it used to open an event handler in the owner\'s browser)');
+    ok(!/<img src=x/.test(html) && html.includes('&lt;img src=x'), 'serve: a task title is text, never markup');
+    ok(/alive<div class="meta">seen \d+m ago/.test(html), 'serve: a role alive without state fields says how long ago it was seen');
+    const b = await (await fetch(`http://127.0.0.1:${port}/api/board?all=1`)).json();
+    ok(b.all === true && b.journalDays >= 30, 'serve: the board takes all=1 (every project) and reads a journal window, not the whole journal');
+  } finally { srvB.kill(); }
+}
+core.setHubBase(T0);
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL, RG, BD, WK, SN, HG, RD, GI, WR, XS]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');

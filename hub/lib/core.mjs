@@ -1496,6 +1496,54 @@ export function findProjectDuplicates() {
  * A lint appears in `findings` whether or not it is enforced; `enforced` says which ones the
  * instance opted into, so "we have a rule about that" and "the rule bites" stay distinguishable.
  */
+/** Whether the hub-wide private patterns (sense.json -> private) name at least one pattern. */
+export function privatePatternsDeclared() {
+  try {
+    const p = (JSON.parse(fs.readFileSync(path.join(HUB, 'sense.json'), 'utf8')) || {}).private;
+    return Array.isArray(p) ? p.some(x => typeof x === 'string' && x) : typeof p === 'string' && !!p;
+  } catch { return false; }
+}
+
+/* Two readers of one work queue, seen two ways.
+ *   cursor  two live waiters on ONE cursor on this node. queueWait records it the moment the second
+ *           one starts and clears it once one is left, so it is true now: each message goes to one
+ *           of them at random, and each thinks it saw the whole queue.
+ *   nodes   one role alive on two nodes at once. Every node keeps its own cursors, so there BOTH
+ *           receive every message and both act on it — an orphaned session on a second node once
+ *           undid a worker's tree for ten hours this way.
+ * Broadcast roles (subscriber-roles.json) and owner roles have many readers by design. With a role
+ * registry, only declared roles count: a free-form presence `role` is not necessarily a queue. */
+export function queueReaderConflicts() {
+  const out = [];
+  for (const role of ((envObservations()['cursor-conflict'] || {}).values || [])) out.push({ role: String(role), how: 'cursor', nodes: [JOURNAL_NODE] });
+  const skip = new Set(ownerRoles());
+  for (const dir of new Set([HUB, process.env.HUBD_TEAM_DIR].filter(Boolean))) {
+    try { for (const r of JSON.parse(fs.readFileSync(path.join(dir, 'subscriber-roles.json'), 'utf8'))) skip.add(r); } catch {}
+  }
+  const roster = roleRegistry();
+  const nowMs = Date.now();
+  const byRole = new Map();
+  const add = (p, node) => {
+    if (!p || !p.agent || !node || !presenceAlive(p, nowMs)) return;
+    const role = p.role || p.agent;
+    if (skip.has(role) || (roster.size && !roster.has(slugify(role)))) return;
+    (byRole.get(role) || byRole.set(role, new Set()).get(role)).add(node);
+  };
+  for (const p of loadPresence()) add(p, p.node || JOURNAL_NODE);
+  for (const sn of presenceSnapshots()) for (const p of sn.agents) add(p, sn.node);
+  for (const [role, nodes] of byRole) {
+    if (nodes.size > 1 && !out.some(o => o.role === role)) out.push({ role, how: 'nodes', nodes: [...nodes].sort() });
+  }
+  return out;
+}
+function readerConflictText(c) {
+  return c.how === 'cursor'
+    ? { what: `two live sessions wait on the work queue "${c.role}" through one cursor — each message reaches only one of them, and neither knows`,
+        fix: `stop one of them, or give each its own cursor: declare "${c.role}" in subscriber-roles.json (a broadcast) and start each with its own HUBD_SUBSCRIBER` }
+    : { what: `the role "${c.role}" is alive on ${c.nodes.length} nodes at once (${c.nodes.join(', ')}) — each node has its own cursor, so every order to it is carried out ${c.nodes.length} times`,
+        fix: `stop the session that should not be running (hub presence --role ${c.role} shows both), or declare "${c.role}" a broadcast in subscriber-roles.json if it is meant to have many readers` };
+}
+
 export function runLint(a = {}) {
   const { strict, money } = rulesConfig();
   const findings = [];
@@ -1601,14 +1649,21 @@ export function runLint(a = {}) {
     }
   }
 
-  /* (7) Two live readers on one work queue. queueWait records this the moment a second waiter
-   *     shares a cursor and clears it once one is left, so what is here is true now: each message
-   *     goes to one of them at random, and each thinks it saw the whole queue. */
-  const conflicts = ((envObservations()['cursor-conflict'] || {}).values || []);
-  for (const role of conflicts) {
-    findings.push({ id: 'two-readers-one-queue', severity: 'high', role,
-      what: `two live sessions wait on the work queue "${role}" through one cursor — each message reaches only one of them, and neither knows`,
-      fix: `stop one of them, or give each its own cursor: declare "${role}" in subscriber-roles.json (a broadcast) and start each with its own HUBD_SUBSCRIBER` });
+  // (7) Two live readers on one work queue — see queueReaderConflicts.
+  for (const c of queueReaderConflicts()) findings.push({ id: 'two-readers-one-queue', severity: 'high', role: c.role, ...readerConflictText(c) });
+
+  /* (8) A head that accepts branches for a repo with no private patterns to check them against.
+   *     The sensor fails every such branch (a check with nothing to check with is not a pass), so
+   *     this is the finding that says why before a head meets it branch by branch. */
+  if (roster.size) {
+    const global = privatePatternsDeclared();
+    for (const h of [...roster.values()].filter(r => r.rank === 'head' && r.status !== 'off' && r.attrs && r.attrs.repo)) {
+      if (global || h.attrs.private) continue;
+      if (restrict && !(h.project && restrict.includes(h.project))) continue;
+      findings.push({ id: 'private-check-undeclared', severity: 'high', role: h.role, project: h.project || undefined,
+        what: `head ${h.role} accepts branches of ${h.attrs.repo}, and no private patterns are declared — the sensor fails every branch until they are`,
+        fix: `declare them as data: "private": ["<regex>", ...] in the hub's sense.json (every head), or hub resource set ${h.role} --attr private='<regex>' --by <you> (this head)` });
+    }
   }
 
   const LINT_DEFAULTS = {
@@ -1619,6 +1674,7 @@ export function runLint(a = {}) {
     'card-without-digest': 'A card no check can read is unchecked, however well it reads to a person.',
     'duplicate-project': 'Two slugs for the same project split its history and tasks between two cards — a worker was seen entering an empty loop.',
     'assignee-outside-roster': 'The role registry is the only source of role names; work assigned to any other name is nobody\'s.',
+    'private-check-undeclared': 'What counts as private is data the owner declares; a check that has none passes nothing.',
   };
   for (const f of findings) {
     const law = lawFor(f.id, LINT_DEFAULTS[f.id] || f.id);
@@ -1657,6 +1713,7 @@ const AUDIT_DEFAULTS = {
   'owner-backlog': 'A decision only the owner can make is either made or withdrawn; carrying it is the third option nobody chose.',
   'report-at-end-only': 'A finding is written as FACT: at the moment of the finding; a report that lies entirely in the last minutes of a session is the findings that were not.',
   'work-without-journal': 'Commits without a journal are work nobody else can build on; the repository knows what changed, only the journal knows what was learned.',
+  'two-readers-one-queue': 'A work queue has one reader; a second one either takes half the orders unseen or carries out every order twice.',
 };
 
 /**
@@ -1841,6 +1898,11 @@ export function runAudit(a = {}) {
       }
     }
     if (!checked) notes.push('work-without-journal checked nothing: no card records a local `- path:` with a git checkout on this node.');
+  }
+
+  // (9) Two readers of one work queue (queueReaderConflicts): declared one reader, observed two.
+  for (const c of queueReaderConflicts()) {
+    findings.push({ id: 'two-readers-one-queue', key: `two-readers-one-queue:${c.role}:${c.how}`, severity: 'high', role: c.role, ...readerConflictText(c) });
   }
 
   // The thermometer: reported, never filed. A rate is not a violation, and dressing one up as an
@@ -2413,19 +2475,37 @@ export function ackEnvNotices(session) {
   } catch {}
 }
 
+/* Everything in a hub that belongs to ONE node and must never travel by mesh-sync (which runs a
+ * plain `git add -A`). One list: `hub init` writes it into a new .gitignore, and every hub run
+ * completes an existing one with the lines it lacks.
+ *
+ * "Completes" is the half that was missing. init used to write these lines only when it created
+ * the file, so a hub made before a line existed never got it — and `.mesh-freeze` was such a line:
+ * a manual `git add -A` in a frozen hub committed the marker, the next sync carried it to a peer,
+ * and the peer froze too. A frozen node does not pull, so it could not receive the fix either. */
+export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/'];
+const gitignoreAdded = [];
 function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
   let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
   const esc = entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp('^' + esc + '$', 'm').test(g)) return;
-  try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); } catch {}
+  if (new RegExp('^' + esc + '$', 'm').test(g)) return false;
+  try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); gitignoreAdded.push(entry); return true; } catch { return false; }
+}
+export function ensureHubGitignore() { return HUB_GITIGNORE.filter(ensureGitignored); }
+/** The lines this process appended to the hub's .gitignore (hub doctor says so). */
+export function gitignoreAddedThisRun() { return [...new Set(gitignoreAdded)]; }
+/** Node-local paths that git TRACKS anyway — ignoring a file does not untrack it, so these travel
+ *  whatever .gitignore says. */
+export function trackedNodeLocal() {
+  if (!fs.existsSync(path.join(HUB, '.git'))) return [];
+  return HUB_GITIGNORE.filter(e => sh(`git ls-files -- "${e.replace(/\/$/, '')}"`, HUB).trim());
 }
 
 export function ensureProtocol(force) {
   try {
     fs.mkdirSync(HUB, { recursive: true });
-    ensureGitignored('HUBD.md'); ensureGitignored('presence/'); ensureGitignored('.env-state.json');
-    ensureGitignored('.sense/');   // a head sensor's own state: what THIS node already told its head
+    ensureHubGitignore();   // HUBD.md, presence/, .sense/ (a head sensor's own state), the freeze marker...
     /* The whatsnew checkpoints. The comment on runWhatsNew has claimed since it was written that
      * this file is gitignored and never mesh-synced — and on the hub it was written against it was
      * TRACKED, so every node's "what did I miss" checkpoint travelled to every other node and
@@ -4765,6 +4845,37 @@ export function presenceSnapshots() {
     } catch { out.push({ node, written: null, v: null, agents: [], unreadable: true }); }
   }
   return out.sort((a, b) => (a.node < b.node ? -1 : 1));
+}
+
+/* ── Who may move a queue file ──
+ *
+ * A shard <role>.<node>.queue.md has ONE writer: the node in its name (a sender appends to its own
+ * node's shard, and a waiting loop creates its own node's empty one). Moving it from anywhere else
+ * races that writer, and the owner is left with a modify/delete conflict that stops its sync until
+ * a person resolves it — reproduced on two clones. So a node moves its own shards, and two kinds
+ * that have no writer left: a shard of a node that no longer writes to the mesh (no presence
+ * snapshot and no mesh commit for `days`), and a file with no node in its name (written before
+ * per-node files existed; nothing writes one now). Two nodes moving the same writerless file at
+ * once make the same change, which merges cleanly. An empty file is never moved: it is what a
+ * waiting loop creates for itself and the likeliest to be written again. */
+const nodeKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+/** The nodes that still write to the mesh, or null when the hub is not a git mesh at all. */
+export function liveMeshNodes({ root = HUB, days = 30 } = {}) {
+  const repo = [root, HUB].find(d => d && fs.existsSync(path.join(d, '.git')));
+  if (!repo) return null;
+  const live = new Set([JOURNAL_NODE]);
+  const since = Date.now() - days * 86400000;
+  for (const sn of presenceSnapshots()) { const ms = sn.written ? parseTs(sn.written).getTime() : NaN; if (ms >= since) live.add(nodeKey(sn.node)); }
+  for (const n of sh(`git log --since="${Math.max(1, Math.floor(days))} days ago" --format=%cn`, repo).split('\n')) if (n.trim()) live.add(nodeKey(n.trim()));
+  return live;
+}
+/** Why THIS node may not move a queue file (null: it may). `live` from liveMeshNodes. */
+export function shardHold(node, messages, live) {
+  if (!messages) return 'holds no message';
+  if (live == null || !node) return null;
+  const k = nodeKey(node);
+  if (k === JOURNAL_NODE || !live.has(k)) return null;
+  return `a shard of node ${node}, which still writes to the mesh: only that node moves it (hub gc there)`;
 }
 
 /* ── What a loop is doing, as fields ──
