@@ -26,7 +26,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock } from './core.mjs';
+import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
+  loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -138,7 +139,7 @@ function subscriberDirs(stateDir) {
   } catch { return []; }
 }
 
-function pidAlive(pid) {
+export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (e) { return e.code === 'EPERM'; }
 }
@@ -455,7 +456,59 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
  * @param {{ timeout?: number, root?: string }} options
  * @returns {Promise<{ changed: true, text: string } | { changed: false }>}
  */
-export async function queueWait(role, { timeout = 540, root, subscriber, fromNow = false } = {}) {
+/* ── A role's queue as a view on its tasks ──
+ *
+ * Orders and tasks were two stores, and work fell between them. An order taken by a turn that did
+ * nothing was gone while its task stayed open; a cancellation queued BEHIND the order it cancelled
+ * arrived after the order was executed; "a task is assigned and no order was ever sent" was a whole
+ * class of idle time that only an outside observer could see. So the work itself becomes the queue:
+ *
+ *   - the view is the role's open, ready tasks (every dependency closed), most urgent first;
+ *   - reading it consumes nothing — a task leaves the view only when it is closed;
+ *   - starting is a claim on `task:<id>` with a TTL; while it holds, the task is in progress and
+ *     not offered again, and when it lapses (a dead session, an abandoned turn) the task is back;
+ *   - cancelling is closing the task, so there is nothing left in the queue to execute;
+ *   - "idle" is a ready task with no claim — one read of the hub, no inference from a loop's text.
+ *
+ * Messages keep working exactly as before and ride along: the newest blocks that name a task are
+ * attached to it, so a clarification is read with the work it clarifies. */
+export { taskClaimArea };
+
+export function roleWork(role, { root, messages = 5 } = {}) {
+  const tasks = loadTasks().tasks;
+  const { list } = eligibleOpen(tasks, { assignee: role });
+  const claims = activeClaims(loadClaims().claims || []);
+  const today3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const blocks = recentBlocks({ root, to: [role], textChars: 2000 }).filter(b => b.task);
+  return [...list].sort(byUrgency(today3)).map(t => {
+    const c = claims.find(x => x.area === taskClaimArea(t.id));
+    const until = c ? new Date(parseTs(c.since).getTime() + (c.ttlMin ?? 240) * 60000).toISOString().slice(0, 16).replace('T', ' ') : null;
+    const about = blocks.filter(b => b.task === String(t.id)).slice(-messages)
+      .map(b => ({ ts: b.ts, from: b.from, id: b.id, text: b.text }));
+    return { id: t.id, project: t.project, title: taskTitle(t.text), text: t.text, importance: t.importance || null,
+      deadline: t.deadline || null, claim: c ? { agent: c.agent, since: c.since, until, note: c.note || null } : null,
+      ...(about.length ? { messages: about } : {}) };
+  });
+}
+
+/** The delivered text split back into blocks, with the ones about closed tasks held back: a
+ *  cancellation closes the task, and the order still sitting in the file must not run after it. */
+function withholdClosed(text) {
+  const tasks = new Map(loadTasks().tasks.map(t => [String(t.id), t]));
+  const heads = [...String(text).matchAll(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm)];
+  if (!heads.length) return { text, skipped: [] };
+  const keep = [String(text).slice(0, heads[0].index)], skipped = [];
+  heads.forEach((h, i) => {
+    const block = String(text).slice(h.index, i + 1 < heads.length ? heads[i + 1].index : undefined);
+    const refs = parseTaskRefs(h[0]);
+    const closed = refs.length && refs.every(r => tasks.has(r) && tasks.get(r).status !== 'open');
+    if (closed) skipped.push({ header: h[0], tasks: refs, status: refs.map(r => tasks.get(r).status) });
+    else keep.push(block);
+  });
+  return { text: keep.join('').trim(), skipped };
+}
+
+export async function queueWait(role, { timeout = 540, root, subscriber, fromNow = false, work = false } = {}) {
   assertRole(role);
   assertSubscriber(subscriber);
   const r = root ?? resolveQueueRoot();
@@ -576,11 +629,22 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
         catch (e) { if (e && e.name === 'QueueStalled') { stalled.push(e); continue; } throw e; }
         if (t) parts.push(t);
       }
-      if (parts.length) {
-        const text = parts.join('\n').trim();
+      // With `work`, the role's ready tasks are part of what wakes it: an unclaimed one means there
+      // is something to do whether or not a message arrived — including after a turn that did
+      // nothing with it, which is exactly the case where a consumed order used to be lost.
+      const view = work ? roleWork(role, { root: r }) : null;
+      const offered = view ? view.filter(w => !w.claim) : [];
+      if (parts.length || offered.length) {
+        let text = parts.join('\n').trim();
+        let skipped = [];
+        if (work && text) ({ text, skipped } = withholdClosed(text));
         const tasks = parseTaskRefs(text);
-        return { changed: true, text, ...(tasks.length ? { tasks } : {}),
-          ...(stalled.length ? { stalled: stalled.map(s => ({ file: s.file, code: s.code })) } : {}) };
+        if (text || offered.length || skipped.length) {
+          return { changed: true, text, ...(tasks.length ? { tasks } : {}),
+            ...(view ? { work: view, offered: offered.map(w => w.id) } : {}),
+            ...(skipped.length ? { skipped } : {}),
+            ...(stalled.length ? { stalled: stalled.map(s => ({ file: s.file, code: s.code })) } : {}) };
+        }
       }
       if (stalled.length) throw stalled[0];
       if (Date.now() >= deadline) return { changed: false };
@@ -1260,8 +1324,11 @@ export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } 
       text = readTail(path.join(qdir, f), off, size);
     } catch { continue; }
 
-    // Same header shape peekQueueDepth counts, so the list and the count can never disagree.
-    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · task #([^\n]+))?$/gm;
+    // Same header shape peekQueueDepth counts, so the list and the count can never disagree —
+    // including the block id queueSend stamps between the sender and the task ref. Without it
+    // every block written since ids exist matched nothing here, and the owner's list went empty
+    // while the count said there was work.
+    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id \d+)?(?: · task #([^\n]+))?$/gm;
     let mm, prev = null;
     const push = (h, body) => {
       const subject = String(body || '').split('\n').map(l => l.trim()).find(Boolean) || '';
@@ -1280,6 +1347,55 @@ export function ownerQueueItems({ root, roles, limit = 20, subjectChars = 100 } 
   }
   out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));   // oldest first: that is the queue
   return limit > 0 ? out.slice(0, limit) : out;
+}
+
+/**
+ * Blocks written inside a time window, across every host's file for a role — read-only, no cursor
+ * involved, so it answers "what was said" rather than "what is unread here". `to` restricts by the
+ * role a file belongs to, `from` by the sender. Only the tail of each file is read: a window of
+ * days never needs a file's whole history, and some role files run to hundreds of kilobytes.
+ *
+ * @returns {Array<{role,node,ts,from,id,task,subject,text}>} oldest first
+ */
+export function recentBlocks({ root, to, from, sinceMs = 0, tailBytes = 262144, subjectChars = 160, textChars = 1200 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const toSet = to ? new Set(to) : null;
+  const fromSet = from ? new Set(from) : null;
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => /\.queue\.md$/.test(f)); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    const m = f.match(/^(.+?)(?:\.([^.]+))?\.queue\.md$/);
+    const role = m ? m[1] : f;
+    if (toSet && !toSet.has(role)) continue;
+    let text;
+    try {
+      const file = path.join(qdir, f);
+      const size = fs.statSync(file).size;
+      if (!size) continue;
+      text = readTail(file, Math.max(0, size - tailBytes), size);
+    } catch { continue; }
+    const re = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id (\d+))?(?: · task #([^\n]+))?$/gm;
+    let mm, prev = null;
+    const push = (h, body) => {
+      const ms = parseTs(h.ts).getTime();
+      if (!(ms >= sinceMs)) return;
+      if (fromSet && !fromSet.has(h.from)) return;
+      const b = String(body || '').trim();
+      const subject = b.split('\n').map(l => l.trim()).find(Boolean) || '';
+      out.push({ role, node: m && m[2] ? m[2] : null, ts: h.ts, from: h.from, id: h.id, task: h.task,
+        subject: subject.length > subjectChars ? subject.slice(0, subjectChars) + '…' : subject,
+        text: b.length > textChars ? b.slice(0, textChars) + '…' : b });
+    };
+    while ((mm = re.exec(text)) !== null) {
+      if (prev) push(prev.h, text.slice(prev.end, mm.index));
+      prev = { h: { ts: mm[1], from: mm[2].trim(), id: mm[3] ? Number(mm[3]) : null, task: mm[4] ? mm[4].trim() : null }, end: re.lastIndex };
+    }
+    if (prev) push(prev.h, text.slice(prev.end));
+  }
+  out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
+  return out;
 }
 
 export function buttonsSummary(rows) {

@@ -4,6 +4,72 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.28 — 2026-09-30
+
+A fleet asked for four things that all needed the same missing piece — the hub knew every role only
+by what it wrote, never what it IS — so that piece comes first.
+
+- **Roles are cards.** A role is a resource card of type `role`: `rank` (`head`, `worker`, `fleet`),
+  `project`, a `head` link from a worker, `status: off`, and any attribute its tooling needs (`repo`,
+  `base`, `review`, `plan`, `idle_min`). `hub resource set` takes open attributes with
+  `--attr key=value` (`attrs` over MCP); an empty value removes one. `hub lint` reports open work
+  assigned to a name that is neither a role nor an owner role, and says it checked nothing while no
+  roles are declared.
+- **A loop reports its state as fields.** `hub heartbeat` / `hub_heartbeat` take `state`
+  (`turn` | `waiting` | `exit`), `turn`, `turn_started` (`now`), `empty_count`, `silent_count`,
+  `exit_reason`. A supervisor used to parse the loop's status wording and went blind whenever a word
+  changed. The hub keeps `state_since` across heartbeats that repeat a state — the loop's own
+  counters restart with the loop — and a turn's start while its number stays the same. A heartbeat
+  without them keeps the old record shape.
+- **`hub board`, and a Tracks view in `hub serve`.** Every track (a project with a head) on one
+  screen: each role's state, current task, last journal step and handoff; what got done in the
+  window with the journal line that accepted it; what is next, most urgent first; what is blocked
+  and on what; the branch verdicts; what the head's sensor last raised. Above them, what waits for
+  the owner: the owner queue, the owner's tasks, `owner-go` tasks, escalations to a `fleet` role and
+  its answers. Titles are a task's first line, at most 80 characters, on the kanban too; the rest is
+  one click away. Tracks are the default view when heads are declared. A tenant's board reads only
+  the tenant's queues.
+- **The History view** of `hub serve` is a bar per month of the journal and one entry at a time,
+  with step and playback controls; it reads the journal through the same reader as every other view.
+- **Work mode: a role's queue as its tasks.** `hub queue wait <role> --tasks` (`hub_queue_wait`
+  with `tasks: true`) also returns the role's open, ready tasks, most urgent first, each with its
+  claim and the latest messages that name it, and wakes while one is offered. Reading consumes
+  nothing; starting is a claim on the task (`hub claim --task <id>`, `hub_claim({task})`) with a TTL,
+  and a lapsed claim offers it again — so a turn that did nothing with an order loses nothing. An
+  order about a task that was closed meanwhile is held back: cancelling is closing. `hub queue work
+  <role>` shows the view without waiting. Without the flag nothing changes.
+- **`hub sense <head>`: a head's sensor without a model.** Workers judged from heartbeat fields
+  (idle on the sensor's clock, stuck, a long turn; a worker that is not running goes to the fleet,
+  not the head), new reports from the journal — to the minute with a fingerprint, so two reports of
+  one minute are two, and never one the worker already sent to the head's queue, matched by text —
+  and task branches in the head's repo through a checklist in its review clone (on the base, commits,
+  build products, private patterns). Exit 0 with text wakes the head, 1 is nothing new, 3 is a
+  failure. Non-critical wakes are budgeted per hour, an event standing an hour is escalated.
+  `hub sense <head> verdict <branch> accept|reject` writes `ACCEPT|REJECT <full sha>` to the journal
+  and sends the order to whoever handed the branch in. Thresholds and patterns live in
+  `<hub>/sense.json`, state in `.sense/` (node-local), and each node publishes `sense.<node>.json`.
+- **`hub gc` lists what piles up, by class, and archives it the one way the mesh accepts.** Queues
+  of a name that is no live role, dead waiter markers, stale presence of non-roles, notices whose
+  cause is gone, and — listed only — open tasks on such names. `--apply --by <you>` moves queues into
+  `queues/archive/` with their cursors, in one commit. **mesh-sync now accepts a deleted log exactly
+  when the same bytes are in an archive**; before, it refused the very `hub queue gc --apply` its own
+  refusal message recommended. An `rm` or an edited copy is still refused.
+- `hub lint` reports two live readers on one work queue while it is true.
+- **Fixed: the owner's list of queue items was empty for every block written since block ids
+  exist.** Its header pattern did not allow the id between sender and task, so `hub brief` counted
+  buttons it could not list.
+- **Queue messages carry a block id and can be acknowledged.** Headers read `· from <sender> · id
+  <N>`, and `hub_queue_ack` marks a block processed, not just read, so a sender can tell a zombie
+  reader from a working one.
+- `hub_report` takes `TO: <role>`: the entry stays public, and readers can filter by addressee.
+- `hub lint` reports two cards that describe one project (same path or repo); `hub cards merge
+  <from> <to>` aliases one to the other and archives it.
+- Unknown CLI flags are an error instead of being ignored. Interrupted atomic writes clean up after
+  themselves, and stale temp files are removed at start-up and by `hub gc`.
+- `HUBD_TASK_ID_PREFIX` replaces the hostname in new task ids; the sequence continues from the
+  highest id under either name.
+- A cursor-conflict notice clears once a work queue is back to one waiter.
+
 ## 0.9.27 — 2026-09-27
 
 - **`hub presence --json` and `hub log --json`.** The table render truncates names and statuses to

@@ -28,6 +28,8 @@
 #   * A DELETED LOG IS ALSO NOT APPEND-ONLY (exit 4). The guard above reads diffs, and a file
 #     that is gone has no diff to read. Removing journal.<node>.jsonl or a queue file deletes
 #     history for every peer on the next push, which is the same damage by a different route.
+#     The one exception is a MOVE into an archive with the bytes intact (hub gc): same history,
+#     another name. It is checked by content, so an rm or an edited copy is still refused.
 #   * KEEP A SHARED HUB WRITABLE (after pull). On a fleet node the hub is one directory used by
 #     several users — roles under one account, this script under root. Whatever a pull creates
 #     belongs to the user running the pull, so a root-run sync silently locks the roles out of
@@ -98,14 +100,30 @@ if git diff HEAD -- '*.events.jsonl' 2>/dev/null | grep -E '^-[^-]' | grep -q .;
   exit 4
 fi
 
-DELETED_LOGS="$(git diff --name-only --diff-filter=D HEAD -- '*.jsonl' '*.queue.md' 2>/dev/null)"
+# A deleted log is accepted in exactly one case: the same bytes sit in an archive in the working
+# tree — queues/archive/ (where hub gc and hub queue gc move a queue) or _archive/<same path>.
+# That is a move, not a deletion: the history still travels to every peer, under another name.
+# Anything else — an rm, a move with changed content — is still refused. Without this, the
+# archive commands this message recommends were refused by this very check.
+archived() {
+  want="$(git rev-parse -q --verify "HEAD:$1" 2>/dev/null)" || return 1
+  b="$(basename "$1")"
+  for a in "_archive/$1" queues/archive/"${b%.queue.md}".*queue.md queues/archive/"$b"; do
+    [ -f "$a" ] && [ "$(git hash-object "$a" 2>/dev/null)" = "$want" ] && return 0
+  done
+  return 1
+}
+DELETED_LOGS=""
+for f in $(git diff --name-only --diff-filter=D HEAD -- '*.jsonl' '*.queue.md' 2>/dev/null); do
+  archived "$f" || DELETED_LOGS="$DELETED_LOGS $f"
+done
 if [ -n "$DELETED_LOGS" ]; then
   echo "mesh-sync: REFUSED — an append-only log file was DELETED, not appended to:" >&2
   printf '    %s\n' $DELETED_LOGS >&2
   echo "  Committing this would remove that history from every peer on the next push." >&2
   echo "  Restore it, then re-sync:" >&2
   echo "    git -C \"$DIR\" checkout -- $(printf '%s ' $DELETED_LOGS)" >&2
-  echo "  (Retiring a queue on purpose? hub queue gc --apply MOVES it to queues/archive/ instead.)" >&2
+  echo "  (Retiring a queue on purpose? hub gc --apply --by <you> MOVES it to queues/archive/ instead.)" >&2
   exit 4
 fi
 

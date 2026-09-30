@@ -1578,12 +1578,47 @@ export function runLint(a = {}) {
       fix: `hub cards merge ${b} ${a} --by <you>  (aliases ${b} → ${a} and archives ${b}.md)` });
   }
 
+  /* (6) Work assigned to a name no role answers to. A task on a retired or misspelt role is open
+   *     forever and nobody's: no loop waits under that name, no supervisor counts it as anyone's
+   *     idle time. Owner roles and human-owned tasks are people, not roles, and are left alone.
+   *     Checked only once a registry exists — before that every assignee would be "unknown". */
+  const roster = roleRegistry();
+  if (!roster.size) {
+    notes.push('assignee-outside-roster checked nothing: no roles are declared (resource cards of type "role").');
+  } else {
+    const owners = new Set(ownerRoles().map(slugify));
+    const orphans = new Map();
+    for (const t of loadTasks().tasks.filter(t => t.status === 'open' && t.assignee)) {
+      if (restrict && !restrict.includes(t.project)) continue;
+      const who = slugify(t.assignee);
+      if (roster.has(who) || owners.has(who) || t.owner_kind === 'human') continue;
+      (orphans.get(t.assignee) || orphans.set(t.assignee, []).get(t.assignee)).push(t.id);
+    }
+    for (const [who, ids] of [...orphans].sort((x, y) => y[1].length - x[1].length)) {
+      findings.push({ id: 'assignee-outside-roster', severity: 'low', tasks: ids,
+        what: `${ids.length} open task(s) assigned to "${who}", which is neither a declared role nor an owner role: #${ids.slice(0, 8).join(', #')}${ids.length > 8 ? ' …' : ''}`,
+        fix: `reassign them (hub task update <id> --assignee <role>), or declare the role: hub resource set ${slugify(who)} --type role --attr rank=worker --attr project=<slug> --by <you>` });
+    }
+  }
+
+  /* (7) Two live readers on one work queue. queueWait records this the moment a second waiter
+   *     shares a cursor and clears it once one is left, so what is here is true now: each message
+   *     goes to one of them at random, and each thinks it saw the whole queue. */
+  const conflicts = ((envObservations()['cursor-conflict'] || {}).values || []);
+  for (const role of conflicts) {
+    findings.push({ id: 'two-readers-one-queue', severity: 'high', role,
+      what: `two live sessions wait on the work queue "${role}" through one cursor — each message reaches only one of them, and neither knows`,
+      fix: `stop one of them, or give each its own cursor: declare "${role}" in subscriber-roles.json (a broadcast) and start each with its own HUBD_SUBSCRIBER` });
+  }
+
   const LINT_DEFAULTS = {
     'gate-without-date': 'A gate is a date plus a criterion; without a date it is an intention.',
+    'two-readers-one-queue': 'A work queue has one reader per cursor; a second one silently takes half the orders.',
     'button-without-prep': 'Work only the owner can do splits into prep (an agent) and the button (the owner).',
     'card-empty': 'A card is what a session reads before it acts; a title is not a card.',
     'card-without-digest': 'A card no check can read is unchecked, however well it reads to a person.',
     'duplicate-project': 'Two slugs for the same project split its history and tasks between two cards — a worker was seen entering an empty loop.',
+    'assignee-outside-roster': 'The role registry is the only source of role names; work assigned to any other name is nobody\'s.',
   };
   for (const f of findings) {
     const law = lawFor(f.id, LINT_DEFAULTS[f.id] || f.id);
@@ -2190,6 +2225,8 @@ export function ownerRoles() {
 const envStateFile = () => path.join(HUB, '.env-state.json');
 function readEnvState() { try { return JSON.parse(fs.readFileSync(envStateFile(), 'utf8')); } catch { return {}; } }
 function writeEnvState(obj) { try { atomicWrite(envStateFile(), JSON.stringify(obj, null, 1)); } catch {} }
+/** The recorded environment observations, {kind: {values, at}} — read-only (hub gc prunes the stale ones). */
+export function envObservations() { return readEnvState().observations || {}; }
 
 /**
  * Hash the protocol per SECTION, so an upgrade can say what actually moved instead
@@ -2388,6 +2425,7 @@ export function ensureProtocol(force) {
   try {
     fs.mkdirSync(HUB, { recursive: true });
     ensureGitignored('HUBD.md'); ensureGitignored('presence/'); ensureGitignored('.env-state.json');
+    ensureGitignored('.sense/');   // a head sensor's own state: what THIS node already told its head
     /* The whatsnew checkpoints. The comment on runWhatsNew has claimed since it was written that
      * this file is gitignored and never mesh-synced — and on the hub it was written against it was
      * TRACKED, so every node's "what did I miss" checkpoint travelled to every other node and
@@ -2620,6 +2658,20 @@ export function runResourceSet(a) {
   if (!pairs.find(p => p.key === 'kind')) pairs.unshift({ key: 'kind', value: 'resource' });
   for (const [k, v] of [['type', a.type], ['address', a.address], ['os', a.os], ['provider', a.provider], ['status', a.status]])
     if (v != null && v !== '') set(k, String(v));
+  /* Open attributes: a role card needs repo / base / plan / idle_min, which no fixed list could
+   * anticipate. One line per key in the frontmatter, the same place the fixed ones live, so a
+   * reader (and grep) sees every attribute of the card in one block. An empty value removes the
+   * key. `kind` is the card class, not an attribute, and a value may not break the line it sits
+   * on — the frontmatter is parsed one line per key. */
+  if (a.attrs && typeof a.attrs === 'object') {
+    for (const [k, v] of Object.entries(a.attrs)) {
+      if (!/^[a-z][a-z0-9_]{0,39}$/.test(k) || k === 'kind') throw new Error(`attribute name "${k}" — lowercase letters, digits and _ only, and not "kind"`);
+      const val = v == null ? '' : String(v);
+      if (/[\r\n]/.test(val)) throw new Error(`attribute ${k}: one line only`);
+      if (val === '') { const i = pairs.findIndex(p => p.key === k); if (i !== -1) pairs.splice(i, 1); }
+      else set(k, val);
+    }
+  }
   if (a.edges) for (const rel of Object.keys(a.edges)) {
     const targets = new Set(extractLinks((pairs.find(p => p.key === rel) || {}).value || ''));
     for (const t of a.edges[rel]) targets.add(slugify(t));
@@ -2683,6 +2735,53 @@ export function runResourceList(a = {}) {
   } catch {}
   out.sort((x, y) => (x.slug < y.slug ? -1 : 1));
   return { count: out.length, resources: out };
+}
+
+/* ── Roles: who works under whom ──
+ *
+ * The hub knew every role only by what it wrote — a presence record, a journal author, a queue
+ * file — and never what the role IS: which project it serves, which head it answers to, which repo
+ * that head accepts branches into. That lived in the fleet's own tooling, so every judgement about
+ * a track (is this worker idle, whose branch is this, which rows belong on one board) had to be
+ * made outside the hub, against a table the hub could not see.
+ *
+ * A role is a resource card of type `role`, because cards already travel the mesh one file per
+ * slug and already carry typed links:
+ *
+ *   type: role          rank: head | worker | fleet (a fleet-level coordinator above the heads)
+ *   project: <slug>     head: [[<head role>]]  (a worker's head)
+ *   status: live | off  and any attribute the tooling needs (repo, base, plan, idle_min ...)
+ *
+ * The registry is whatever cards exist; an empty registry means "not declared", and every reader
+ * treats it that way rather than calling every role unknown. */
+export function roleRegistry() {
+  const roles = new Map();
+  let files = [];
+  try { files = fs.readdirSync(RESOURCES).filter(f => f.endsWith('.md')); } catch { return roles; }
+  for (const f of files) {
+    let text = ''; try { text = fs.readFileSync(path.join(RESOURCES, f), 'utf8'); } catch { continue; }
+    const attrs = {}; for (const p of parseFront(text)) attrs[p.key] = p.value;
+    if (attrs.type !== 'role') continue;
+    const name = f.replace(/\.md$/, '');
+    const link = (v) => (extractLinks(v || '')[0] || (v ? slugify(v) : null));
+    const idle = parseInt(attrs.idle_min, 10);
+    roles.set(name, {
+      role: name, rank: attrs.rank || 'worker', project: link(attrs.project), head: link(attrs.head),
+      status: attrs.status || 'live', node: link(attrs.runs_on), idleMin: Number.isFinite(idle) ? idle : null,
+      attrs,
+    });
+  }
+  return roles;
+}
+
+/** A head and the roles that answer to it, from the registry. `off` workers are listed with
+ *  their status: a switched-off worker is part of the track, not missing from it. */
+export function headConf(head) {
+  const roles = roleRegistry();
+  const me = roles.get(slugify(head));
+  if (!me) return null;
+  const workers = [...roles.values()].filter(r => r.head === me.role).sort((x, y) => (x.role < y.role ? -1 : 1));
+  return { ...me, workers };
 }
 
 export function runResourceGet(a) {
@@ -4285,7 +4384,7 @@ export function runTrajectory(a = {}) {
  * The order is the same one hub_brief sorts by (overdue, then importance, then age) with one
  * addition that matters more than any of them: a task whose dependencies are still open is not
  * eligible, no matter how loud it is. */
-function eligibleOpen(tasks, { project, assignee } = {}) {
+export function eligibleOpen(tasks, { project, assignee } = {}) {
   const open = tasks.filter(t => t.status === 'open');
   const openIds = new Set(open.map(t => String(t.id)));
   const blocked = (t) => (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).some(d => openIds.has(d));
@@ -4299,7 +4398,7 @@ function eligibleOpen(tasks, { project, assignee } = {}) {
  * hub_next, hub_agenda, hub_brief and the kanban. It was written out three times, and a fix to one
  * copy (a task with no `created` sorting unpredictably) had not reached the other two. */
 const IMPORTANCE_RANK = { high: 3, med: 2, normal: 1 };
-function byUrgency(today3) {
+export function byUrgency(today3) {
   return (x, y) => {
     const xu = x.deadline && x.deadline <= today3 ? 1 : 0;
     const yu = y.deadline && y.deadline <= today3 ? 1 : 0;
@@ -4343,7 +4442,7 @@ export function runNext(a = {}) {
  * the instance already DECLARED as a human owner. Most real tasks carry no owner_kind, so without
  * the second test every owner decision lands in the "agent work, ready now" column — a list whose
  * whole purpose is that its reader can start everything in it. */
-const isOwnerTask = (owners) => (t) => t.owner_kind === 'human' || (t.assignee && owners.has(t.assignee));
+export const isOwnerTask = (owners) => (t) => t.owner_kind === 'human' || (t.assignee && owners.has(t.assignee));
 
 /* ── The buttons that are actually rotting ──
  *
@@ -4513,7 +4612,16 @@ export function claimsTouched({ root, project, agent = null, minutes = 30 } = {}
   return { touched, recentFiles: files.length, capped, minutes };
 }
 
+/** A claim on a task is a claim whose area is `task:<id>` — the "started" mark of a role's work
+ *  queue (see roleWork in queue.mjs). */
+export const taskClaimArea = (id) => 'task:' + String(id);
+
 export function runClaim(a) {
+  if (a.task != null && a.task !== '') {
+    const t = runTaskGet({ id: a.task }).task;
+    if (t.status !== 'open') throw new Error(`task #${t.id} is ${t.status} — there is nothing to start`);
+    a = { ...a, project: a.project || t.project, area: taskClaimArea(t.id) };
+  }
   // Name the fields actually missing: this error fired on 4 of 33 real hub_claim
   // calls, the worst rate of any tool, and listing all three told the caller
   // nothing about which one it had left out.
@@ -4544,6 +4652,10 @@ export function runClaim(a) {
 }
 
 export function runRelease(a) {
+  if (a.task != null && a.task !== '' && !a.id) {
+    const t = runTaskGet({ id: a.task }).task;
+    a = { ...a, project: t.project, area: taskClaimArea(t.id) };
+  }
   return withLock(CLAIMS, () => {
     const db = loadClaims();
     const before = db.claims.length;
@@ -4655,6 +4767,58 @@ export function presenceSnapshots() {
   return out.sort((a, b) => (a.node < b.node ? -1 : 1));
 }
 
+/* ── What a loop is doing, as fields ──
+ *
+ * `status` is free text for a person. A supervisor that wants to know "is this worker idle, stuck,
+ * or three hours into one turn" had only that text, and parsed it with patterns of the wording the
+ * loop happened to use — change a word in the loop and the supervisor goes blind without an error.
+ * These fields are the same facts in a shape nothing has to parse:
+ *
+ *   state         turn | waiting | exit (open vocabulary, lowercase)
+ *   turn          number of the current or last turn
+ *   turn_started  when the current turn began ("now" stamps the write time)
+ *   empty_count   consecutive empty polls while waiting
+ *   silent_count  consecutive restarts of a model that stopped producing output
+ *   exit_reason   one line, with state=exit
+ *
+ * Each is optional and absent unless given: an old loop's record keeps its old shape.
+ *
+ * One more is kept by the hub itself: `state_since`, when the current state began. A loop's own
+ * counters reset whenever the loop restarts, so "waiting for 55 minutes" read as "3 empty polls"
+ * three times over and no supervisor ever saw the hour. The record outlives the loop, so the hub
+ * carries the start of a state across heartbeats that repeat it, and restarts it on a change. A
+ * turn's start is carried the same way while the turn number stays the same. */
+export const HEARTBEAT_STATES_RE = /^[a-z][a-z_-]{0,19}$/;
+export function heartbeatState(a = {}, prev = null) {
+  const out = {};
+  if (a.state != null && a.state !== '') {
+    const s = String(a.state).toLowerCase();
+    if (!HEARTBEAT_STATES_RE.test(s)) throw new Error(`state "${a.state}": a short lowercase word, e.g. turn | waiting | exit`);
+    out.state = s;
+  }
+  const count = (k) => {
+    if (a[k] == null || a[k] === '') return;
+    const n = Number(a[k]);
+    if (!Number.isInteger(n) || n < 0) throw new Error(`${k} must be a non-negative integer, got "${a[k]}"`);
+    out[k] = n;
+  };
+  count('turn'); count('empty_count'); count('silent_count');
+  if (a.turn_started != null && a.turn_started !== '') {
+    const v = String(a.turn_started);
+    if (v === 'now') out.turn_started = now();
+    else if (Number.isFinite(parseTs(v).getTime())) out.turn_started = v;
+    else throw new Error(`turn_started "${v}": a timestamp (YYYY-MM-DD HH:MM, ISO) or "now"`);
+  }
+  if (a.exit_reason != null && a.exit_reason !== '') out.exit_reason = String(a.exit_reason).replace(/\s+/g, ' ').slice(0, 200);
+  if (out.state) {
+    // a new turn number is a new turn even with no wait between the two
+    const same = !!prev && prev.state === out.state && (out.turn == null || prev.turn === out.turn);
+    out.state_since = (same && prev.state_since) || now();
+    if (out.state === 'turn' && !out.turn_started && same && prev.turn_started) out.turn_started = prev.turn_started;
+  }
+  return out;
+}
+
 export function runHeartbeat(a) {
   // Held to the author rule like every other write: presence keys one record per name, and a
   // placeholder name would merge every session that used it into one row.
@@ -4674,6 +4838,7 @@ export function runHeartbeat(a) {
     agent, role: a.role || null, status: a.status || null,
     task_id: (a.task_id ?? null), cwd: a.cwd || null,
     node: JOURNAL_NODE, hub: hubReal, last_seen: now(), ttlMin: a.ttlMin ?? 15,
+    ...heartbeatState(a, readPresenceRecord(agent)),
   };
   fs.mkdirSync(PRESENCE, { recursive: true });
   atomicWrite(presencePath(agent), rec);
@@ -4784,6 +4949,17 @@ export function runPresence(a = {}) {
   };
 }
 
+/** A task's title: its first non-empty line, at most `max` characters, cut at a word where one is
+ *  near. Old tasks carry a whole brief in `text`; nothing is rewritten, the rest stays one click
+ *  away as `text`. */
+export function taskTitle(text, max = 80) {
+  const first = String(text || '').split('\n').map(l => l.trim()).find(Boolean) || '';
+  if (first.length <= max) return first;
+  const cut = first.slice(0, max - 1);
+  const sp = cut.lastIndexOf(' ');
+  return (sp >= max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:(—-]+$/, '') + '…';
+}
+
 export function runKanban({ doneWindowHours = 24 } = {}) {
   const db = loadTasks();
   const nowMs = Date.now();
@@ -4806,7 +4982,7 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
 
   function mapTask(t) {
     return {
-      id: t.id, project: t.project, text: t.text,
+      id: t.id, project: t.project, title: taskTitle(t.text), text: t.text,
       importance: t.importance, deadline: t.deadline || null,
       assignee: t.assignee || null, depends_on: t.depends_on || [],
       resources: t.resources || [],

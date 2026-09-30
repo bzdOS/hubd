@@ -290,7 +290,22 @@ Infra is a card too, at `resources/<slug>.md` — host, vm, service, endpoint, p
 with structured frontmatter (type/address/os/status) and typed `[[wikilink]]` edges
 (`runs_on` / `depends_on` / `deploys_to` / `exposes` / `part_of`). `hub resource set`,
 `hub resource list`, `hub resource get`, `hub graph`. Link a task to what it touches:
-`hub task add "<text>" -p <proj> --resource <slug>`.
+`hub task add "<text>" -p <proj> --resource <slug>`. Any other one-line attribute goes in with
+`--attr key=value` (`attrs` over MCP); an empty value removes it.
+
+### Roles — who works under whom
+A role is a resource card of type `role`. The registry is whatever such cards exist:
+
+    hub resource set api-head --type role --attr rank=head --attr project=api \
+      --attr repo=/srv/api/canon.git --attr base=main --attr review=/srv/api/review --by <you>
+    hub resource set api-dev --type role --attr rank=worker --attr project=api \
+      --link head:api-head --attr idle_min=40 --by <you>
+
+`rank` is `head` (coordinates a track), `worker`, or `fleet` (a coordinator above the heads);
+`head` links a worker to its head; `status: off` marks a role switched off. A **track** is a
+project with a head. What reads the registry: `hub board` (the tracks), `hub sense` (a head's
+workers and repo), `hub lint` (open work on a name that is no role), `hub gc` (queues of names
+that are no live role). With no role cards, each of them says it judged nothing by name.
 
 ## Queues — addressed work
 
@@ -339,6 +354,34 @@ marked `neverRead` — messages waiting for a consumer that has never existed ar
 backlog, don't work them off. `hub queue gc` lists them (dry by default) and `--apply`
 moves them into `queues/archive/` — moved, never deleted, and never a human owner's queue.
 
+**Never `rm` a queue or a journal in a mesh hub.** mesh-sync refuses to commit a deleted log,
+because the commit would delete that history from every peer, and the node stops syncing until the
+file is back. The one deletion it accepts is a move into `queues/archive/` (or `_archive/<path>`)
+with the bytes intact. `hub gc` lists what has piled up, by class — queues of a name that is no
+live role, dead waiter markers, stale presence of non-roles, environment notices whose cause is
+gone, and open tasks on such names (listed only: reassigning them is the project head's call) — and
+`hub gc --apply --by <you>` archives it in one commit.
+
+### Work mode — your queue as your tasks
+Orders and tasks are two stores, and work falls between them: an order read by a turn that did
+nothing is gone while its task stays open; a cancellation queued behind its order arrives after the
+order ran. `hub_queue_wait({role, tasks: true})` (CLI `hub queue wait <role> --tasks`) makes the
+work itself the queue:
+
+- `work` is your open, ready tasks (every dependency closed), most urgent first, each with its claim
+  and the latest messages that name it. The wait returns at once while one is **offered** — ready and
+  not started by anyone.
+- Reading consumes nothing. A task leaves the view only when it is closed.
+- **Start** a task by claiming it: `hub_claim({task, agent, ttlMin})` (`hub claim --task <id>`).
+  While the claim holds it is in progress and not offered again; when it lapses — a dead session, an
+  abandoned turn — it is offered again. `hub release --task <id>` gives it back.
+- **Cancelling is closing** the task. An order about a task that is already closed is held back
+  (`skipped`), so nothing is left to execute.
+- Messages keep working as before and ride along with the task they name.
+
+`hub queue work <role>` shows the same view without waiting. Claims are node-local, so "started" is
+seen on the node where the role runs.
+
 ### Buttons — an owner-decision queue is not an agent queue
 A task that needs OWNER to act outward (send, post, pay, call) splits in two: prep (an
 agent boils it down to a package the owner can decide on in <=30s) and the button itself
@@ -382,6 +425,34 @@ as a screen-scraped one: it overwrites your one presence record (agent, role, st
 task_id, cwd, freshness from `ttlMin`, default 15min). `hub_presence` reads the fleet
 roster back; `hub_brief`'s QUEUES line pairs "N queued for role X" with that role's
 last-seen agent, so a human can tell "is anyone even listening" without screen-peeking.
+
+A loop that runs an agent says what it is doing as FIELDS, not in `status` text a supervisor would
+have to parse: `state` (`turn` | `waiting` | `exit`), `turn`, `turn_started` (`now` stamps it),
+`empty_count` (empty polls in a row), `silent_count` (restarts of a model that produced nothing),
+`exit_reason`. CLI: `hub heartbeat <role> --state waiting --empty 3`. The hub keeps `state_since`
+across heartbeats that repeat a state — the loop's own counters restart with the loop, the record
+does not — and carries `turn_started` while the turn number stays the same.
+
+### Supervision — a head's sensor
+`hub sense <head>` does, without a model, everything a head would otherwise wake up to measure:
+each worker's state from the heartbeat fields (idle, stuck, a long turn; a worker that is not
+running goes to the fleet, not to the head), new reports in the journal (not the ones the worker
+also sent to the head's queue), and task branches in the head's `repo`, each run through a
+checklist in its `review` clone. Exit 0 with text = wake the head with this text; 1 = nothing new;
+above 1 = the sensor failed. Non-critical wakes are budgeted per hour; an event standing an hour is
+escalated. `hub sense <head> check <branch>` is the checklist; `hub sense <head> verdict <branch>
+accept|reject "<text>"` writes the decision to the journal (first line `ACCEPT <full sha>` /
+`REJECT <full sha>`) and sends the order to the worker who handed the branch in. Thresholds, the
+private patterns a public branch must not carry, and the journal lines that only mean "still
+waiting" live in `<hub>/sense.json`. What each sensor last raised is published as
+`sense.<node>.json`, and `hub board` shows it on the track.
+
+### The board — every track on one screen
+`hub board` (and the Tracks view of `hub serve`) is the owner's screen: per track, each role's state,
+current task, last journal step and handoff; what got done in the window (`--days`, default 7) with
+the line that accepted it; what is next, with blockers; the branch verdicts. Above the tracks, what
+waits for the owner: the owner queue, the owner's tasks, `owner-go` tasks, and what was escalated to
+a `fleet` role and answered. Titles are a task's first line, at most 80 characters.
 
 **`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
 never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat

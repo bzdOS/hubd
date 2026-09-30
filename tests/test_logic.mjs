@@ -737,6 +737,11 @@ ok(oqi2.length === 2 && oqi2[1].task === '77' && oqi2[1].subject === 'BUTTON: sh
 ok(oqi2[0].ts < oqi2[1].ts, 'ownerQueueItems: oldest first — that is what a queue is');
 ok(queueLib.peekQueueDepth('alice', { root: btnRoot1 }).pending === oqi2.length,
   'ownerQueueItems: agrees with peekQueueDepth about how many are pending');
+// What queueSend writes today: a block id between the sender and the task ref.
+queueLib.queueSend('alice', 'BUTTON: renew the domain?', { from: 'planner', root: btnRoot1, node: 'node1', task: '78' });
+const oqi3 = queueLib.ownerQueueItems({ root: btnRoot1 });
+ok(oqi3.length === 3 && oqi3[2].task === '78' && oqi3[2].from === 'planner' && oqi3[2].subject === 'BUTTON: renew the domain?',
+  `ownerQueueItems: a block with an id in its header is listed, sender and task intact (got ${JSON.stringify(oqi3[2])})`);
 
 /* Reading a queue to LOOK at it must not consume it — this project has already had that bug. */
 const oqiOffBefore = fs.existsSync(path.join(btnRoot1, '.qstate', 'alice.node1.queue.md.offset'));
@@ -3262,7 +3267,330 @@ core.setHubBase(TL);
 }
 core.setHubBase(T0);
 
-for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL]) fs.rmSync(d, { recursive: true, force: true });
+// ── roles as cards, and a heartbeat a supervisor reads without parsing ──
+const RG = mktmp();
+core.setHubBase(RG);
+{
+  core.runResourceSet({ slug: 'api-head', type: 'role', attrs: { rank: 'head', project: 'api', repo: '/x/canon.git', base: 'main' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'api-dev', type: 'role', attrs: { rank: 'worker', project: 'api', idle_min: '40' }, edges: { head: ['api-head'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'api-old', type: 'role', status: 'off', attrs: { rank: 'worker', project: 'api' }, edges: { head: ['api-head'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'db-host', type: 'host', by: 'dev-t' });
+  const reg = core.roleRegistry();
+  ok(reg.size === 3 && !reg.has('db-host'), 'roles: the registry is the resource cards of type role, nothing else');
+  const hc = core.headConf('api-head');
+  ok(hc && hc.workers.map(w => w.role).join(',') === 'api-dev,api-old' && hc.attrs.repo === '/x/canon.git',
+    'roles: a head lists the roles whose head link points at it, with its own attributes');
+  ok(reg.get('api-dev').idleMin === 40 && reg.get('api-old').status === 'off', 'roles: idle_min is a number, a switched-off worker keeps its status');
+  core.runResourceSet({ slug: 'api-dev', attrs: { idle_min: '' }, by: 'dev-t' });
+  ok(!/idle_min/.test(fs.readFileSync(path.join(RG, 'resources', 'api-dev.md'), 'utf8')), 'roles: an empty attribute value removes the key');
+  let ea = null; try { core.runResourceSet({ slug: 'api-dev', attrs: { kind: 'x' }, by: 'dev-t' }); } catch (e) { ea = e.message; }
+  let eb = null; try { core.runResourceSet({ slug: 'api-dev', attrs: { note: 'a\nkind: project' }, by: 'dev-t' }); } catch (e) { eb = e.message; }
+  ok(/not "kind"/.test(ea || '') && /one line/.test(eb || ''), 'roles: an attribute cannot overwrite the card class or smuggle a second line into the frontmatter');
+
+  core.runHeartbeat({ agent: 'api-dev', state: 'waiting', empty_count: 1 });
+  const p1 = core.readPresenceRecord('api-dev');
+  const back = '2026-01-01 08:00';
+  fs.writeFileSync(core.presencePath('api-dev'), JSON.stringify({ ...p1, state_since: back }));
+  core.runHeartbeat({ agent: 'api-dev', state: 'waiting', empty_count: 0 });
+  ok(core.readPresenceRecord('api-dev').state_since === back, 'heartbeat: repeating a state keeps when it began, even when the loop restarted its own counter');
+  core.runHeartbeat({ agent: 'api-dev', state: 'turn', turn: 7, turn_started: '2026-01-01 09:00' });
+  core.runHeartbeat({ agent: 'api-dev', state: 'turn', turn: 7 });
+  const p2 = core.readPresenceRecord('api-dev');
+  ok(p2.turn_started === '2026-01-01 09:00' && p2.state_since !== back, 'heartbeat: a turn keeps its start across heartbeats; a new state restarts state_since');
+  core.runHeartbeat({ agent: 'api-dev', state: 'turn', turn: 8 });
+  ok(!core.readPresenceRecord('api-dev').turn_started, 'heartbeat: a new turn number does not inherit the previous turn\'s start');
+  core.runHeartbeat({ agent: 'api-dev', status: 'plain text only' });
+  const p3 = core.readPresenceRecord('api-dev');
+  ok(!('state' in p3) && !('empty_count' in p3) && p3.status === 'plain text only', 'heartbeat: an old loop that sends only status keeps the old record shape');
+  let eh = null; try { core.runHeartbeat({ agent: 'api-dev', state: 'Two Words' }); } catch (e) { eh = e.message; }
+  let ec = null; try { core.runHeartbeat({ agent: 'api-dev', empty_count: -1 }); } catch (e) { ec = e.message; }
+  ok(/lowercase word/.test(eh || '') && /non-negative/.test(ec || ''), 'heartbeat: a malformed state or count is refused, not stored');
+
+  core.runTaskAdd({ project: 'api', text: 'on a real role', assignee: 'api-dev', by: 'dev-t' });
+  core.runTaskAdd({ project: 'api', text: 'on a ghost', assignee: 'ghost-role', by: 'dev-t' });
+  fs.writeFileSync(path.join(RG, 'owner-roles.json'), '["boss"]');
+  core.runTaskAdd({ project: 'api', text: 'for the owner', assignee: 'boss', by: 'dev-t' });
+  const lf = core.runLint({}).findings.filter(f => f.id === 'assignee-outside-roster');
+  ok(lf.length === 1 && /ghost-role/.test(lf[0].what) && lf[0].tasks.length === 1, 'lint: an open task on a name the registry does not know is a finding; roles and owners are not');
+  const RG2 = mktmp(); core.setHubBase(RG2);
+  core.runTaskAdd({ project: 'api', text: 'x', assignee: 'anyone', by: 'dev-t' });
+  const l2 = core.runLint({});
+  ok(!l2.findings.some(f => f.id === 'assignee-outside-roster') && l2.notes.some(n => /no roles are declared/.test(n)),
+    'lint: with no registry the check says it checked nothing instead of calling everyone unknown');
+  core.recordEnvObservation('cursor-conflict', 'work-q');
+  ok(core.runLint({}).findings.some(f => f.id === 'two-readers-one-queue' && f.role === 'work-q'), 'lint: two live readers on one work queue are a finding while it is true');
+  core.clearEnvObservation('cursor-conflict', 'work-q');
+  ok(!core.runLint({}).findings.some(f => f.id === 'two-readers-one-queue'), 'lint: and gone once one reader is left');
+  fs.rmSync(RG2, { recursive: true, force: true });
+}
+core.setHubBase(T0);
+
+// ── the owner's board: tracks, what got done and why, what is next, what waits for the owner ──
+const BD = mktmp();
+core.setHubBase(BD);
+{
+  const board = await import(path.join(REPO, 'hub/lib/board.mjs'));
+  fs.mkdirSync(path.join(BD, 'queues'), { recursive: true });
+  core.runResourceSet({ slug: 'web-head', type: 'role', attrs: { rank: 'head', project: 'web' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'web-dev', type: 'role', attrs: { rank: 'worker', project: 'web-ui' }, edges: { head: ['web-head'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'web-old', type: 'role', status: 'off', attrs: { rank: 'worker', project: 'web' }, edges: { head: ['web-head'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'coord', type: 'role', attrs: { rank: 'fleet', project: 'infra' }, by: 'dev-t' });
+  fs.writeFileSync(path.join(BD, 'owner-roles.json'), '["boss"]');
+  const long = 'A very long first line of a brief that keeps going well past any width a board card could show without wrapping twice\nsecond line';
+  const tDone = core.runTaskAdd({ project: 'web', text: 'ship the login page', assignee: 'web-dev', by: 'dev-t' }).task.id;
+  const tDep = core.runTaskAdd({ project: 'web-ui', text: long, assignee: 'web-dev', by: 'dev-t' }).task.id;
+  const tBlk = core.runTaskAdd({ project: 'web', text: 'deploy after the ui work', assignee: 'web-dev', depends_on: [tDep], by: 'dev-t' }).task.id;
+  core.runTaskAdd({ project: 'web', text: 'on a retired role', assignee: 'web-old', by: 'dev-t' });
+  core.runTaskAdd({ project: 'web', text: 'on nobody we know', assignee: 'ghost', by: 'dev-t' });
+  core.runTaskAdd({ project: 'web', text: 'press the button', assignee: 'boss', by: 'dev-t' });
+  core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-dev', kind: 'note', text: `login page done, see #${tDone}` });
+  core.runTaskUpdate({ id: tDone, status: 'done', by: 'web-dev' });
+  core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-head', kind: 'decision', text: 'ACCEPT 0123456789abcdef task/login → main: reviewed' });
+  core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-head', kind: 'decision', text: 'REJECT fedcba9876 task/other: tests missing' });
+  core.runHeartbeat({ agent: 'web-dev', state: 'turn', turn: 3, turn_started: 'now', task_id: String(tDep) });
+  queueLib.queueSend('boss', 'BUTTON: approve the budget', { from: 'web-head', root: BD, node: 'n1' });
+  queueLib.queueSend('coord', 'escalation: the build box is down', { from: 'web-head', root: BD, node: 'n1', task: String(tBlk) });
+  queueLib.queueSend('web-head', 'answer: rebooted it', { from: 'coord', root: BD, node: 'n1' });
+
+  const b = board.runBoard({ queueRoot: BD });
+  const t = b.tracks.find(x => x.project === 'web');
+  ok(b.tracks.length === 1 && t && t.heads[0] === 'web-head' && t.rows.map(r => r.role).join(',') === 'web-head,web-dev,web-old',
+    'board: a track is a head\'s project, its rows the head and every role whose head link points at it');
+  const dev = t.rows.find(r => r.role === 'web-dev');
+  ok(dev.state.kind === 'turn' && dev.state.turn === 3 && dev.task === String(tDep) && t.rows.find(r => r.role === 'web-old').state.kind === 'off',
+    'board: a row says what the role is doing from the heartbeat fields, and a switched-off role says off');
+  ok(t.next.some(x => x.id === tDep), 'board: the track reads the projects its workers file under, not only the head\'s');
+  const d0 = t.done.find(x => x.id === tDone);
+  ok(d0 && /login page done/.test(d0.acceptance.text) && d0.acceptance.agent === 'web-dev', 'board: a done task carries the line that accepted it, not the automatic close stamp');
+  ok(t.blocked.length === 1 && t.blocked[0].id === tBlk && t.blocked[0].waitingOn[0].id === String(tDep), 'board: a blocked task names what it waits on');
+  ok(t.decisions.length === 2 && t.decisions[0].verdict === 'reject' && t.decisions[1].sha === '0123456789abcdef' && t.decisions[1].branch === 'task/login',
+    'board: branch verdicts in the journal are listed with sha and branch');
+  const all = [...t.next, ...t.blocked, ...t.done, ...b.waiting.tasks];
+  ok(all.every(x => x.title.length <= 80) && all.find(x => x.id === tDep).text === long, 'board: every title fits 80 characters, the full text stays one click away');
+  ok(!('text' in d0), 'board: a done task is sent as title and acceptance, not the whole brief');
+  const off = t.next.find(x => x.assignee === 'web-old'), ghost = t.next.find(x => x.assignee === 'ghost');
+  ok(off && off.assigneeOff && ghost && !ghost.assigneeKnown && b.unknownAssignees.join(',') === 'ghost', 'board: work on a switched-off role and on a name that is no role are both marked');
+  ok(b.waiting.queue.length === 1 && /approve the budget/.test(b.waiting.queue[0].subject) && b.waiting.tasks.some(x => x.assignee === 'boss'),
+    'board: waiting for the owner lists the owner queue and the owner\'s own tasks');
+  ok(b.waiting.escalations.length === 1 && b.waiting.escalations[0].task === String(tBlk) && b.waiting.answers.length === 1 && b.waiting.answers[0].role === 'web-head',
+    'board: what was escalated to the fleet coordinator, and what it answered, are listed');
+  ok(!t.next.some(x => x.assignee === 'boss' && !x.owner), 'board: an owner task in a track is marked as the owner\'s');
+  // a tenant board reads the tenant's queues, never the operator's
+  const OP = mktmp(); fs.mkdirSync(path.join(OP, 'queues'));
+  queueLib.queueSend('boss', 'operator secret', { from: 'x-y', root: OP, node: 'n1' });
+  const bt = board.runBoard({ queueRoot: BD });
+  ok(!bt.waiting.queue.some(x => /operator secret/.test(x.subject)), 'board: with an explicit queue root, another directory\'s owner queue never appears');
+  fs.rmSync(OP, { recursive: true, force: true });
+  ok(board.taskTitle('short') === 'short' && board.taskTitle(long).length <= 80 && board.taskTitle(long).endsWith('…'), 'board: taskTitle keeps a short line and cuts a long one at a word');
+  ok(board.parseVerdict('decision: ACCEPT abcdef1234 task/x → main') .verdict === 'accept' && board.parseVerdict('accepted it') === null,
+    'board: a verdict is parsed with or without the decision: prefix, and nothing else is one');
+  const k = core.runKanban({});
+  ok([...k.queued, ...k.inProgress].every(x => x.title && x.title.length <= 80), 'board: the live kanban cards carry the same short title');
+}
+core.setHubBase(T0);
+
+// ── a role's queue as a view on its tasks ──
+const WK = mktmp();
+core.setHubBase(WK);
+{
+  fs.mkdirSync(path.join(WK, 'queues'), { recursive: true });
+  const a1 = core.runTaskAdd({ project: 'p', text: 'first job\nwith a brief', assignee: 'w1', importance: 'high', by: 'dev-t' }).task.id;
+  const a2 = core.runTaskAdd({ project: 'p', text: 'second job', assignee: 'w1', by: 'dev-t' }).task.id;
+  const a3 = core.runTaskAdd({ project: 'p', text: 'after the first', assignee: 'w1', depends_on: [a1], by: 'dev-t' }).task.id;
+  core.runTaskAdd({ project: 'p', text: 'someone else\'s', assignee: 'w2', by: 'dev-t' });
+  const w1 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  ok(w1.changed && w1.offered.join(',') === [a1, a2].join(',') && !w1.work.some(w => w.id === a3),
+    'work: the view is the role\'s ready tasks, most urgent first — a task waiting on an open one is not offered');
+  const w2 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  ok(w2.changed && w2.offered.includes(a1), 'work: reading the view consumes nothing — a turn that did nothing with a task gets it again');
+  core.runClaim({ task: a1, agent: 'w1', ttlMin: 30 });
+  core.runClaim({ task: a2, agent: 'w1', ttlMin: 30 });
+  const w3 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  ok(!w3.changed, 'work: a started (claimed) task is in progress and does not wake the role again');
+  const db = core.loadClaims(); for (const c of db.claims) if (c.area === core.taskClaimArea(a1)) c.since = '2020-01-01 00:00';
+  fs.writeFileSync(path.join(WK, 'claims.json'), JSON.stringify(db));
+  const w4 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  ok(w4.changed && w4.offered.join(',') === String(a1), 'work: when the claim lapses — a dead session, an abandoned turn — the task is offered again');
+  queueLib.queueSend('w1', 'clarification: use the staging db', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
+  queueLib.queueSend('w1', 'ORDER: do the second job now', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
+  core.runTaskUpdate({ id: a2, status: 'done', by: 'head-x' });   // the cancellation
+  queueLib.queueSend('w1', 'general note, no task', { from: 'head-x', root: WK, node: 'n1' });
+  const w5 = await queueLib.queueWait('w1', { timeout: 1, root: WK, work: true });
+  ok(w5.changed && !/second job now/.test(w5.text) && /general note/.test(w5.text) && w5.skipped.length === 2 && w5.skipped[0].status[0] === 'done',
+    'work: an order about a task that was closed meanwhile is held back — cancelling is closing, and nothing is left to execute');
+  queueLib.queueSend('w1', 'note on the first: tests live in ci/', { from: 'head-x', root: WK, node: 'n1', task: String(a1) });
+  const view = queueLib.roleWork('w1', { root: WK });
+  ok(view.find(w => w.id === a1).messages.some(m => /tests live in ci/.test(m.text)) && view.find(w => w.id === a1).title === 'first job',
+    'work: what was said about a task travels with it, and the task carries its short title');
+  let ec = null; try { core.runClaim({ task: a2, agent: 'w1' }); } catch (e) { ec = e.message; }
+  ok(/nothing to start/.test(ec || ''), 'work: a closed task cannot be started');
+  core.runRelease({ task: a1, agent: 'w1' });
+  ok(!core.activeClaims(core.loadClaims().claims).some(c => c.area === core.taskClaimArea(a1)), 'work: release --task gives a started task back');
+  // without work mode nothing changes: the closed task's order is delivered like any message
+  queueLib.queueSend('w9', 'plain order', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
+  const w6 = await queueLib.queueWait('w9', { timeout: 1, root: WK });
+  ok(w6.changed && /plain order/.test(w6.text) && !('work' in w6), 'work: a wait without work mode delivers exactly as before');
+  const cli = run(`queue work w1 --json`, { HUBD_DIR: WK, HUBD_TEAM_DIR: WK, HUBD_NODE: 'n1' });
+  ok(cli.code === 0 && JSON.parse(cli.out).offered.includes(a1), 'work: hub queue work reads the view without waiting');
+}
+core.setHubBase(T0);
+
+// ── a head's sensor: events from the hub, not from a loop's wording ──
+const SN = mktmp();
+core.setHubBase(SN);
+{
+  const sense = await import(path.join(REPO, 'hub/lib/sense.mjs'));
+  const cfg = { ...sense.SENSE_DEFAULTS, quietRe: [/^still waiting/i], privateRe: [] };
+  const nowS = Date.parse('2026-05-01T12:00:00Z') / 1000;
+  const ts = (minAgo) => new Date((nowS - minAgo * 60) * 1000).toISOString().slice(0, 16).replace('T', ' ');
+  const W = (o) => ({ agent: 'w', last_seen: ts(1), ...o });
+  const ws = (p) => sense.workerState(p, nowS, cfg)[0];
+  ok(ws(null) === 'unknown' && ws(W({ last_seen: ts(45) })) === 'dead' && ws(W({ silent_count: 3 })) === 'stuck' &&
+    ws(W({ state: 'exit', exit_reason: 'account out' })) === 'exit' && ws(W({ state: 'waiting', empty_count: 4 })) === 'idle' &&
+    ws(W({ state: 'waiting', empty_count: 1 })) === 'busy' && ws(W({ state: 'turn', turn: 2, turn_started: ts(150) })) === 'long' &&
+    ws(W({ state: 'turn', turn: 2, turn_started: ts(10) })) === 'busy' && ws(W({ status: 'free text only' })) === 'busy',
+    'sense: a worker\'s state is read from heartbeat fields — dead, stuck, exit, idle, long, busy — and free text alone judges nothing');
+
+  const conf = { head: 'h', project: 'p', repo: '', base: 'main', review: '', workers: ['a', 'b'], idleMin: { b: 40 }, cwd: {} };
+  const st = {};
+  const pres = { a: W({ agent: 'a', state: 'waiting', empty_count: 1, state_since: ts(20) }), b: W({ agent: 'b', state: 'waiting', empty_count: 1, state_since: ts(20) }) };
+  const ents = [{ ts: ts(30), agent: 'a', text: 'old report', project: 'p' }, { ts: ts(30), agent: 'b', text: 'old report of b', project: 'p' }];
+  const r1 = sense.collectEvents(conf, st, nowS, pres, [{ id: 't1', assignee: 'a', status: 'open' }], ents, null, null, {}, cfg);
+  ok(r1.ev.map(e => e[0]).join(',') === '' , 'sense: a worker seen waiting for the first time is not idle yet — the sensor starts its own clock');
+  const stI = { waiting: { a: nowS - 20 * 60, b: nowS - 20 * 60 } };
+  const presI = { a: W({ agent: 'a', state: 'waiting', empty_count: 9 }), b: W({ agent: 'b', state: 'waiting', empty_count: 9 }) };
+  const rI = sense.collectEvents(conf, stI, nowS, presI, [{ id: 't1', assignee: 'a', status: 'open' }], [], null, null, {}, cfg);
+  ok(rI.ev.map(e => e[0]).join(',') === 'idle:a' && /t1/.test(rI.ev[0][2]),
+    'sense: 20 min waiting is idle for a role on the default threshold; a role with its own idle_min is judged by time only, whatever its empty count');
+  ok(!r1.ev.some(e => e[0].startsWith('rep:')), 'sense: the first pass only marks the journal, it does not replay history as reports');
+  st.waiting = { a: nowS - 20 * 60 };
+  const r2a = sense.collectEvents(conf, st, nowS + 30, pres, [], ents, null, null, {}, cfg);
+  const r2 = sense.collectEvents(conf, st, nowS + 60, pres, [], ents, null, null, {}, cfg);
+  ok(r2a.ev.map(e => e[0]).join() === 'idle:a' && !r2.ev.length, 'sense: a standing condition is raised once and not repeated on the next pass');
+  const twin = { ts: ts(-2), agent: 'b', text: '#t9 · Handoff b: the parser is merged, tests green on main', project: 'p' };
+  const ents2 = [...ents, { ts: ts(-1), agent: 'a', text: 'branch task/x ready', project: 'p' }, { ts: ts(-1), agent: 'b', text: 'still waiting for an order', project: 'p' },
+    twin, { ts: ts(-2), agent: 'b', text: 'EMPTY TURN, nothing to report here at all', project: 'p' }];
+  const qb = { b: [[nowS + 60, 'report to head: handoff b: the parser is merged, tests green on main. details follow']] };
+  const r3 = sense.collectEvents(conf, st, nowS + 180, pres, [], ents2, null, null, qb, cfg);
+  ok(r3.ev.some(e => e[0] === `rep:a:${ts(-1)}:${sense.entryHash(ents2.find(e => e.text === 'branch task/x ready'))}`) && !r3.ev.some(e => e[0].startsWith('rep:b:') && /parser is merged/.test(e[2])),
+    'sense: a new report wakes the head; a "still waiting" line and a report whose text the worker already sent to the head\'s queue do not');
+  ok(r3.ev.some(e => e[0].startsWith('rep:b:') && /EMPTY TURN/.test(e[2])), 'sense: a twin is matched by text, not by time — another report of the same minutes still wakes the head');
+  ok(sense.isTwin(twin, qb.b, cfg) && !sense.isTwin({ ...twin, text: 'short' }, qb.b, cfg) && !sense.isTwin({ ...twin, ts: ts(-120) }, qb.b, cfg),
+    'sense: a twin needs 20+ characters of the first line inside a queue message of that sender, within the window');
+  // two reports of one minute: the second is not lost; more than three are summed up, not dropped
+  const stM = {};
+  sense.collectEvents(conf, stM, nowS, pres, [], [{ ts: ts(10), agent: 'a', text: 'first', project: 'p' }], null, null, {}, cfg);
+  const same = [{ ts: ts(10), agent: 'a', text: 'first', project: 'p' }, { ts: ts(10), agent: 'a', text: 'second of the same minute', project: 'p' }];
+  const rM = sense.collectEvents(conf, stM, nowS + 60, pres, [], same, null, null, {}, cfg);
+  ok(rM.ev.filter(e => e[0].startsWith('rep:a:')).length === 1 && rM.ev.some(e => /second of the same minute/.test(e[2])),
+    'sense: a second report in the minute of the mark wakes the head, the one already seen does not');
+  const many = [1, 2, 3, 4, 5].map(i => ({ ts: ts(-10 - i), agent: 'a', text: 'report number ' + i, project: 'p' }));
+  const rN = sense.collectEvents(conf, stM, nowS + 120, pres, [], [...same, ...many], null, null, {}, cfg);
+  ok(rN.ev.filter(e => e[0].startsWith('rep:a:') && !e[0].includes(':more:')).length === 3 && rN.ev.some(e => e[0].startsWith('rep:a:more:') && /2 MORE REPORTS/.test(e[2])),
+    'sense: beyond three reports the rest is one line saying how many, never silently dropped');
+  const fresh = (p) => ({ ...p, last_seen: ts(-64) });   // still heartbeating an hour later
+  const pres4 = { a: fresh(pres.a), b: fresh(pres.b) };
+  st.waiting.a = nowS + 200;   // a pass after its report saw it waiting again
+  const r4 = sense.collectEvents(conf, st, nowS + 3900, pres4, [], ents2, null, null, {}, cfg);
+  ok(r4.esc.some(t => /WORKER IDLE: a/.test(t)) && r4.ev.some(e => e[0] === 'idle:a' && /reminder/.test(e[2])),
+    'sense: an event still standing is reminded to the head and, after an hour, escalated to the fleet');
+  const stD = {};
+  const deadP = { a: W({ agent: 'a', last_seen: ts(60) }), b: null };
+  sense.collectEvents(conf, stD, nowS, deadP, [], [], null, null, {}, cfg);
+  const rD = sense.collectEvents(conf, stD, nowS + 1900, deadP, [], [], null, null, {}, cfg);
+  ok(!rD.ev.length && rD.esc.length === 2, 'sense: a worker that is not running goes to the fleet, never to the head');
+  const stB = { wakes: [nowS - 10, nowS - 20, nowS - 30, nowS - 40] };
+  ok(!sense.budgetOk(stB, nowS, false, cfg) && sense.budgetOk(stB, nowS, true, cfg), 'sense: past the hourly budget only critical events wake the head');
+
+  // branches: a real repo, a review clone, a task branch
+  const G = mktmp();
+  const sh = (c, cwd) => execSync(c, { cwd, stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).toString();
+  sh('git init -q --bare canon.git', G);
+  sh(`git clone -q ${G}/canon.git work`, G);
+  sh('git checkout -q -b main && echo a > a.txt && git add a.txt && git commit -q -m base && git push -q origin main', path.join(G, 'work'));
+  sh('git checkout -q -b task/feat && echo b > b.txt && git add b.txt && git commit -q -m "feat: b" && git push -q origin task/feat', path.join(G, 'work'));
+  sh(`git clone -q ${G}/canon.git review`, G);
+  core.runResourceSet({ slug: 'h1', type: 'role', attrs: { rank: 'head', project: 'p', repo: path.join(G, 'canon.git'), base: 'main', review: path.join(G, 'review') }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'w1', type: 'role', attrs: { rank: 'worker', project: 'p' }, edges: { head: ['h1'] }, by: 'dev-t' });
+  fs.writeFileSync(path.join(SN, 'sense.json'), JSON.stringify({ private: ['secret-host-[0-9]+'] }));
+  const sc = sense.senseConf('h1');
+  ok(sc && sc.workers.join(',') === 'w1' && Object.keys(sense.remoteBranches(sc.repo)).join(',') === 'task/feat', 'sense: the head\'s repo and workers come from the registry; task branches are listed');
+  const [okc, txt] = sense.checkBranch(sc, 'task/feat');
+  ok(okc === true && /commits: 1/.test(txt) && /nothing private/.test(txt), 'sense: a clean branch on the current base passes the checklist');
+  sh('git checkout -q task/feat && echo "see secret-host-7" > c.txt && git add c.txt && git commit -q -m leak && git push -q origin task/feat', path.join(G, 'work'));
+  const [okp, txtp] = sense.checkBranch(sc, 'task/feat');
+  ok(okp === false && /PRIVATE/.test(txtp), 'sense: a branch carrying a declared private pattern fails, the pattern coming from the hub, not the code');
+  const rej = sense.runSenseVerdict('h1', 'task/feat', 'reject', 'drop c.txt');
+  ok(rej.code === 0 && rej.worker === 'w1' && core.journalSinceMs(0).some(e => e.kind === 'decision' && /^REJECT [0-9a-f]{40} task\/feat/.test(e.text)),
+    'sense: a verdict is written to the journal as a decision and the order goes to the branch\'s worker');
+  const acc = sense.runSenseVerdict('h1', 'task/feat', 'accept', 'looks fine');
+  ok(acc.code === 1 && /REFUSED/.test(acc.text), 'sense: accept is refused for a branch that fails the checklist');
+  const ev1 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 });
+  ok(ev1.code === 1 || ev1.events.every(e => !e.key.startsWith('br:task/feat')), 'sense: a branch already decided at this sha is not raised again');
+  sh('git checkout -q task/feat && git rm -q c.txt && git commit -q -m unleak && git push -q origin task/feat', path.join(G, 'work'));
+  const ev2 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 + 5 });
+  ok(ev2.code === 0 && ev2.events.some(e => e.key.startsWith('br:task/feat:')) && /hub sense h1 verdict/.test(ev2.text),
+    'sense: a new push to the branch is an event, and the text says how to decide it');
+  const snap = sense.senseSnapshots();
+  ok(snap.h1 && snap.h1.pending.some(k => k.startsWith('br:task/feat:')), 'sense: what the sensor raised is published for boards on every node');
+  const cliR = run('sense h1 --json', { HUBD_DIR: SN, HUBD_TEAM_DIR: SN, HUBD_NODE: 'cedar' });
+  ok(cliR.code === 1, `sense: the CLI keeps the loop contract — 1 when there is nothing new (got ${cliR.code})`);
+  const cliE = run('sense nobody', { HUBD_DIR: SN, HUBD_TEAM_DIR: SN });
+  ok(cliE.code >= 2, 'sense: a failure is never mistaken for "no events" (exit above 1)');
+  fs.rmSync(G, { recursive: true, force: true });
+}
+core.setHubBase(T0);
+
+// ── hub gc: list by class, archive by moving, one commit mesh-sync accepts ──
+const HG = mktmp();
+core.setHubBase(HG);
+{
+  const gc = await import(path.join(REPO, 'hub/lib/gc.mjs'));
+  const sh0 = (c, cwd) => execSync(c, { cwd, stdio: 'pipe' }).toString();
+  const q = path.join(HG, 'queues'), st = path.join(HG, '.qstate');
+  fs.mkdirSync(q, { recursive: true }); fs.mkdirSync(st, { recursive: true });
+  const none = gc.hubGcPlan({ root: HG });
+  ok(!none.queues.length && none.notes.some(n => /no roles are declared/.test(n)), 'gc: with no registry nothing is judged by name, and it says so');
+  core.runResourceSet({ slug: 'live-w', type: 'role', attrs: { rank: 'worker', project: 'p' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'old-w', type: 'role', status: 'off', attrs: { rank: 'worker', project: 'p' }, by: 'dev-t' });
+  fs.writeFileSync(path.join(HG, 'owner-roles.json'), '["boss"]');
+  const old = '\n## 2026-01-01 00:00 · from x\nold order\n';
+  for (const f of ['ghost.n1.queue.md', 'old-w.n1.queue.md', 'live-w.n1.queue.md', 'boss.n1.queue.md']) fs.writeFileSync(path.join(q, f), old);
+  fs.writeFileSync(path.join(q, 'fresh.n1.queue.md'), `\n## ${core.now()} · from x\nnew\n`);
+  fs.writeFileSync(path.join(st, 'ghost.n1.queue.md.offset'), '10');
+  fs.writeFileSync(path.join(st, 'gone.waiter'), JSON.stringify({ pid: 999999, since: '2020-01-01' }));
+  fs.mkdirSync(path.join(HG, 'presence'), { recursive: true });
+  fs.writeFileSync(path.join(HG, 'presence', 'stranger.json'), JSON.stringify({ agent: 'stranger', last_seen: '2026-01-01 00:00', ttlMin: 15 }));
+  core.recordEnvObservation('cursor-conflict', 'ghost');
+  core.runTaskAdd({ project: 'p', text: 'on an off role', assignee: 'old-w', by: 'dev-t' });
+  sh0('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed', HG);
+  const plan = gc.hubGcPlan({ root: HG });
+  ok(plan.queues.map(x => x.file).sort().join(',') === 'ghost.n1.queue.md,old-w.n1.queue.md',
+    'gc: queues of a name that is no role and of a role switched off are listed; live, owner and freshly written ones are not');
+  ok(plan.waiters.length === 1 && plan.presence.map(p => p.agent).join() === 'stranger' && plan.env.some(e => e.value === 'ghost'),
+    'gc: dead waiter markers, stale presence of non-roles and notices whose cause is gone are listed');
+  ok(plan.tasks.length === 1 && plan.tasks[0].assignee === 'old-w' && plan.tasks[0].reason === 'role is off', 'gc: open tasks on a role that is off are listed for the head to decide');
+  ok(fs.existsSync(path.join(q, 'ghost.n1.queue.md')), 'gc: the dry run moves nothing');
+  let eb = null; try { gc.runHubGc({ root: HG, apply: true }); } catch (e) { eb = e.message; }
+  ok(/by required/.test(eb || ''), 'gc: --apply needs an author');
+  const res = gc.runHubGc({ root: HG, apply: true, by: 'dev-t' });
+  ok(res.moved.length === 2 && fs.readFileSync(path.join(q, 'archive', 'ghost.n1.queue.md'), 'utf8') === old && !fs.existsSync(path.join(q, 'ghost.n1.queue.md')),
+    'gc: --apply moves the queue into queues/archive/ with its bytes intact');
+  ok(fs.existsSync(path.join(st, '_archive', 'ghost.n1.queue.md.offset')) && !fs.existsSync(path.join(st, 'gone.waiter')) &&
+    fs.existsSync(path.join(HG, 'presence', '_archive', 'stranger.json')), 'gc: its cursor goes along, the dead marker goes, the stale presence is archived');
+  ok(core.loadTasks().tasks.find(t => t.assignee === 'old-w').status === 'open', 'gc: tasks are never touched');
+  ok(!!res.commit && sh0('git log -1 --format=%s', HG).trim() === 'hub gc: archived 2 queue file(s) by dev-t', 'gc: the move is one commit that says what it was');
+  // mesh-sync's guard, run against the same move left uncommitted
+  sh0('git reset -q --soft HEAD~1 && git reset -q', HG);
+  let rc = 0; try { execSync(`sh ${REPO}/scripts/mesh-sync.sh`, { env: { ...process.env, HUBD_DIR: HG }, stdio: 'pipe' }); } catch (e) { rc = e.status; }
+  ok(rc === 0, `gc: mesh-sync accepts an archived queue even uncommitted — the bytes are in the archive (got ${rc})`);
+  fs.rmSync(path.join(q, 'live-w.n1.queue.md'));
+  rc = 0; try { execSync(`sh ${REPO}/scripts/mesh-sync.sh`, { env: { ...process.env, HUBD_DIR: HG }, stdio: 'pipe' }); } catch (e) { rc = e.status; }
+  ok(rc === 4, `gc: while an rm of a queue is still refused (got ${rc})`);
+}
+core.setHubBase(T0);
+
+for (const d of [DG, ID, QG, SEC, GT, AL, QT, QL, RL, AUD, NX, RC, US, SL, DUP, FV, WV, MS, QCOL, CC, AB, ABSRC, AUP, MS2, SUBQ, TL, RG, BD, WK, SN, HG]) fs.rmSync(d, { recursive: true, force: true });
 core.setHubBase(T0);
 
 console.log('\n' + pass + ' pass, ' + fail + ' fail');
