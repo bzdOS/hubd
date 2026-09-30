@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { REPO, ok, mktmp, core, usageLib, recallLib, done } from './_h.mjs';
+import { REPO, ok, mktmp, cli, core, usageLib, recallLib, done } from './_h.mjs';
 
 // ── protocol: ensureProtocol materialises HUBD.md (versioned, gitignored, per-node) ──
 const TP = mktmp();
@@ -381,5 +381,17 @@ ok(/cto-t/.test(amended.appended) && /\d{4}-\d{2}-\d{2}/.test(amended.appended),
 core.runRules({ append: 'and a second one', by: 'cto-t' });
 ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) || []).length === 1,
   'rules: a second amendment joins the same heading instead of starting another');
+
+// ── hub whereami from a shell: from the marker, as JSON, and outside any project ──
+{
+  const WD = mktmp(), W = path.join(WD, 'wrepo'); fs.mkdirSync(W); fs.writeFileSync(path.join(W, '.hubd'), 'wsmoke\n');
+  execSync('git init -q && git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m "first light"', { cwd: W, stdio: 'ignore' });
+  const w = cli(['whereami'], { cwd: W, env: { HUBD_AGENT: 'smoke' } });
+  ok(w.code === 0 && /^project: {2}wsmoke/m.test(w.out) && /first light/.test(w.out), 'whereami: the CLI names the project from the marker and lists the commit subjects');
+  let wj = null; try { wj = JSON.parse(cli(['whereami', '--json'], { cwd: W }).stdout); } catch {}
+  ok(wj && wj.project === 'wsmoke' && Array.isArray(wj.git && wj.git.commits), 'whereami --json: the same answer, machine-readable');
+  const wn = cli(['whereami'], { cwd: WD });
+  ok(wn.code === 0 && /project: {2}\(none\)/.test(wn.out), 'whereami: outside any project it still answers, with (none)');
+}
 
 done();

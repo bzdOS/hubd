@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { ok, mktmp, run, T0, core, doc, conflictsLib, cardsLib, done } from './_h.mjs';
+import { ok, mktmp, run, cli, T0, core, doc, conflictsLib, cardsLib, done } from './_h.mjs';
 
 // ── core: card-set / sync must preserve ALL owner sections, not just "## Facts" ──
 // regression: the writer used to keep only "## Facts" and silently drop any other
@@ -434,5 +434,15 @@ core.setHubBase(MG);
   ok(cardsLib.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
 }
 core.setHubBase(T0);
+
+// ── the card cap from the CLI: the flags reach the refusals the engine tests above hold ──
+{
+  const CP = mktmp(), env = { HUBD_DIR: CP, HUBD_TEAM_DIR: CP };
+  cli(['card', 'capproj', '-m', 'a real snapshot', '--by', 'smoke'], { env });
+  const al = cli(['card', 'capproj', '--append-line', '- 2026-09-23: shipped it', '--by', 'smoke'], { env });
+  ok(al.code !== 0 && /hub_report/.test(al.out), 'card: --append-line with a dated line is refused and names hub_report');
+  const cc = cli(['cards', 'compact'], { env, cwd: CP });
+  ok(cc.code === 0 && /Would compact|already inside the limit/.test(cc.out), 'cards compact: a dry run reports without writing');
+}
 
 done();

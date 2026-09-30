@@ -13,7 +13,7 @@ const TESTS = path.dirname(fileURLToPath(import.meta.url));
 const shell = (f) => (/bash/.test(fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n')[0]) ? 'bash' : 'sh');
 // the longest first: the wall time is the slowest suite, as long as it starts at once
 const suites = [
-  ...['smoke_cli.sh', 'smoke_mcp.sh', 'test_mesh_sync.sh', 'test_sync_preserve.sh', 'check_clean.sh']
+  ...['test_mesh_sync.sh', 'smoke_mcp.sh', 'test_sync_preserve.sh', 'check_clean.sh']
     .map(f => ({ name: f.replace(/\.sh$/, ''), cmd: shell(f), args: [path.join(TESTS, f)] })),
   ...fs.readdirSync(path.join(TESTS, 'logic')).filter(f => f.endsWith('.mjs') && !f.startsWith('_')).sort()
     .map(f => ({ name: 'logic/' + f.replace(/\.mjs$/, ''), cmd: process.execPath, args: [path.join(TESTS, 'logic', f)] })),

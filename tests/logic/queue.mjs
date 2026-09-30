@@ -1,7 +1,8 @@
-// queue.mjs — queues: depth, buttons, ghosts, task refs, the ledger, spellings, a role's work, two readers, acks
+// queue.mjs — queues: depth, buttons, ghosts, task refs, the ledger, spellings, a role's work, two readers, acks, the CLI
 import fs from 'node:fs';
 import path from 'node:path';
-import { ok, mktmp, run, T0, core, queueLib, done } from './_h.mjs';
+import { spawn } from 'node:child_process';
+import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done } from './_h.mjs';
 
 // ── queue-depth peek: non-consuming, mesh-safe ──
 const qRoot1 = mktmp();
@@ -553,6 +554,33 @@ const AK = mktmp();
     'acks: id 1 is acked in the shard that holds id 1, not in one that holds id 12');
   let bad = null; try { queueLib.queueAck('ak', 'x1', { root: AK }); } catch (e) { bad = e.message; }
   ok(/positive integer/.test(bad || ''), 'acks: a block id that is not a number is refused, not searched for');
+}
+
+// ── the queue from the CLI: a roundtrip, what doctor sees of it, a second waiter, the sender rule ──
+{
+  const Q = mktmp(), hub = path.join(Q, 'hub'), team = path.join(Q, 'team'); fs.mkdirSync(team);
+  const env = { HUBD_DIR: hub, HUBD_TEAM_DIR: team, HUBD_QUEUE_DIR: team };
+  const q = (argv, more = {}) => cli(argv, { env: { ...env, ...more }, cwd: team });
+  ok(q(['queue', 'send', 'smoketest', 'hello smoke', '--from', 'tester']).code === 0, 'queue send: exit 0');
+  const w1 = q(['queue', 'wait', 'smoketest', '--timeout', '0']);
+  ok(w1.code === 0 && /hello smoke/.test(w1.out), 'queue wait: delivers what was sent, exit 0');
+  const w2 = q(['queue', 'wait', 'smoketest', '--timeout', '0']);
+  ok(w2.code === 2 && /NO_CHANGES/.test(w2.out), 'queue wait: a second wait finds nothing, exit 2 and NO_CHANGES');
+  // doctor reads the cursor the consumer really writes: a path it never wrote showed the full size
+  ok(/smoketest.*pending 0B/.test(q(['doctor']).out), 'doctor: a consumed queue shows pending 0B');
+  const bg = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'queue', 'wait', 'smoketest', '--timeout', '6'], { env: { ...process.env, ...env }, cwd: team, stdio: 'ignore' });
+  const marker = path.join(team, '.qstate', 'smoketest.waiter');
+  for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await new Promise(r => setTimeout(r, 50));
+  ok(new RegExp(`live waiter: pid ${bg.pid}\\b`).test(q(['doctor']).out), 'doctor: a live waiter is shown with its pid');
+  bg.kill(); await new Promise(r => bg.once('exit', r));
+  // a second waiter on one cursor is told so, and still waits: the warning is advisory
+  fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }));
+  const w3 = q(['queue', 'wait', 'smoketest', '--timeout', '0']);
+  ok(/another waiter/i.test(w3.stderr) && (w3.code === 0 || w3.code === 2), 'queue wait: another live waiter is a warning on stderr, and the wait still runs');
+  fs.rmSync(marker, { force: true });
+  const s0 = q(['queue', 'send', 'smoketest', 'no author'], { HUBD_AGENT: '' });
+  ok(s0.code !== 0 && /from required/.test(s0.out), 'queue send: refused without --from or HUBD_AGENT, and the error names the flag');
+  ok(q(['queue', 'send', 'smoketest', 'floored'], { HUBD_AGENT: 'dev-smoke' }).code === 0, 'queue send: HUBD_AGENT floors an omitted --from');
 }
 
 done();
