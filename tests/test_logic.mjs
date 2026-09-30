@@ -1806,7 +1806,7 @@ core.setHubBase(QT);
 q.queueSend('worker', 'HOLD: waiting on the owner', { from: 'dev-t', root: QT, task: 'pine-3', node: 'n1' });
 q.queueSend('worker', 'unrelated', { from: 'dev-t', root: QT, node: 'n1' });
 const qtText = fs.readFileSync(path.join(QT, 'queues', 'worker.n1.queue.md'), 'utf8');
-ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t · task #pine-3$/m.test(qtText),
+ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t(?: · id \d+)? · task #pine-3$/m.test(qtText),
   'queue task ref: stamped after the sender, so the header pattern every reader uses still matches');
 ok(q.peekQueueDepth('worker', { root: QT }).pending === 2,
   'queue task ref: the existing depth reader is unaffected by the extra field');
