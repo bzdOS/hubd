@@ -7,14 +7,14 @@ import readline from 'node:readline';
 import path from 'node:path';
 import {
   VERSION, tenantKey, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
-  runTaskList, runTaskUpdate, runTaskGet, runBrief, runClaim, runClaimCheck, runRelease, runKanban,
+  runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
   setHubBase, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
   envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runRecall } from './lib/recall.mjs';
-import { queueSend, queueWait, queueWaitAll, queueSummaryForBrief, buttonsSummary, ownerQueueItems, transportHealth, peekQueueDepthWithAcks, everConsumedHere, queueAck } from './lib/queue.mjs';
+import { queueWait, queueWaitAll, queueSummaryForBrief, queueAck, briefWithQueues, queueSendChecked } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
 
 const TOOLS = [
@@ -389,27 +389,10 @@ const DISPATCH = {
       textPreview: String(t.text || '').slice(0, 80) + (String(t.text || '').length > 80 ? '…' : '') };
   },
   hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
-  // queues: teamRoot() captured synchronously here, same reasoning as hub_queue_send/wait below —
+  // root: teamRoot() captured synchronously here, same reasoning as hub_queue_send/wait below —
   // a plain string value, not a live reference, so a concurrent HTTP request repointing
   // HUB can't retarget an in-flight call.
-  hub_brief: (a) => {
-    const queues = queueSummaryForBrief({ root: teamRoot() });
-    // Queue DEPTH says how much is pending; it cannot say whether replication is
-    // converging, and a quiet queue reads exactly like a stopped transport. Both
-    // transports leave an observable artefact, so report both ages here — see
-    // transportHealth() and docs/interop.md -> Transport.
-    // `queues` is handed to runBrief as well: the audit rides on this call (runReview) and its
-    // stale-button check needs the rows, which core.mjs cannot read for itself.
-    const b = runBrief({ ...a, queues });
-    return {
-      ...b, queues, buttons: buttonsSummary(queues), transport: transportHealth({ root: teamRoot() }),
-      // Two different waits, deliberately apart: a package addressed to the owner and not yet
-      // answered, vs a decision sitting on the board that only the owner may move. See
-      // ownerQueueItems / ownerWaiting.
-      buttonItems: ownerQueueItems({ root: teamRoot() }),
-      ownerWaiting: ownerWaiting(b.tasksOpen),
-    };
-  },
+  hub_brief: (a) => briefWithQueues({ ...a, root: teamRoot() }),
   // queues are read HERE and handed in: lib/queue.mjs imports core, so core cannot read them
   // itself without closing an import cycle (see runAudit).
   hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }) }),
@@ -434,33 +417,7 @@ const DISPATCH = {
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   // from: required like every other author (was `|| 'mcp'` — a transport name, i.e. a
   // placeholder); an omitted from is filled by the HUBD_AGENT floor in withAuthorFloor.
-  hub_queue_send: (a) => {
-    // Validate the task ref but never refuse the send: the message is the urgent thing, a
-    // mistyped id is a warning the caller can act on immediately.
-    let taskKnown;
-    if (a.task != null && a.task !== '') { try { runTaskGet({ id: a.task }); taskKnown = true; } catch { taskKnown = false; } }
-    const file = queueSend(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task });
-    // What is actually WAITING for this role, after the append. "Sent" says the write happened; it
-    // never said whether anything is reading, and a sender read it as "delivered" — while four
-    // roles sat on a day of undelivered orders (task maple-98). A depth that keeps climbing
-    // is the sender's own evidence that nobody is consuming.
-    const depth = (() => { try { return peekQueueDepthWithAcks(a.role, { root: teamRoot() }); } catch { return null; } })();
-    /* The depth is measured against THIS node's cursor, and that is only evidence when this node is
-     * where the role is consumed. A role read on another machine keeps its cursor there — .qstate is
-     * node-local and never syncs — so a cross-node queue reads as permanently unconsumed from here.
-     * Saying "nothing is consuming" about those would be wrong on most sends in a fleet, and a
-     * warning that is usually wrong is one its reader learns to skip. So: consumed-here gets the
-     * real warning, never-consumed-here gets the caveat instead of an accusation. */
-    const seenHere = (() => { try { return everConsumedHere(a.role, { root: teamRoot() }); } catch { return false; } })();
-    const note = !depth || depth.pending <= 1 ? null
-      : seenHere
-        ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
-        : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and cursors are node-local — so this is not a backlog, it is the only view this machine can have. Check on the node that runs the role.`;
-    return { file, ...(taskKnown === undefined ? {} : { task: a.task, taskKnown }),
-      ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
-        unacked: depth.unacked || 0,
-        ...(note ? { note } : {}) } : {}) };
-  },
+  hub_queue_send: (a) => queueSendChecked(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task }),
   // subscriber: subscriberId() — stable across a respawn (HUBD_SUBSCRIBER / HUBD_SESSION /
   // HUBD_AGENT before the process id), so a restarted role resumes its own position.
   // Resolved from THIS process, never from the caller's arguments — the
@@ -488,6 +445,16 @@ function teamRoot() {
 // a remote agent could point `path` at the host's disk or hold a connection open for
 // minutes. Disabled over HTTP.
 const LOCAL_ONLY_TOOLS = new Set(['hub_sync', 'hub_queue_wait', 'hub_queue_wait_all']);
+
+// The tool tables are keyed by name in four places; a name in one and not the others is a tool
+// offered with no handler, a handler never offered, or a budget for nothing. Refused at start,
+// not found on the first call.
+{
+  const names = new Set(TOOLS.map(t => t.name));
+  const stray = [...names].filter(n => !DISPATCH[n])
+    .concat([...Object.keys(DISPATCH), ...Object.keys(OUTPUT_PLANS), ...LOCAL_ONLY_TOOLS].filter(n => !names.has(n)));
+  if (stray.length) throw new Error('hubd: tool tables disagree on ' + [...new Set(stray)].join(', '));
+}
 
 function toolsFor(mode) {
   return mode === 'http' ? TOOLS.filter(t => !LOCAL_ONLY_TOOLS.has(t.name)) : TOOLS;

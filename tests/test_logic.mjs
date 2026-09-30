@@ -3755,6 +3755,16 @@ core.setHubBase(AK);
   ok(cardsLib.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
   const fl = run('report --message x', { HUBD_DIR: AK, HUBD_AGENT: 'dev-t' });
   ok(fl.code === 1 && /unknown flag: --message/.test(fl.out), 'cli: a flag no command reads is an error, not silently dropped (use -m)');
+  // every registered command has a help line; its first name is the one the line starts with
+  const cliSrc = fs.readFileSync(path.join(REPO, 'hub/cli.mjs'), 'utf8');
+  const registered = [...new Set([...cliSrc.matchAll(/^command\((?:\['([^']+)'|'([^']+)')/gm)].map(m => m[1] || m[2]))].filter(n => !n.startsWith('_'));
+  const help = run('--help', { HUBD_DIR: AK });
+  const missing = registered.filter(n => !new RegExp('^  ' + n + '\\b', 'm').test(help.out));
+  ok(help.code === 0 && registered.length > 40 && !missing.length, `cli: hub --help lists every command (missing: ${missing.join(', ') || 'none'})`);
+  const qh = run('queue --help', { HUBD_DIR: AK });
+  ok(qh.code === 0 && /queue gc/.test(qh.out) && !/^  status/m.test(qh.out), 'cli: hub <cmd> --help prints that command\'s lines only');
+  const sub = run('cards', { HUBD_DIR: AK });
+  ok(sub.code === 1 && /no such subcommand/.test(sub.out) && /cards compact/.test(sub.out), 'cli: a command without its subcommand says so and lists them');
 }
 core.setHubBase(T0);
 

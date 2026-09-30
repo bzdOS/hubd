@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, JOURNAL_NODE, VERSION, now, parseTs, slugify, sh, cardPath, digestOf, requireAuthor, runSync,
   runCardSet, runReport, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
-  runTaskRetag, TASK_CATS, runBrief, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
+  runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
   CONFLICT_RE, runHeartbeat, runPresence, ownerWaiting, runWhereAmI, HUB_GITIGNORE, ensureHubGitignore,
@@ -28,7 +28,7 @@ import { runDoctor } from './lib/doctor.mjs';
 import { runHubGc } from './lib/gc.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { roleWork, assertRole, queueSend, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, buttonsSummary, ownerQueueItems, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -93,7 +93,7 @@ let knownFlags = new Set();
 // This is broad but safe: the alternative (per-command declaration) is ~25 manual edits
 // with the same end result for the bugs that matter — silent misbehavior from typos.
 declareFlags(
-  '--json', '--apply', '--force', '--private', '--alive', '--here',
+  '--json', '--apply', '--force', '--private', '--alive', '--here', '--help',
   '--set', '--from-now', '--once', '--all',
   // getFlag/getFlags auto-register their flags on match, but when a flag is absent
   // (not matched), it would be reported as unknown. Pre-declaring prevents that.
@@ -367,35 +367,45 @@ deviations, test output); the cto appends "## Acceptance".*
 
 const GITIGNORE_ENTRY = HUB_GITIGNORE.join('\n') + '\n';
 
+/* ── commands ──
+ * Every command registers here and runs from the one dispatch at the end of the file, after every
+ * declaration in it: a name nobody registered is an error, and `hub --help` lists what is (a test
+ * holds the help and the table together). `when` picks a subcommand that has a handler of its own;
+ * the handlers of one name are tried in the order they were registered. */
+const COMMANDS = new Map();   // name -> [{ when, run }]
+function command(names, when, run) {
+  if (!run) { run = when; when = null; }
+  for (const n of [].concat(names)) {
+    if (!COMMANDS.has(n)) COMMANDS.set(n, []);
+    COMMANDS.get(n).push({ when, run });
+  }
+}
+
 /* Until 0.9.4 there was no way to ask hubd its own version, and the omission had a price: the
  * global `hub` on the machine that develops hubd sat nine releases behind for weeks, and reading
- * `npm ls -g` was the only way to find out. Answered BEFORE ensureProtocol() below, so asking a
- * possibly-wrong install what it is never writes anything.
+ * `npm ls -g` was the only way to find out. Answered BEFORE ensureProtocol() (see the dispatch), so
+ * asking a possibly-wrong install what it is never writes anything.
  *
  * The path is printed with the number because "which version" and "which copy" are one question:
  * a stale global install and a live source checkout are both called `hub`, and they answer
  * differently. Whichever one printed this line is the one your shell has been running. */
-if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+command(['version', '--version', '-v'], () => {
   console.log('hubd ' + VERSION);
   console.log('  running:  ' + __filename);
   console.log('  node:     ' + process.version);
   console.log('  hub base: ' + HUB);
   done(0);
-}
+});
 
-// Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when
-// already current (a stat + version compare); rewrites only after a hubd version change.
-try { ensureProtocol(); } catch {}
-
-if (cmd === 'upgrade') {
+command('upgrade', () => {
   const r = ensureProtocol(true);
   if (!r.ok) die('could not materialise HUBD.md (protocol source missing?)');
   console.log(r.wrote ? `HUBD.md → v${r.version}` + (r.from ? ` (was v${r.from})` : ' (new)') : `HUBD.md already current (v${r.version})`);
   console.log('  agents read it for hub mechanics; team rules stay in AGENTS.md');
   done(0);
-}
+});
 
-if (cmd === 'init') {
+command('init', () => {
   const pathArg = args.filter(a => !a.startsWith('-'))[1] ?? null;
   const targetDir = pathArg ? path.resolve(pathArg) : process.cwd();
 
@@ -462,13 +472,12 @@ if (cmd === 'init') {
   console.log('  Check setup:       hub doctor');
   console.log('  Full org template: hubd-company/ in the hubd repository');
   done(0);
-}
+});
 
-if (cmd === 'doctor') done(runDoctor() ? 1 : 0);
+command('doctor', () => done(runDoctor() ? 1 : 0));
 
-/* ── command dispatch ── */
 
-if (cmd === 'status') {
+command('status', () => {
   const data = runStatus();
   console.log(pad('slug', 26) + pad('synced', 22) + pad('open', 6) + 'digest');
   console.log('─'.repeat(90));
@@ -481,22 +490,15 @@ if (cmd === 'status') {
     console.log(pad(p.project, 26) + pad(p.synced, 22) + pad(p.openTasks, 6) + lag + (p.digest.split('\n')[0] || '').slice(0, 40));
   }
   done(0);
-}
+});
 
-if (cmd === 'brief') {
+command('brief', () => {
   const hours = parseInt(getFlag('--hours') || getFlag('-h') || '48');
-  const qroot = resolveQueueRoot();
-  const queues = queueSummaryForBrief({ root: qroot });
-  const b = runBrief({ hours, queues });
-  console.log(formatBrief({
-    ...b, queues, buttons: buttonsSummary(queues),
-    buttonItems: ownerQueueItems({ root: qroot }),
-    ownerWaiting: ownerWaiting(b.tasksOpen),
-  }, hours));
+  console.log(formatBrief(briefWithQueues({ hours }), hours));
   done(0);
-}
+});
 
-if (cmd === 'inbox') {
+command('inbox', () => {
   const hours = parseInt(getFlag('--hours') || '72');
   const r = runInbox({ hours });
   if (r.empty) { console.log('inbox: clear — nothing needs a decision'); done(0); }
@@ -506,9 +508,9 @@ if (cmd === 'inbox') {
   P('UNASSIGNED', r.unassigned, x => `#${x.id} [${x.project}] ${x.importance || ''} — ${x.text}`);
   P('STALE CLAIMS', r.staleClaims, x => `${x.project}/${x.area} @${x.agent} since ${x.since} (ttl ${x.ttlMin}m, expired)`);
   done(0);
-}
+});
 
-if (cmd === 'plan' || cmd === 'trajectory') {
+command(['plan', 'trajectory'], () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
   const r = runTrajectory({ project: proj });
   const label = (id) => { const t = r.ready.concat(r.blocked).find(x => String(x.id) === String(id)); return `#${id}${t ? ' ' + (t.text || '').slice(0, 40) : ''}`; };
@@ -520,13 +522,13 @@ if (cmd === 'plan' || cmd === 'trajectory') {
   if (r.blocked.length) { console.log(`\nBLOCKED (${r.blocked.length}):`); for (const b of r.blocked) console.log(`  #${b.id} ← waiting on ${b.waitingOn.map(id => '#' + id).join(',')} — ${(b.text || '').slice(0, 50)}`); }
   if (r.cycles.length) console.log(`\n⚠ CYCLES (fix these deps): ${r.cycles.map(id => '#' + id).join(' ')}`);
   done(0);
-}
+});
 
 /* `hub whereami [cwd]` — state, not narrative: the first command after a context compaction, and
  * the one an editor's session-start hook runs. Everything hub_context returns, plus the git-side
  * inventory (subjects, diff stat, untracked with their first line, fresh mtimes) and the project's
  * own inventory script if the .hubd marker names one. Read-only, no network. */
-if (cmd === 'whereami' || cmd === 'where') {
+command(['whereami', 'where'], () => {
   const target = args[1] && !args[1].startsWith('-') ? path.resolve(args[1]) : process.cwd();
   const af = getFlag('--agent');
   let w;
@@ -564,9 +566,9 @@ if (cmd === 'whereami' || cmd === 'where') {
     else { L(`inventory (${w.localInventory.script}):`); for (const l of w.localInventory.output.split('\n')) L('  ' + l); if (w.localInventory.truncated) L('  … output truncated at 4 KB'); }
   }
   done(0);
-}
+});
 
-if (cmd === 'log') {
+command('log', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const n = parseInt(getFlag('-n') || '20');
   // --json: the entries as-is. Scripts were regex-parsing the text line and losing
@@ -576,9 +578,9 @@ if (cmd === 'log') {
     console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}`);
   }
   done(0);
-}
+});
 
-if (cmd === 'report') {
+command('report', () => {
   const pf = getFlag('-p');
   const proj = (typeof pf === 'string') ? pf : 'general';
   const kind = getFlag('-k') || 'note';
@@ -611,9 +613,9 @@ if (cmd === 'report') {
   const onlyNote = r.note && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   done(0);
-}
+});
 
-if (cmd === 'decide') {
+command('decide', () => {
   const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!what) die('Usage: hub decide "<decision>" --why "<why>" -p <proj>');
   const why = getFlag('--why');
@@ -621,9 +623,9 @@ if (cmd === 'decide') {
   const r = runReport({ project: proj, by: authorOrDie('--by'), text: `DECIDE: ${what}${typeof why === 'string' ? ' | ' + why : ''}` });
   console.log(`Decided on ${r.project}: +${r.decisions} → ## Decisions`);
   done(0);
-}
+});
 
-if (cmd === 'next') {
+command('next', () => {
   const what = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!what) die('Usage: hub next "<the one next action>" -p <proj>');
   const pf = getFlag('-p'); const proj = (typeof pf === 'string') ? pf : 'general';
@@ -633,9 +635,9 @@ if (cmd === 'next') {
   console.log(`Next step set on ${r.project}`);
   if (r.nextReplaced) console.error(`  replaced — was${r.nextReplaced.by ? ' (' + r.nextReplaced.by + (r.nextReplaced.at ? ', ' + r.nextReplaced.at : '') + ')' : ''}: ${r.nextReplaced.text}`);
   done(0);
-}
+});
 
-if (cmd === 'task') {
+command('task', () => {
   const sub = args[1];
   if (sub === 'add') {
     // A flag in the text slot is a misplaced argument, not a task: `hub task add -p x --by y`
@@ -693,7 +695,7 @@ if (cmd === 'task') {
     let pos; try { pos = positionals(2, { booleans: ['--json'] }); } catch (e) { die(e.message + '\nUsage: hub task get <id> [--json]'); }
     const id = pos[0];
     if (!id) die('Id required: hub task get <id>');
-    let r; try { r = runTaskGet({ id }); } catch (e) { die(e.message); }
+    const r = runTaskGet({ id });
     const t = r.task;
     console.log(`#${t.id} [${t.project}] ${t.status}${t.importance ? ' · ' + t.importance : ''}${t.deadline ? ' · ⏰' + t.deadline : ''}${t.assignee ? ' · @' + t.assignee : ''}`);
     console.log(t.text);
@@ -716,13 +718,13 @@ if (cmd === 'task') {
     die('task subcommands: add, get, done, list, retag');
   }
   done(0);
-}
+});
 
 /* `hub claim check <path>` — is this file inside somebody's live claim? Exit 0 when free (or the
  * claim is your own, with --agent), exit 1 with one line per holder when it is not. Meant for an
  * editor hook that runs before a write, so the warning arrives BEFORE the edit; the claim stays
  * soft by constitution, so a hook should inform, not block. */
-if (cmd === 'claim' && args[1] === 'check') {
+command('claim', () => args[1] === 'check', () => {
   const target = args[2] && !args[2].startsWith('-') ? args[2] : null;
   if (!target) die('Usage: hub claim check <path> [-p <proj>] [--agent <you>]');
   const pf = getFlag('-p'), af = getFlag('--agent');
@@ -734,21 +736,21 @@ if (cmd === 'claim' && args[1] === 'check') {
   if (r.holders.length) { console.error(`  ${r.rel} is inside ${r.holders.length} live claim(s) on ${r.project} — coordinate before editing (soft lock, not enforced)`); done(1); }
   console.log(`free — ${r.rel}` + (r.mine.length ? ` (your own claim: ${r.mine.map(m => m.area).join(', ')})` : '') + (r.unmatchable.length ? `; ${r.unmatchable.length} prose claim(s) on ${r.project} could not be matched: ${r.unmatchable.map(u => u.agent).join(', ')}` : ''));
   done(0);
-}
+});
 
-if (cmd === 'claim' && args.includes('--task')) {
+command('claim', () => args.includes('--task'), () => {
   // Starting a task from a role's work queue: the claim is on task:<id>, the project is the task's.
   const task = getFlag('--task');
   if (typeof task !== 'string') die('Usage: hub claim --task <id> [-t min] [--note "<why>"] --agent <you>');
   const ttl = parseInt(getFlag('-t') || '240');
   const note = getFlag('--note');
-  let res; try { res = runClaim({ task, agent: authorOrDie('--agent'), ttlMin: ttl, note: typeof note === 'string' ? note : undefined }); } catch (e) { die(e.message); }
+  const res = runClaim({ task, agent: authorOrDie('--agent'), ttlMin: ttl, note: typeof note === 'string' ? note : undefined });
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Started #${task}: ${res.claim.id} (until ${new Date(parseTs(res.claim.since).getTime() + ttl * 60000).toISOString().slice(0, 16).replace('T', ' ')})`);
   done(0);
-}
+});
 
-if (cmd === 'claim') {
+command('claim', () => {
   const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>   |   hub claim --task <id> --agent <you>   |   hub claim check <path> [-p <proj>]';
   let pos;
   try { pos = positionals(1, { values: ['-t', '--agent', '--note'] }); } catch (e) { die(e.message + '\n' + CU); }
@@ -762,18 +764,18 @@ if (cmd === 'claim') {
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Lock: ${res.claim.id}` + (res.matchable ? '' : '  (prose area — `hub claim check` cannot match files against it; a glob would)'));
   done(0);
-}
+});
 
-if (cmd === 'release') {
+command('release', () => {
   const id = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const task = getFlag('--task');
   if (!id && typeof task !== 'string') die('Usage: hub release <id>   |   hub release --task <id> --agent <you>');
-  let res; try { res = id ? runRelease({ id }) : runRelease({ task, agent: authorOrDie('--agent') }); } catch (e) { die(e.message); }
+  const res = id ? runRelease({ id }) : runRelease({ task, agent: authorOrDie('--agent') });
   console.log(`Locks released: ${res.removed}`);
   done(0);
-}
+});
 
-if (cmd === 'heartbeat') {
+command('heartbeat', () => {
   const agent = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!agent) die('Usage: hub heartbeat <agent> [--role <role>] [--status <text>] [--task <id>] [--cwd <path>] [--ttl <min>]\n' +
     '         [--state turn|waiting|exit] [--turn <n>] [--turn-started <ts|now>] [--empty <n>] [--silent <n>] [--exit-reason <text>]');
@@ -790,9 +792,9 @@ if (cmd === 'heartbeat') {
   }); } catch (e) { die(e.message); }
   console.log(`Heartbeat: ${res.agent} -> ${res.presence}`);
   done(0);
-}
+});
 
-if (cmd === 'presence') {
+command('presence', () => {
   const roleFlag = getFlag('--role');
   const data = runPresence({ role: (typeof roleFlag === 'string') ? roleFlag : undefined, aliveOnly: args.includes('--alive') });
   // --json: the same object hub_presence returns. The table truncates names and
@@ -821,7 +823,7 @@ if (cmd === 'presence') {
   }
   console.log(`(${data.agents.length} agents, generated ${data.generated})`);
   done(0);
-}
+});
 
 /* `hub card resolve` — the one file in a hub that can conflict, resolved the way a human
  * resolves it. Bullet-list hunks are unioned (two nodes appending facts have not disagreed);
@@ -839,7 +841,7 @@ if (cmd === 'presence') {
  * mesh-wide freeze would have to travel by sync, and unfreezing would then need the sync it just
  * stopped. The marker records who, when and why, because a freeze somebody forgot is itself a
  * silent stall — `hub doctor` reports it, and after six hours calls it a warning. */
-if (cmd === 'freeze' || cmd === 'unfreeze') {
+command(['freeze', 'unfreeze'], () => {
   if (cmd === 'unfreeze') {
     const info = readFreeze();
     if (!info) { console.log('Not frozen — mesh-sync on this node is running normally.'); done(0); }
@@ -849,13 +851,13 @@ if (cmd === 'freeze' || cmd === 'unfreeze') {
     console.log('Run it once now to catch up:  sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"');
     done(0);
   }
-  let pos; try { pos = positionals(1, { values: ['--by'], booleans: [] }); } catch (e) { die(e.message); }
+  const pos = positionals(1, { values: ['--by'], booleans: [] });
   const why = pos.join(' ').trim();
   if (!why) die('say why: hub freeze "purging duplicate queue blocks" --by dev-hubd\n' +
     '  the reason is what tells the next person (or the next you) whether it is safe to unfreeze.');
   const by = getFlag('--by') || process.env.HUBD_AGENT || null;
   if (!by) die('--by required (or set HUBD_AGENT): a freeze stops every peer from receiving this node\'s work.');
-  try { requireAuthor(by, '--by'); } catch (e) { die(e.message); }
+  requireAuthor(by, '--by');
   const info = readFreeze();
   if (info) {
     console.log('Already frozen since ' + (info.since || '?') + ' by ' + (info.by || '?') + ': ' + (info.why || '?'));
@@ -876,11 +878,11 @@ if (cmd === 'freeze' || cmd === 'unfreeze') {
   console.log('  tar czf ~/hub-backup-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.tgz -C "' + path.dirname(HUB) + '" "' + path.basename(HUB) + '"');
   console.log('Other writers on this directory are NOT stopped by this — check them too:  hub doctor');
   done(0);
-}
+});
 
 // absorb: fold a hub base written in isolation into this one, as a new node. Dry run by default —
 // the plan (id map, unread queue blocks, cards kept aside) is the thing to read before --apply.
-if (cmd === 'absorb') {
+command('absorb', () => {
   let pos;
   try { pos = positionals(1, { values: ['--as', '--by'], booleans: ['--apply', '--force', '--json'] }); } catch (e) { die(e.message); }
   if (!pos[0]) die('usage: hub absorb <dir> --as <node-label> [--apply --by <you>] [--force] [--json]');
@@ -905,14 +907,14 @@ if (cmd === 'absorb') {
   console.log((r.apply ? 'Wrote ' : 'Would write ') + r.writes.length + ' new file(s); nothing here is rewritten.' +
     (r.apply ? ' Next mesh-sync carries them to every peer. Move the source away so nothing falls back to it.' : ''));
   done(0);
-}
+});
 
 // cards compact: bring cards that grew before the cap existed back under it. Dry by default.
-if (cmd === 'cards' && args[1] === 'compact') {
+command('cards', () => args[1] === 'compact', () => {
   const apply = args.includes('--apply');
   const by = getFlag('--by') || process.env.HUBD_AGENT || null;
   if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the move is journaled.');
-  let r; try { r = runCardsCompact({ apply, by }); } catch (e) { die(e.message); }
+  const r = runCardsCompact({ apply, by });
   console.log((apply ? 'Compacted' : 'Would compact') + ' against ' + r.limits.sectionBytes + 'B per section' +
     (apply ? '' : '  (dry run — add --apply --by <you>)'));
   if (!r.cards.length) { console.log('  every card is already inside the limit.'); done(0); }
@@ -929,15 +931,15 @@ if (cmd === 'cards' && args[1] === 'compact') {
     ? 'Nothing was deleted: every moved entry is in projects/history/<slug>.md, which syncs with the mesh.'
     : 'Nothing written. The overflow would be MOVED to history, never dropped — FACT:/HYPO:/COMM: live only in the card.');
   done(0);
-}
+});
 
 // cards merge-sections: fold doubled sections (same heading twice, or one key under two locales)
 // into the live one. Dry by default.
-if (cmd === 'cards' && args[1] === 'merge-sections') {
+command('cards', () => args[1] === 'merge-sections', () => {
   const apply = args.includes('--apply');
   const by = getFlag('--by') || process.env.HUBD_AGENT || null;
   if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the merge is journaled.');
-  let r; try { r = runCardsMergeSections({ apply, by }); } catch (e) { die(e.message); }
+  const r = runCardsMergeSections({ apply, by });
   if (!r.cards.length) { console.log('No card holds a section twice.'); done(0); }
   const what = (i) => i.key ? `${i.key}: ${i.headings.map(h => '## ' + h).join(' + ')}` : `## ${i.heading} x${i.count}`;
   for (const c of r.cards) {
@@ -948,28 +950,28 @@ if (cmd === 'cards' && args[1] === 'merge-sections') {
     ? 'Merged. Lists were concatenated in file order; a second next step went to projects/history/<slug>.md, never dropped.'
     : 'Nothing written (dry run — add --apply --by <you>). Lists would be concatenated into the section writers reach; a second next step would move to history.');
   done(0);
-}
+});
 
 // cards merge: merge two project cards that describe the same project under different slugs.
 // Creates an alias b → a in project-aliases.json; archives b.md to projects/history/.
 // Dry by default.
-if (cmd === 'cards' && args[1] === 'merge') {
+command('cards', () => args[1] === 'merge', () => {
   const from = args[2];  // the duplicate slug to fold
   const into = args[3];  // the canonical slug to keep
   if (!from || !into) die('cards merge <duplicate> <canonical> [--apply --by <you>]: folds <duplicate>.md into <canonical>.md');
   const apply = args.includes('--apply');
   const by = getFlag('--by') || process.env.HUBD_AGENT || null;
   if (apply && !by) die('--by required to apply (or set HUBD_AGENT): the merge is journaled.');
-  let r; try { r = runCardsMerge({ from, into, apply, by }); } catch (e) { die(e.message); }
+  const r = runCardsMerge({ from, into, apply, by });
   console.log(`  ${from}.md → ${into}.md  (alias created${r.aliasExisted ? ' — was already aliased' : ''})`);
   for (const s of r.sections) console.log(`      ${s.heading}: ${s.count} line(s) ${s.moved ? 'moved' : 'in destination already, skipped'}`);
   console.log(r.applied
     ? `Merged. ${from} is now an alias of ${into} and ${from}.md has been archived to projects/history/.`
     : 'Nothing written (dry run — add --apply --by <you>).');
   done(0);
-}
+});
 
-if (cmd === 'card' && args[1] === 'resolve') {
+command('card', () => args[1] === 'resolve', () => {
   const targets = args.slice(2).filter(a => !a.startsWith('-'));
   const files = targets.length
     ? targets.map(t => (t.includes('/') || t.endsWith('.md') ? path.resolve(t) : cardPath(t)))
@@ -995,9 +997,9 @@ if (cmd === 'card' && args[1] === 'resolve') {
   console.log(touched ? 'Rewrote ' + touched + ' card(s). Review, then commit.' : 'Nothing rewritten.');
   if (left) console.log('note: ' + left + ' hunk(s) need a human — hubd will not pick which side replaces the other.');
   done(left ? 1 : 0);
-}
+});
 
-if (cmd === 'card') {
+command('card', () => {
   const slug = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!slug) die('Usage: hub card <slug> -m "<digest>"  |  hub card resolve [slug...]');
   const digest = getFlag('-m') || getFlag('--digest');
@@ -1022,9 +1024,9 @@ if (cmd === 'card') {
   console.log(`Card ${res.patched ? 'patched' : 'set'}: ${res.project} → ${res.card}`);
   if (res.patched) console.log(res.digest.split('\n').map(l => '  ' + l).join('\n'));
   done(0);
-}
+});
 
-if (cmd === 'resource' || cmd === 'res') {
+command(['resource', 'res'], () => {
   const sub = args[1];
   if (sub === 'set') {
     const slug = args[2] && !args[2].startsWith('-') ? args[2] : null;
@@ -1065,9 +1067,9 @@ if (cmd === 'resource' || cmd === 'res') {
     die('resource subcommands: set, list, get');
   }
   done(0);
-}
+});
 
-if (cmd === 'secret') {
+command('secret', () => {
   const sub = args[1];
   const teamRoot = (() => { try { return resolveQueueRoot(); } catch { return null; } })();
   const name = args[2];
@@ -1135,9 +1137,9 @@ if (cmd === 'secret') {
       die('secret subcommands: set <name> (stdin), get <name>, path <name>, list, backup [name], restore <name>, verify, rm <name>');
     }
   } catch (e) { die(e.message); }
-}
+});
 
-if (cmd === 'graph') {
+command('graph', () => {
   const pf = getFlag('-p') || getFlag('--project');
   const data = runGraph({
     project: (typeof pf === 'string') ? pf : undefined,
@@ -1162,9 +1164,9 @@ if (cmd === 'graph') {
     for (const d of data.dangling) console.log(`  ${d.from} —${d.rel}→ ${d.to}`);
   }
   done(0);
-}
+});
 
-if (cmd === 'section') {
+command('section', () => {
   // `hub section add <proj> <section> "<text>"` — one line into one section, everything else
   // in the card untouched. Sits next to `hub sections` (which lists the vocabulary).
   const SU = 'Usage: hub section add <project> <section> "<text>" --by <you> [--src <where it came from>] [--set]';
@@ -1181,9 +1183,9 @@ if (cmd === 'section') {
   } catch (e) { die(e.message); }
   console.log(`${r.project} → ## ${r.section}${r.created ? '  (section created — check the name if you expected it to exist)' : ''}`);
   done(0);
-}
+});
 
-if (cmd === 'now' || cmd === 'whatnext') {
+command(['now', 'whatnext'], () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
   const r = runNext({ project: proj || undefined, assignee: getFlag('--assignee') || undefined });
   if (!r.task) { console.log('nothing to do: ' + r.why); done(0); }
@@ -1193,9 +1195,9 @@ if (cmd === 'now' || cmd === 'whatnext') {
   console.log(`\nwhy: ${r.why}`);
   console.log(`(${r.eligible} ready, ${r.blockedCount} blocked` + (r.runnerUp ? `; next after it: #${r.runnerUp.id}` : '') + ')');
   done(0);
-}
+});
 
-if (cmd === 'agenda') {
+command('agenda', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
   const r = runAgenda({ project: proj || undefined });
   const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); } };
@@ -1208,13 +1210,13 @@ if (cmd === 'agenda') {
   P('BLOCKED', r.blocked, x => line(x) + '  \u2190 waits on #' + x.waitingOn.join(' #'));
   if (!r.counts.eligible && !r.counts.blocked) console.log('\nnothing open');
   done(0);
-}
+});
 
 /* `hub sense <head> [events|check|verdict|brief|status]` — a head's sensor (lib/sense.mjs).
  * The events contract is the one a loop already relies on: exit 0 and text = wake the head with
  * this text, 1 = no events, anything above 1 = the sensor failed. So this command never goes
  * through done(): an unknown flag there exits 1, which would read as "nothing happened". */
-if (cmd === 'sense') {
+command('sense', () => {
   const head = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const sub = args[2] && !args[2].startsWith('-') ? args[2] : 'events';
   const fail = (m) => { console.error('Error: ' + m); process.exit(3); };
@@ -1243,11 +1245,11 @@ if (cmd === 'sense') {
     if (sub === 'status') { console.log(JSON.stringify({ conf: senseConf(head), config: senseConfig(), state: loadSenseState(head), escalations: escalationsPath() }, null, 1)); process.exit(0); }
     fail('hub sense: events | check | verdict | brief | status');
   } catch (e) { fail(e.message); }
-}
+});
 
 /* `hub board` — the tracks, and what waits for the owner, as text. Same data as the Tracks view of
  * `hub serve`; lists are cut at --limit rows each (default 8) and say how many they left out. */
-if (cmd === 'board') {
+command('board', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : getFlag('-p');
   const daysF = getFlag('--days');
   const lim = parseInt(String(getFlag('--limit') || '8'), 10) || 8;
@@ -1288,9 +1290,9 @@ if (cmd === 'board') {
   if (!w.queue.length && !w.tasks.length && !w.ownerGo.length && !w.escalations.length) console.log('  nothing');
   if (r.unknownAssignees.length) console.log(`\n  ⚠ open work on names that are not roles: ${r.unknownAssignees.join(', ')}  (hub lint)`);
   done(0);
-}
+});
 
-if (cmd === 'recall') {
+command('recall', () => {
   const q = args[1] && !args[1].startsWith('-') ? args[1] : getFlag('-q');
   if (!q || typeof q !== 'string') die('Usage: hub recall "<what do we know about X>" [--limit N] [--stale-days N]');
   let r;
@@ -1304,9 +1306,9 @@ if (cmd === 'recall') {
   }
   if (r.hint) console.log('\n' + r.hint);
   done(0);
-}
+});
 
-if (cmd === 'usage') {
+command('usage', () => {
   if (args[1] === 'add') {
     let r;
     try {
@@ -1335,12 +1337,12 @@ if (cmd === 'usage') {
     (r.measured.medianDaysToClose !== null ? `, median ${r.measured.medianDaysToClose}d open-to-close` : ''));
   console.log('note: ' + r.note);
   done(0);
-}
+});
 
-if (cmd === 'rules') {
+command('rules', () => {
   const app = getFlag('--append');
   if (typeof app === 'string') {
-    let r; try { r = runRules({ append: app, by: authorOrDie('--by'), teamRoot: resolveQueueRoot() }); } catch (e) { die(e.message); }
+    const r = runRules({ append: app, by: authorOrDie('--by'), teamRoot: resolveQueueRoot() });
     console.log(`amended ${r.file}:\n  ${r.appended}`);
     done(0);
   }
@@ -1348,16 +1350,16 @@ if (cmd === 'rules') {
   if (!r.exists) { console.log(r.hint); done(1); }
   console.log(r.text);
   done(0);
-}
+});
 
-if (cmd === 'operator') {
+command('operator', () => {
   const r = runOperatorGet();
   if (!r.exists) { console.log(r.hint + '\n\nsuggested sections:\n' + r.scaffold); done(1); }
   console.log(r.card);
   done(0);
-}
+});
 
-if (cmd === 'audit') {
+command('audit', () => {
   const days = parseInt(String(getFlag('--days') || '7'), 10);
   const apply = args.includes('--apply');
   const queues = queueSummaryForBrief({ root: resolveQueueRoot() });
@@ -1388,9 +1390,9 @@ if (cmd === 'audit') {
     console.log('\nnothing filed. Re-run with --apply --by <you> to turn each finding into an incident task (a key already open is never filed twice).');
   }
   done(r.findings.length ? 1 : 0);
-}
+});
 
-if (cmd === 'lint') {
+command('lint', () => {
   const r = runLint({});
   for (const n of r.notes) console.log('note: ' + n);
   if (!r.findings.length) {
@@ -1404,22 +1406,22 @@ if (cmd === 'lint') {
   }
   console.log(`\n${r.findings.length} finding(s). Enforced: ${r.enforced.length ? r.enforced.join(', ') : 'none'} — turn a rule on in ${path.join(HUB, 'rules.json')} → strict.`);
   done(1);
-}
+});
 
-if (cmd === 'sections') {
+command('sections', () => {
   console.log('section key      heading   (single source for card scaffold + report routing)');
   for (const s of sectionsConfig()) console.log('  ' + pad(s.key, 16) + s.heading);
   console.log('\nlocalise in ONE file → HUB/sections.json  (merged by key onto the defaults)');
   console.log('  e.g. { "decisions": "<your heading>", "next": {"heading":"...","hint":"..."} }');
   done(0);
-}
+});
 
-if (cmd === 'harvest') {
+command('harvest', () => {
   const p = harvestPrompt();
   if (!p) die('HARVEST.md not found in this hubd package');
   console.log(p);   // paste-able Harvest Protocol prompt — ships with the code, not the repo
   done(0);
-}
+});
 
 // Who is running this command. Was `--agent || $USER || 'cli'`, which recorded 41
 // 'cli' and 19 'root' entries — the shell user, not the function doing the work, and
@@ -1431,7 +1433,7 @@ function authorOrDie(flag) {
   return v;
 }
 
-if (cmd === 'gc') {
+command('gc', () => {
   /* The classes that are judged by name (lib/gc.mjs): listed first, moved only with --apply --by.
    * Nothing is ever unlinked from the mesh — a queue goes to queues/archive/ with its bytes intact,
    * which is the one deletion mesh-sync accepts. */
@@ -1466,9 +1468,9 @@ if (cmd === 'gc') {
     for (const f of g.failed) console.log(`  FAILED ${f.file}: ${f.error}`);
   }
   done(0);
-}
+});
 
-if (cmd === 'sync') {
+command('sync', () => {
   const pathArg = args[1] && !args[1].startsWith('-') ? args[1] : '.';
   const dir = path.resolve(pathArg);
   if (!fs.existsSync(dir)) die('Folder not found: ' + dir);
@@ -1494,9 +1496,9 @@ if (cmd === 'sync') {
     done(0);
   });
   // async readline keeps process alive until callback
-}
+});
 
-else if (cmd === 'install-hook') {
+command('install-hook', () => {
   const dir = path.resolve(args[1] || '.');
   const hooksDir = path.join(dir, '.git', 'hooks');
   if (!fs.existsSync(hooksDir)) die('Not a git repo: no .git/hooks in ' + dir);
@@ -1516,9 +1518,9 @@ else if (cmd === 'install-hook') {
   fs.chmodSync(hookFile, 0o755);
   console.log('Hook: ' + hookFile);
   done(0);
-}
+});
 
-else if (cmd === '_commit-hook') {
+command('_commit-hook', () => {
   // Hidden command: invoked from the post-commit hook. Must never break a commit.
   try {
     const repoPath = args[1];
@@ -1530,7 +1532,7 @@ else if (cmd === '_commit-hook') {
     journalAppend({ ts: now(), project: slugify(path.basename(repoPath)), agent: 'git:' + author, kind: 'done', text: sha.slice(0, 7) + ' ' + subject });
   } catch {}
   done(0);
-}
+});
 
 /* A role's work queue as text: the tasks it should take, in order, each with what was said about
  * it. Offered = ready and not started by anyone; in progress = claimed, until the claim lapses. */
@@ -1547,7 +1549,7 @@ function printWork(role, r) {
   console.log(`\n# close a task only by its outcome (hub report DONE: <id>); cancelling it is closing it`);
 }
 
-if (cmd === 'queue') {
+command('queue', () => {
   const sub = args[1];
   if (sub === 'send') {
     const USAGE = 'Usage: hub queue send <role> "<text>" --from <who> [--task <id>]\n' +
@@ -1569,16 +1571,12 @@ if (cmd === 'queue') {
     // --task ties the message to what it is ABOUT, so the reply is not orphaned from the
     // work. A ref that matches no task is flagged now, not discovered days later.
     const taskRef = getFlag('--task');
-    let unknownTask = false;
-    if (typeof taskRef === 'string') { try { runTaskGet({ id: taskRef }); } catch { unknownTask = true; } }
-    let qfile;
     // --agent is what every other write calls its author; senders reached for it and lost
     // their body to it. Accept it as the same thing.
     const fromFlag = typeof getFlag('--agent') === 'string' && typeof getFlag('--from') !== 'string' ? '--agent' : '--from';
-    try { qfile = queueSend(role, text, { from: authorOrDie(fromFlag), task: typeof taskRef === 'string' ? taskRef : undefined }); }
-    catch (e) { die(e.message); }
-    console.log(`→ ${path.basename(qfile)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
-    if (unknownTask) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
+    const sent = queueSendChecked(role, text, { from: authorOrDie(fromFlag), task: typeof taskRef === 'string' ? taskRef : undefined });
+    console.log(`→ ${path.basename(sent.file)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
+    if (sent.taskKnown === false) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
     done(0);
   } else if (sub === 'wait') {
     const role = args[2];
@@ -1743,72 +1741,110 @@ if (cmd === 'queue') {
     }
     done(0);
   } else {
-    die('queue subcommands: send, wait, monitor, gc');
+    die('queue subcommands: send, wait, monitor, work, status, resolve, gc');
   }
-}
+});
 
-else if (cmd === 'serve') {
+command('serve', () => {
   const port = parseInt(getFlag('-p') || getFlag('--port') || '7777');
   startServer(port);
+});
+
+/* ── help, and the one dispatch ──
+ * One line per command: its usage, then what it is for. `hub <cmd> --help` prints the lines of
+ * that command. */
+const HELP = [
+  ['init [path]', 'scaffold a team folder (AGENTS.md, INBOX.md, queues/)'],
+  ['version | --version | -v', 'installed hubd version, and which copy is answering'],
+  ['doctor', 'check hub base, team root, locks, queues and writer versions'],
+  ['upgrade', 'refresh HUBD.md (the agent protocol) to the installed version'],
+  ['status', 'project table'],
+  ['brief [-h <hours>]', 'morning brief'],
+  ['inbox [--hours <N>]', 'what needs a decision now (blocked/overdue/unassigned/stale locks)'],
+  ['now [project] [--assignee <who>]', 'the one next thing to do'],
+  ['agenda [project]', 'the day, split by who can act'],
+  ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
+  ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
+  ['log [project] [-n 20] [--json]', 'journal tail'],
+  ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
+  ['report [-p <proj>]', 'structured report → card sections (no input prints the template)',
+    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m'],
+  ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
+  ['next "<the one next action>" -p <proj>', 'set ## Next step'],
+  ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
+  ['task done <id> --by <you>', 'close a task'],
+  ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
+  ['task get <id> [--json]', 'one task, and where else its id appears'],
+  ['task retag [--apply --by <you>]', 'move categories off the fixed list into tags (dry run without --apply)'],
+  ['card <slug> -m "<digest>"', 'set a project card without a folder'],
+  ['card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]', 'fix lines of a card, leave the rest byte-for-byte'],
+  ['card resolve [slug...]', 'union the list hunks of a conflicted card, name the rest'],
+  ['cards compact [--apply --by <you>]', 'move the overflow of over-long card sections into projects/history/ (dry run without --apply)'],
+  ['cards merge <duplicate> <canonical> [--apply --by <you>]', 'merge two cards for the same project (dry run without --apply)'],
+  ['cards merge-sections [--apply --by <you>]', 'fold a section a card holds twice (same heading, or two locales) into the live one'],
+  ['section add <project> <section> "<text>" --by <you> [--src <where>] [--set]', 'write one section of a card'],
+  ['sections', 'card section keys → headings (localise via HUB/sections.json)'],
+  ['absorb <dir> --as <label> [--apply --by <you>]', 'fold a hub base written in isolation into this one, as a new node (dry run without --apply)'],
+  ['freeze "<why>" --by <you>', 'stop mesh-sync on THIS node before operating on the hub dir'],
+  ['unfreeze', 'let it sync again'],
+  ['resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider|role] [--addr <a>] [--status live] [--link <rel>:<slug>] [--attr <k>=<v>]', 'a resource card'],
+  ['resource list [--type <t>]', 'infra/topology cards (hosts, vms, services, roles, ...)'],
+  ['resource get <slug>', 'one resource + its in/out relationships'],
+  ['graph [-p <proj>] [--type <t>]', 'typed relationship graph (runs_on/depends_on/deploys_to/...)'],
+  ['harvest', 'print the Harvest Protocol prompt (also served as an MCP prompt)'],
+  ['claim <proj> <area> [-t min] [--note "<why>"] --agent <you>', 'soft lock'],
+  ['claim --task <id> [-t min] --agent <you>', 'start a task: a claim on it while you work'],
+  ['claim check <path> [-p <proj>] [--agent <you>]', 'who holds a claim over this path'],
+  ['release <id> | release --task <id> --agent <you>', 'release a lock'],
+  ['heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]', 'record liveness'],
+  ['presence [--role r] [--alive] [--json]', 'fleet roster (who has heartbeated, alive/stale)'],
+  ['usage [--days 7] [-p <proj>] [--json]', 'what the work cost, measured and supplied'],
+  ['usage add --agent <you> [--seconds N] [--tokens-in N] [--tokens-out N] [--cost <usd>] [--model m] [-p proj] [--task id]', 'record what a piece of work cost'],
+  ['rules [--append "<rule>" --by <you>]', "the team's rules (AGENTS.md), or add one"],
+  ['operator', "the operator's card"],
+  ['lint', 'the hub against its rules; exit 1 on findings'],
+  ['audit [--days 7] [--apply --by <you>]', 'declarations vs behaviour; --apply files each finding as an incident'],
+  ['sync [path] [-m "<digest>"]', 'sync a project (-m = non-interactive)'],
+  ['install-hook [path]', 'git post-commit hook'],
+  ['gc [--days 14] [--json]', 'what has piled up, by class — dry: touches nothing'],
+  ['gc --apply --by <you>', "archive it (moved, never deleted) and clear this node's litter"],
+  ['secret set|get|path|list|rm|backup|restore|verify <name>', 'values kept outside the replicated hub'],
+  ['queue send <role> "<text>" --from <who> [--task <id>]', 'address work to a role'],
+  ['queue wait <role> [--timeout <N>] [--as <subscriber>] [--from-now] [--tasks]', 'block until real content, then exit 0'],
+  ['queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]', 'the same, again and again'],
+  ['queue work <role> [--json]', "the role's ready tasks, as its queue"],
+  ['queue status [<role>] [--json]', 'per role and node: delivered and pending'],
+  ['queue resolve [file...]', 'a conflicted queue file: ours in place, theirs appended'],
+  ['queue gc [--days 30] [--apply]', 'archive queue files nobody ever read'],
+  ['board [<project>] [--days 7] [--limit 8] [--all] [--json]', 'every track: roles, done, next, blocked, and what waits for you'],
+  ['sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]', "a head's sensor: exit 0 = wake with this text, 1 = nothing"],
+  ['serve [-p 7777]', 'read-only dashboard: tracks, kanban, history'],
+];
+const helpName = (usage) => usage.split(/[\s|]/)[0];
+
+function printHelp(only) {
+  const rows = only && HELP.some(h => helpName(h[0]) === only) ? HELP.filter(h => helpName(h[0]) === only) : HELP;
+  const lines = rows === HELP ? ['hubd CLI', '', 'Usage: hub <command>   (hub <command> --help for its lines)', ''] : [];
+  for (const [usage, what, ...more] of rows) {
+    lines.push(usage.length < 33 ? '  ' + usage.padEnd(33) + what : '  ' + usage + '\n' + ' '.repeat(35) + what);
+    for (const m of more) lines.push(' '.repeat(4) + m);
+  }
+  console.log(lines.join('\n'));
 }
 
-else if (!cmd) {
-  console.log([
-    'hubd CLI',
-    '',
-    'Usage: hub <command>',
-    '',
-    '  init [path]                      scaffold a team folder (AGENTS.md, INBOX.md, queues/)',
-    '  version | --version | -v         installed hubd version, and which copy is answering',
-    '  doctor                           check hub base, team root, locks, queues and writer versions',
-    '  upgrade                          refresh HUBD.md (the agent protocol) to the installed version',
-    '  status                           project table',
-    '  brief [-h <hours>]               morning brief',
-    '  inbox [--hours <N>]              what needs a decision now (blocked/overdue/unassigned/stale locks)',
-    '  plan [project]                   dependency-graph trajectory: ready now · critical path · unlock order · cycles',
-    '  whereami [cwd] [--json]          where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction',
-    '  log [project] [-n 20] [--json]   journal tail',
-    '  report [-p <proj>]               structured report → card sections (no input prints the template)',
-    '    DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m',
-    '  decide "<what>" --why "<why>" -p <proj>   append a decision to ## Decisions',
-    '  next "<the one next action>" -p <proj>    set ## Next step',
-    '  task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>]',
-    '  task done <id>',
-    '  task list [-p proj] [--status open|done|all] [--json]',
-    '  card <slug> -m "<digest>"        set a project card without a folder',
-    '  card resolve [slug...]           union the list hunks of a conflicted card, name the rest',
-    '  cards compact [--apply --by <you>]   move the overflow of over-long card sections into projects/history/ (dry run without --apply)',
-    '  cards merge <duplicate> <canonical> [--apply --by <you>]   merge two cards for the same project (dry run without --apply)',
-    '  cards merge-sections [--apply --by <you>]   fold a section a card holds twice (same heading, or two locales) into the live one',
-    '  absorb <dir> --as <label> [--apply --by <you>]   fold a hub base written in isolation into this one, as a new node (dry run without --apply)',
-    '  freeze "<why>" --by <you>        stop mesh-sync on THIS node before operating on the hub dir',
-    '  unfreeze                         let it sync again',
-    '  resource set <slug> [-m "<note>"] [--type host|vm|service|endpoint|provider] [--addr <a>] [--status live] [--link <rel>:<slug>]',
-    '  resource list [--type <t>]       infra/topology cards (hosts, vms, services, ...)',
-    '  resource get <slug>              one resource + its in/out relationships',
-    '  graph [-p <proj>] [--type <t>]   typed relationship graph (runs_on/depends_on/deploys_to/...)',
-    '  sections                         card section keys → headings (localise via HUB/sections.json)',
-    '  harvest                          print the Harvest Protocol prompt (also served as an MCP prompt)',
-    '  claim <proj> <area> [-t min]     soft lock',
-    '  release <id>                     release a lock',
-    '  heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]   record liveness',
-    '  presence [--role r] [--alive] [--json]  fleet roster (who has heartbeated, alive/stale)',
-    '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
-    '  gc [--days 14] [--json]          what has piled up, by class — dry: touches nothing',
-    '  gc --apply --by <you>            archive it (moved, never deleted) and clear this node\'s litter',
-    '  install-hook [path]              git post-commit hook',
-    '  queue send <role> "<text>" --from <who>',
-    '  secret set|get|path|list|rm <name>   values kept outside the replicated hub',
-    '  queue wait <role> [--timeout <N>] [--as <subscriber>]',
-    '  queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]',
-    '                                   block until real content, then exit 0',
-    '  board [<project>] [--days 7] [--limit 8] [--all] [--json]  every track: roles, done, next, blocked, and what waits for you',
-    '  sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]  a head\'s sensor: exit 0 = wake with this text, 1 = nothing',
-    '  serve [-p 7777]                  read-only dashboard: tracks, kanban, history',
-  ].join('\n'));
+// Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when already
+// current (a stat + version compare); rewrites only after a hubd version change.
+if (!['version', '--version', '-v'].includes(cmd)) { try { ensureProtocol(); } catch {} }
+
+if (!cmd || cmd === 'help' || cmd === '--help' || args.includes('--help')) {
+  printHelp(cmd === 'help' ? args[1] : cmd === '--help' ? null : cmd);
   done(0);
 }
-
-else if (!['sync', 'install-hook', '_commit-hook', 'serve', 'queue'].includes(cmd)) {
-  die('Unknown command: ' + cmd + '. Run hub with no arguments for help.');
+{
+  const handlers = COMMANDS.get(cmd);
+  if (!handlers) die('Unknown command: ' + cmd + '. Run hub --help for the list.');
+  const h = handlers.find(x => !x.when || x.when());
+  if (!h) { printHelp(cmd); die(`hub ${cmd}: no such subcommand`); }
+  // A refusal from the engine is a message to read, not a stack trace.
+  try { h.run(); } catch (e) { die(e && e.message ? e.message : String(e)); }
 }

@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
-  loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea } from './core.mjs';
+  loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -1405,4 +1405,54 @@ export function buttonsSummary(rows) {
   const count = items.reduce((n, r) => n + r.pending, 0);
   const oldestDays = items.length ? Math.max(...items.map(r => r.ageDays ?? 0)) : null;
   return { count, oldestDays, items };
+}
+
+/* ── What the CLI and the MCP server both answer ── */
+
+/** hub brief: the engine's brief plus what only this module can read (core cannot import it). */
+export function briefWithQueues({ root, ...a } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const queues = queueSummaryForBrief({ root: r });
+  // `queues` goes into runBrief as well: the audit rides on the brief (runReview), and its
+  // stale-button check needs the rows.
+  const b = runBrief({ ...a, queues });
+  return {
+    ...b, queues, buttons: buttonsSummary(queues),
+    // Queue DEPTH says how much is pending; it cannot say whether replication is converging, and a
+    // quiet queue reads exactly like a stopped transport. Both transports leave an observable
+    // artefact, so both ages are reported — see transportHealth() and docs/interop.md -> Transport.
+    transport: transportHealth({ root: r }),
+    // Two different waits, deliberately apart: a package addressed to the owner and not yet
+    // answered, vs a decision on the board that only the owner may move.
+    buttonItems: ownerQueueItems({ root: r }),
+    ownerWaiting: ownerWaiting(b.tasksOpen),
+  };
+}
+
+/** queueSend, and what the sender needs to know about it: whether the task it names exists, and
+ *  what now waits in the role's queue. The task ref is checked but never refuses the send: the
+ *  message is the urgent thing, a mistyped id a warning the caller can act on at once. */
+export function queueSendChecked(role, text, { from, root, task } = {}) {
+  const r = root ?? resolveQueueRoot();
+  let taskKnown;
+  if (task != null && task !== '') { try { runTaskGet({ id: task }); taskKnown = true; } catch { taskKnown = false; } }
+  const file = queueSend(role, text, { from, root: r, task });
+  // What is actually WAITING for this role, after the append. "Sent" says the write happened; it
+  // never said whether anything is reading, and a sender read it as "delivered" — while four roles
+  // sat on a day of undelivered orders. A depth that keeps climbing is the sender's own evidence.
+  const depth = (() => { try { return peekQueueDepthWithAcks(role, { root: r }); } catch { return null; } })();
+  /* The depth is measured against THIS node's cursor, and that is only evidence when this node is
+   * where the role is consumed. A role read on another machine keeps its cursor there — .qstate is
+   * node-local and never syncs — so a cross-node queue reads as permanently unconsumed from here.
+   * Saying "nothing is consuming" about those would be wrong on most sends in a fleet, and a
+   * warning that is usually wrong is one its reader learns to skip. So: consumed-here gets the
+   * real warning, never-consumed-here gets the caveat instead of an accusation. */
+  const seenHere = (() => { try { return everConsumedHere(role, { root: r }); } catch { return false; } })();
+  const note = !depth || depth.pending <= 1 ? null
+    : seenHere
+      ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
+      : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and cursors are node-local — so this is not a backlog, it is the only view this machine can have. Check on the node that runs the role.`;
+  return { file, ...(taskKnown === undefined ? {} : { task, taskKnown }),
+    ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
+      unacked: depth.unacked || 0, ...(note ? { note } : {}) } : {}) };
 }
