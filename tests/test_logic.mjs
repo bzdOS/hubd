@@ -3527,6 +3527,9 @@ core.setHubBase(SN);
   ok(acc.code === 1 && /REFUSED/.test(acc.text), 'sense: accept is refused for a branch that fails the checklist');
   const ev1 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 });
   ok(ev1.code === 1 || ev1.events.every(e => !e.key.startsWith('br:task/feat')), 'sense: a branch already decided at this sha is not raised again');
+  fs.rmSync(path.join(SN, '.sense'), { recursive: true, force: true });
+  const evF = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 });
+  ok(evF.events.every(e => !e.key.startsWith('br:task/feat')), 'sense: a fresh sensor state does not re-raise a branch the journal already has a verdict for at that sha');
   sh('git checkout -q task/feat && git rm -q c.txt && git commit -q -m unleak && git push -q origin task/feat', path.join(G, 'work'));
   const ev2 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 + 5 });
   ok(ev2.code === 0 && ev2.events.some(e => e.key.startsWith('br:task/feat:')) && /hub sense h1 verdict/.test(ev2.text),

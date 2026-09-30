@@ -33,7 +33,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, roleRegistry, runPresence,
-  runReport, atomicWrite, taskTitle,
+  runReport, atomicWrite, taskTitle, parseVerdict, shareMode,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
 
@@ -68,14 +68,19 @@ export function senseConfig() {
 
 export function senseDir() {
   const d = process.env.HUBD_SENSE_DIR || path.join(HUB, '.sense');
-  fs.mkdirSync(d, { recursive: true });
+  if (!fs.existsSync(d)) {
+    fs.mkdirSync(d, { recursive: true });
+    // on a shared hub the head's loop and an operator run as different users: keep the group in
+    try { if (fs.statSync(path.dirname(d)).mode & 0o020) fs.chmodSync(d, 0o2775); } catch {}
+  }
   return d;
 }
 const statePath = (head) => path.join(senseDir(), `head.${slugify(head)}.json`);
 export function loadSenseState(head) { try { return JSON.parse(fs.readFileSync(statePath(head), 'utf8')) || {}; } catch { return {}; } }
 function saveSenseState(head, st) { atomicWrite(statePath(head), st); }
 function escalate(head, text, nowS) {
-  try { fs.appendFileSync(path.join(senseDir(), 'escalations.log'), `${Math.floor(nowS)}\t${head}\t${String(text).replace(/\s+/g, ' ')}\n`); } catch {}
+  const f = path.join(senseDir(), 'escalations.log');
+  try { fs.appendFileSync(f, `${Math.floor(nowS)}\t${head}\t${String(text).replace(/\s+/g, ' ')}\n`); shareMode(f); } catch {}
 }
 
 const git = (args, cwd, timeout = 120000) => {
@@ -140,7 +145,7 @@ export function workerState(p, nowS, cfg = SENSE_DEFAULTS) {
  * The events for one sensor pass. Pure over its inputs; mutates `st`.
  * @returns {{ev: Array<[string, boolean, string]>, esc: string[]}}  events (key, critical, text), escalations
  */
-export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, checker, queued = {}, cfg = SENSE_DEFAULTS) {
+export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, checker, queued = {}, cfg = SENSE_DEFAULTS, decided = new Set()) {
   const ev = [], esc = [];
   const pend = st.pending || (st.pending = {});
   const live = new Set();
@@ -225,7 +230,9 @@ export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, check
   if (branches) {
     for (const br of Object.keys(branches).sort()) {
       const sha = branches[br];
-      if (verd[br] && verd[br].sha === sha) continue;
+      // decided at this sha: by this sensor, or by anyone whose verdict is in the journal — so a
+      // fresh sensor state (a new node, a parallel run) does not re-raise what was already judged
+      if ((verd[br] && verd[br].sha === sha) || decided.has(`${br}@${sha}`) || decided.has(`@${sha}`)) continue;
       const [okv, txt] = checker(br);
       if (okv === null) { verd[br] = { sha, v: 'merged', ts: Math.floor(nowS) }; continue; }   // already in the base
       if (okv === false && /PRIVATE/.test(txt) && !pend[`br:${br}:${sha}`]) esc.push(`public repo ${conf.repo}: branch ${br} (${sha.slice(0, 10)}) carries private content`);
@@ -362,7 +369,13 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
   let fetched = false;
   const checker = (br) => { const r = checkBranch(conf, br, { fetch: !fetched, cfg }); fetched = true; return r; };
   const jmark = { ...(st.journal || {}) };
-  let { ev, esc } = collectEvents(conf, st, nowS, pres, loadTasks().tasks, journalWindow(), branches, checker, queuedFrom(conf.head), cfg);
+  const ents = journalWindow(24 * 30);
+  const decided = new Set();
+  for (const e of ents) {
+    const v = e.kind === 'decision' ? parseVerdict(e.text) : null;
+    if (v && v.sha.length === 40) { decided.add(`@${v.sha}`); if (v.branch) decided.add(`${v.branch}@${v.sha}`); }
+  }
+  let { ev, esc } = collectEvents(conf, st, nowS, pres, loadTasks().tasks, ents.filter(e => epoch(e.ts) >= nowS - 72 * 3600), branches, checker, queuedFrom(conf.head), cfg, decided);
   for (const e of esc) escalate(conf.head, e, nowS);
   const crit = ev.some(([, c]) => c);
   if (ev.length && !budgetOk(st, nowS, crit, cfg)) {

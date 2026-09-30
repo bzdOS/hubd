@@ -4949,6 +4949,15 @@ export function runPresence(a = {}) {
   };
 }
 
+/** A head's verdict on a branch, as written into the journal: "ACCEPT <sha> <branch> ..." or the
+ *  same with a leading "decision:". Null for anything else. */
+export function parseVerdict(text) {
+  const m = /^\s*(?:decision:\s*)?(ACCEPT|REJECT)\s+([0-9a-f]{7,40})\b(?:\s+([^\s:]+))?/.exec(String(text || ''));
+  if (!m) return null;
+  const branch = m[3] && !/^[→>-]+$/.test(m[3]) ? m[3] : null;
+  return { verdict: m[1].toLowerCase(), sha: m[2], branch };
+}
+
 /** A task's title: its first non-empty line, at most `max` characters, cut at a word where one is
  *  near. Old tasks carry a whole brief in `text`; nothing is rewritten, the rest stays one click
  *  away as `text`. */
