@@ -15,13 +15,18 @@ No dependencies, no build step. Node 20+.
 
 ```bash
 git clone https://github.com/bzdOS/hubd && cd hubd
-node tests/test_logic.mjs      # unit + integration
-sh tests/smoke_cli.sh          # the CLI end to end
-sh tests/smoke_mcp.sh          # the MCP server over stdio
-sh tests/test_sync_preserve.sh # card writes never drop a hand-written section
-sh tests/check_clean.sh        # no private names or non-English in tracked files
-sh tests/test_mesh_sync.sh     # what the mesh sync says when a pull does not go through
+npm test                       # every suite, side by side: node tests/run.mjs
+node tests/run.mjs queue       # only the suites whose name contains "queue"
+node tests/logic/queue.mjs     # one file on its own
 ```
+
+`tests/logic/` holds the engine and CLI tests, one file per area, sharing
+`tests/logic/_h.mjs` (a throwaway hub, `ok()`, `run()` for the CLI, temp dirs
+removed at exit). The shell suites next to it cover the MCP server over stdio
+(`smoke_mcp.sh`), the CLI end to end (`smoke_cli.sh`), card writes that must
+keep hand-written sections (`test_sync_preserve.sh`), what the mesh sync says
+when a pull does not go through (`test_mesh_sync.sh`), and no private names or
+non-English in tracked files (`check_clean.sh`).
 
 Wire the commit-message hook once per clone:
 
