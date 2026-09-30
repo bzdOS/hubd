@@ -93,7 +93,7 @@ EOF
 OUT2=$(printf '%s\n' "$REQS2" | HUBD_DIR="$HUBD_DIR2" HUBD_AGENT=owner-floor node hub/index.mjs 2>/dev/null)
 P2=0; F2=0
 chk() { if [ "$2" -eq 0 ]; then P2=$((P2+1)); echo "PASS $1"; else F2=$((F2+1)); echo "FAIL $1"; fi; }
-echo "$OUT2" | grep -q '"id":2,.*"isError":false' || echo "$OUT2" | grep -q '"id":2'
+printf '%s\n' "$OUT2" | grep -q '"id":2,.*"isError":false' || printf '%s\n' "$OUT2" | grep -q '"id":2'
 chk "attribution: hub_report with agent accepted" $?
 J2=$(cat "$HUBD_DIR2"/journal.*.jsonl 2>/dev/null)
 [ "$(printf '%s\n' "$J2" | grep -c '"agent":"doc-auditor@proj-29"')" -ge 3 ]
@@ -126,11 +126,11 @@ EOF
 OUT4=$(printf '%s\n' "$REQS4" | HUBD_DIR="$D4" HUBD_AGENT=dev-t node hub/index.mjs 2>/dev/null)
 P4=0; F4=0
 chk4() { if [ "$2" -eq 0 ]; then P4=$((P4+1)); echo "PASS $1"; else F4=$((F4+1)); echo "FAIL $1"; fi; }
-echo "$OUT4" | grep -q '"id":5' && echo "$OUT4" | sed -n 's/.*"id":5.*/&/p' | grep -q 'IS consumed on this node'
+printf '%s\n' "$OUT4" | grep -q '"id":5' && printf '%s\n' "$OUT4" | sed -n 's/.*"id":5.*/&/p' | grep -q 'IS consumed on this node'
 chk4 "send depth: a role consumed HERE gets the real warning" $?
-echo "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -q 'never consumed this role'
+printf '%s\n' "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -q 'never consumed this role'
 chk4 "send depth: a role consumed elsewhere gets the node-local caveat, not an accusation" $?
-echo "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -qv 'nothing is consuming'
+printf '%s\n' "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -qv 'nothing is consuming'
 chk4 "send depth: and is not told that nothing is consuming it" $?
 rm -rf "$D4"
 printf '\n%d pass, %d fail (send depth)\n' "$P4" "$F4"
