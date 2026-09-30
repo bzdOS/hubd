@@ -6,23 +6,22 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import readline from 'node:readline';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  HUB, HUB_VIA, PROJ, HISTORY, JOURNAL, CLAIMS, RESOURCES, setHubBase, JOURNAL_NODE,
-  now, parseTs, slugify, sh, cardPath, readCard, digestOf, projectAliases,
-  runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd,
+  HUB, HUB_VIA, PROJ, RESOURCES, setHubBase, JOURNAL_NODE,
+  now, parseTs, slugify, sh, cardPath, digestOf, projectAliases,
+  runSync, runCardSet, runReport, runStatus, runSectionAdd,
   runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runTaskRetag, TASK_CATS,
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalFiles, journalTail, journalSince, journalSinceMs, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
+  journalTail, journalSinceMs, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
-  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
+  runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact,
   runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor, sparklineData,
   HUB_GITIGNORE, ensureHubGitignore, gitignoreAddedThisRun, trackedNodeLocal,
 } from './lib/core.mjs';
@@ -30,8 +29,7 @@ import { runBoard } from './lib/board.mjs';
 import { runHubGc } from './lib/gc.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { roleWork, assertRole } from './lib/queue.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces } from './lib/queue.mjs';
+import { roleWork, assertRole, queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -79,7 +77,7 @@ function done(code = 0) {
     }
     if (unknowns.length) {
       console.error('Error: unknown flag' + (unknowns.length > 1 ? 's' : '') + ': ' + unknowns.join(', ') +
-        '.  hub <cmd> --help for the list, or pass text that starts with "-" through --text or stdin.');
+        '.  Run hub with no arguments for the commands and their flags, or pass text that starts with "-" through --text or stdin.');
       process.exit(1);
     }
   }
@@ -108,17 +106,17 @@ let knownFlags = new Set();
 // This is broad but safe: the alternative (per-command declaration) is ~25 manual edits
 // with the same end result for the bugs that matter — silent misbehavior from typos.
 declareFlags(
-  '--json', '--verbose', '--apply', '--force', '--private', '--alive', '--here', '--short',
-  '--set', '--from-now', '--once', '--live', '--help', '--dry-run', '--all',
+  '--json', '--apply', '--force', '--private', '--alive', '--here',
+  '--set', '--from-now', '--once', '--all',
   // getFlag/getFlags auto-register their flags on match, but when a flag is absent
   // (not matched), it would be reported as unknown. Pre-declaring prevents that.
-  '--hours', '-h', '--days', '--project', '-p', '--importance', '-i', '--deadline', '-d',
-  '--needs', '--resource', '--cat', '--tag', '--assignee', '--by', '--from', '--to',
-  '--limit', '-n', '--offset', '--status', '--text', '--message', '-m', '--name',
-  '--slug', '--path', '--dir', '--replace', '--with', '--as', '--label', '--port',
+  '--hours', '-h', '--days', '--project', '-p', '-i', '-d',
+  '--needs', '--resource', '--cat', '--tag', '--assignee', '--by', '--from',
+  '--limit', '-n', '--status', '--text', '-m',
+  '--replace', '--with', '--as', '--port',
   '--role', '--type', '--address', '--os', '--provider', '--why', '--digest',
   '--agent', '--cwd', '--note', '--seconds', '--tokens-in', '--tokens-out', '--ttl',
-  '--model', '--task', '--timeout', '-w', '-k', '-q', '-t', '--link', '--cost',
+  '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
 );
@@ -759,11 +757,10 @@ if (cmd === 'doctor') {
           catch { return 0; }
         })();
         const pending = Math.max(0, sz - off);
-        const beyondSize = off > sz;
-        if (beyondSize) warnings++;
+        const beyondSize = off > sz;   // counted once, by the out-of-band trims below
         let line = '  ' + qf + ':  size ' + sz + 'B, offset ' + off + ', pending ' + pending + 'B';
         if (fanoutRoles.has(role)) line += '  (broadcast role — subscribers keep their own cursors under .qstate/<subscriber>/)';
-        if (beyondSize) line += '  WARNING offset beyond file size (file truncated or recreated; offset will reset)';
+        if (beyondSize) line += '  offset beyond file size (the file shrank: see the cursors past the end below)';
 
         // live waiter check — the marker is per role, not per file
         const waiterFile = path.join(qstateDir, role + '.waiter');
