@@ -12,8 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import crypto from 'node:crypto';
-import { HUB, setHubBase, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
+import { HUB, setHubBase, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
 import { runBoard } from './board.mjs';
 import { resolveQueueRoot } from './queue.mjs';
 
@@ -33,7 +32,7 @@ export function startServer(port) {
   const tenantDir = (url) => {
     const t = url.searchParams.get('t') || '';
     if (/^[0-9a-f]{40}$/.test(t)) return path.join(TENANTS, t);
-    if (t.length >= 16) return path.join(TENANTS, crypto.createHash('sha256').update(t).digest('hex').slice(0, 40));
+    if (t.length >= 16) return path.join(TENANTS, tenantKey(t));
     return null;
   };
 

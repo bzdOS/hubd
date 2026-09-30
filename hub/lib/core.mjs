@@ -94,6 +94,10 @@ export const parseTs = (s) => {
 };
 // Unicode-aware: keeps letters/numbers of any script (no literal non-ASCII in source).
 export const slugify = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
+/** A multi-tenant token's workspace directory name, the same for the MCP server and the board. */
+export const tenantKey = (token) => crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 40);
+/** A string matched literally inside a RegExp. */
+export const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /* ── Who did this ──
  * The journal is append-only, so a write with no author is unattributable forever.
@@ -203,6 +207,11 @@ export function shareMode(file) {
     if ((st.mode & 0o060) === 0o060) return;               // already group rw
     fs.chmodSync(file, st.mode | 0o060);
   } catch {}
+}
+
+/** A JSON file's value, or `fallback` when it is missing, unreadable, malformed or null. */
+export function readJson(file, fallback = null) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) ?? fallback; } catch { return fallback; }
 }
 
 export function atomicWrite(file, data) {
@@ -728,12 +737,12 @@ export function loadTasks() {
       return db;
     } catch { return rebuildTaskCache(); }
   }
-  try { return JSON.parse(fs.readFileSync(TASKS, 'utf8')); } catch { return { seq: 0, tasks: [] }; }
+  return readJson(TASKS, { seq: 0, tasks: [] });
 }
 
 /* ── Claims ── */
 export function loadClaims() {
-  try { return JSON.parse(fs.readFileSync(CLAIMS, 'utf8')); } catch { return { claims: [] }; }
+  return readJson(CLAIMS, { claims: [] });
 }
 
 export function activeClaims(claims) {
@@ -804,9 +813,21 @@ export function journalAppend(entry) {
   });
 }
 
+/** Every journal entry, each node's repeated lines dropped (see readLogEntries), in file order. */
+export function* journalEntries() { for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) yield e; }
+
+/* A card's last touch: the `- synced:` line hub sync writes or the `- set:` line card-set writes,
+ * with its author when the line names one. */
+const CARD_STAMP_RE = /- (?:synced|set): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: by ([^\n]+))?/;
+export function cardStamp(text) {
+  const m = CARD_STAMP_RE.exec(text || '');
+  return { at: m ? m[1] : null, by: m && m[2] ? m[2].trim() || null : null };
+}
+/** Whole days from `ts` to now, never negative. */
+export const daysSince = (ts, nowMs = Date.now()) => Math.max(0, Math.floor((nowMs - parseTs(ts).getTime()) / 86400000));
+
 export function journalTail(project, n = 12) {
-  const all = [];
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) all.push(e);
+  const all = [...journalEntries()];
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge multiple per-host files by time
   // Alias-aware: entries written under a project's OLD slug belong to the same project, and a
   // reader asking about either name wants both halves of the trail.
@@ -833,7 +854,7 @@ const BOOKKEEPING_KINDS = new Set(['task', 'audit']);
 
 export function lastJournalByProject() {
   const out = {};
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+  for (const e of journalEntries()) {
     if (!e.project || !e.ts || BOOKKEEPING_KINDS.has(e.kind)) continue;
     const cur = out[e.project];
     if (!cur || parseTs(cur).getTime() < parseTs(e.ts).getTime()) out[e.project] = e.ts;
@@ -873,7 +894,7 @@ export function journalSince(hours) { return journalSinceMs(Date.now() - hours *
  *  Returns [{month: "2026-01", label: "Jan", count: 42}, ...] sorted chronologically. */
 export function sparklineData() {
   const months = new Map();
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+  for (const e of journalEntries()) {
     if (!e.ts) continue;
     const m = e.ts.slice(0, 7); // YYYY-MM
     months.set(m, (months.get(m) || 0) + 1);
@@ -889,7 +910,7 @@ export function sparklineData() {
  * instant and drop the entry written in that very minute. */
 export function journalSinceMs(cutoff) {
   const all = [];
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+  for (const e of journalEntries()) {
     if (parseTs(e.ts).getTime() >= cutoff) all.push(e);
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge per-host files by time
@@ -911,8 +932,7 @@ export function journalSinceMs(cutoff) {
  * authority a person reliably accepts is their own past self, with a date on it. Without a
  * local law the finding still fires; it just cites the engine's own wording and says so. */
 export function rulesConfig() {
-  let o = {};
-  try { o = JSON.parse(fs.readFileSync(path.join(HUB, 'rules.json'), 'utf8')) || {}; } catch {}
+  const o = readJson(path.join(HUB, 'rules.json'), {});
   const strict = (o.strict && typeof o.strict === 'object') ? o.strict : {};
   const laws = (o.laws && typeof o.laws === 'object') ? o.laws : {};
   // Which projects are money bets. DECLARED, never inferred: most cards in a real hub say
@@ -1331,11 +1351,11 @@ export function runAudit(a = {}) {
   // (4) Cards that stopped following their own project — the same lag hub_status marks, filed.
   const lastJournal = lastJournalByProject();
   for (const c of cards) {
-    const m = c.text.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);
-    if (!m) continue;
-    const lag = digestLag(m[1], lastJournal[c.slug], 14);
+    const touched = cardStamp(c.text).at;
+    if (!touched) continue;
+    const lag = digestLag(touched, lastJournal[c.slug], 14);
     if (lag) findings.push({ id: 'card-behind-journal', key: `card-behind-journal:${c.slug}`, severity: 'med', project: c.slug,
-      what: `${c.slug}: card last touched ${m[1]}, its journal moved on ${lag.daysBehind}d further (to ${lag.lastJournal})`,
+      what: `${c.slug}: card last touched ${touched}, its journal moved on ${lag.daysBehind}d further (to ${lag.lastJournal})`,
       fix: `re-sync the digest: hub card ${c.slug} -m "<what is true now>" --by <you>` });
   }
 
@@ -1744,7 +1764,7 @@ export function sectionHeadings(key) {
   return out;
 }
 
-const headingRe = (heading) => new RegExp('^## ' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*$', 'mi');
+const headingRe = (heading) => new RegExp('^## ' + escRe(heading) + '[ \\t]*$', 'mi');
 /** Is "## heading" in this text — case-insensitive, trailing blanks ignored, like every writer here. */
 export function hasHeading(text, heading) { return headingRe(heading).test(String(text || '')); }
 
@@ -1809,7 +1829,7 @@ export function ownerRoles() {
  * machines have three different environments, so one shared file would be wrong for
  * all of them at once. Same class as tasks.json and HUBD.md. */
 const envStateFile = () => path.join(HUB, '.env-state.json');
-function readEnvState() { try { return JSON.parse(fs.readFileSync(envStateFile(), 'utf8')); } catch { return {}; } }
+function readEnvState() { return readJson(envStateFile(), {}); }
 function writeEnvState(obj) { try { atomicWrite(envStateFile(), JSON.stringify(obj, null, 1)); } catch {} }
 /** The recorded environment observations, {kind: {values, at}} — read-only (hub gc prunes the stale ones). */
 export function envObservations() { return readEnvState().observations || {}; }
@@ -1999,6 +2019,18 @@ export function ackEnvNotices(session) {
   } catch {}
 }
 
+/** Session records older than `days` (hub gc): counted, and dropped with `apply`. */
+export function staleEnvSessions({ days = 7, apply = false } = {}) {
+  const st = readEnvState(), keep = {}, cutoff = Date.now() - days * 86400000;
+  let stale = 0;
+  for (const [sid, rec] of Object.entries(st.sessions || {})) {
+    const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
+    if (at && at >= cutoff) keep[sid] = rec; else stale++;
+  }
+  if (apply && stale) { st.sessions = keep; writeEnvState(st); }
+  return stale;
+}
+
 /* Everything in a hub that belongs to ONE node and must never travel by mesh-sync (which runs a
  * plain `git add -A`). One list: `hub init` writes it into a new .gitignore, and every hub run
  * completes an existing one with the lines it lacks.
@@ -2014,13 +2046,13 @@ export const freezeFile = () => path.join(HUB, '.mesh-freeze');
 /** The marker's record: null when this node is not frozen, {} when the marker cannot be read. */
 export function readFreeze() {
   if (!fs.existsSync(freezeFile())) return null;
-  try { return JSON.parse(fs.readFileSync(freezeFile(), 'utf8')); } catch { return {}; }
+  return readJson(freezeFile(), {});
 }
 const gitignoreAdded = [];
 function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
   let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
-  const esc = entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const esc = escRe(entry);
   if (new RegExp('^' + esc + '$', 'm').test(g)) return false;
   try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); gitignoreAdded.push(entry); return true; } catch { return false; }
 }
@@ -2684,15 +2716,15 @@ export function runReport(a) {
    * write, so a report that just moved the journal on counts against the digest it left behind. */
   const cardNow = readCard(project);
   if (cardNow) {
-    const m = cardNow.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: by ([^\n]+))?/) || [];
-    if (m[1]) {
+    const { at: touched, by: touchedBy } = cardStamp(cardNow);
+    if (touched) {
       const staleDays = a.staleDays ?? 7;
-      summary.digestAgeDays = Math.max(0, Math.floor((Date.now() - parseTs(m[1]).getTime()) / 86400000));
-      const lag = digestLag(m[1], lastJournalByProject()[slug], staleDays);
+      summary.digestAgeDays = daysSince(touched);
+      const lag = digestLag(touched, lastJournalByProject()[slug], staleDays);
       if (lag) {
         summary.digestStale = lag;
         summary.hint = `digest is ${summary.digestAgeDays} day(s) old and ${lag.daysBehind} day(s) behind this project's journal — ` +
-          `last set ${m[1]}${m[2] ? ' by ' + m[2].trim() : ''}. Fix the lines that went stale with hub_card_set({replace:[{from,to}]}) ` +
+          `last set ${touched}${touchedBy ? ' by ' + touchedBy : ''}. Fix the lines that went stale with hub_card_set({replace:[{from,to}]}) ` +
           `(\`hub card ${slug} --replace "<old>" --with "<new>"\`), or rewrite it with digest.`;
       }
     }
@@ -2821,7 +2853,7 @@ export function runSearch(a) {
       if (line.toLowerCase().includes(q)) hits.push({ where: f + ':' + (i + 1), line: line.trim().slice(0, 200) });
     });
   }
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) {
+  for (const e of journalEntries()) {
     if ((e.text || '').toLowerCase().includes(q))
       hits.push({ where: 'journal ' + e.ts + ' [' + e.project + '/' + e.agent + ']', line: e.text.slice(0, 200) });
   }
@@ -3045,9 +3077,8 @@ export function runContext(a) {
   if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
   const card = readCard(ctx.project);
   const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
-  const touched = card ? (card.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: by ([^\n]+))?/) || []) : [];
-  const digestSetAt = touched[1] || null, digestSetBy = (touched[2] || '').trim() || null;
-  const digestAgeDays = digestSetAt ? Math.max(0, Math.floor((Date.now() - parseTs(digestSetAt).getTime()) / 86400000)) : null;
+  const { at: digestSetAt, by: digestSetBy } = cardStamp(card);
+  const digestAgeDays = digestSetAt ? daysSince(digestSetAt) : null;
   const digestStale = digestLag(digestSetAt, lastJournalByProject()[ctx.project], a.staleDays ?? 7);
   const claimsDb = loadClaims();
   return {
@@ -3127,7 +3158,7 @@ function nextLocalSeq() {
   let maxN = 0;
   const prefixes = TASK_ID_PREFIX === JOURNAL_NODE ? [JOURNAL_NODE] : [TASK_ID_PREFIX, JOURNAL_NODE];
   const res = prefixes.map(p => {
-    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const esc = escRe(p);
     return new RegExp('^' + esc + '-(\\d+)$');
   });
   try {
@@ -3399,13 +3430,13 @@ export function runBrief(a = {}) {
   try {
     for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md') && !RESERVED_CARDS.has(f.replace(/\.md$/, '')))) {
       const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
-      const m = c.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);   // card-set cards go stale too
-      if (m) {
+      const synced = cardStamp(c).at;   // card-set cards go stale too
+      if (synced) {
         const project = f.replace('.md', '');
-        const daysAgo = Math.floor((nowMs - parseTs(m[1]).getTime()) / 86400000);
-        if (daysAgo >= staleDays) staleCards.push({ project, synced: m[1], daysAgo });
-        const lag = digestLag(m[1], lastJournal[project], staleDays);
-        if (lag) staleDigests.push({ project, synced: m[1], ...lag });
+        const daysAgo = daysSince(synced, nowMs);
+        if (daysAgo >= staleDays) staleCards.push({ project, synced, daysAgo });
+        const lag = digestLag(synced, lastJournal[project], staleDays);
+        if (lag) staleDigests.push({ project, synced, ...lag });
       }
     }
   } catch {}
@@ -3483,7 +3514,7 @@ export function runOnboarding(a = {}) {
 }
 
 const checkinsFile = () => path.join(HUB, '.checkins.json');
-function readCheckins() { try { return JSON.parse(fs.readFileSync(checkinsFile(), 'utf8')); } catch { return {}; } }
+function readCheckins() { return readJson(checkinsFile(), {}); }
 function writeCheckins(obj) { try { atomicWrite(checkinsFile(), JSON.stringify(obj, null, 1)); } catch {} }
 
 // Personalized "what did I miss" — delta since THIS agent's own last
@@ -3977,17 +4008,15 @@ export function runRelease(a) {
  * DIRECTORY — `presence.<node>.json` sits beside it and does travel.
  */
 export function presencePath(agent) { return path.join(PRESENCE, slugify(agent) + '.json'); }
-export function readPresenceRecord(agent) {
-  try { return JSON.parse(fs.readFileSync(presencePath(agent), 'utf8')); } catch { return null; }
-}
+export function readPresenceRecord(agent) { return readJson(presencePath(agent)); }
 export function loadPresence() {
   let files;
   try { files = fs.readdirSync(PRESENCE).filter(f => f.endsWith('.json')); } catch { return []; }
   const out = [];
-  for (const f of files) { try { out.push(JSON.parse(fs.readFileSync(path.join(PRESENCE, f), 'utf8'))); } catch {} }
+  for (const f of files) { const r = readJson(path.join(PRESENCE, f)); if (r) out.push(r); }
   return out;
 }
-function presenceAlive(rec, nowMs) {
+export function presenceAlive(rec, nowMs = Date.now()) {
   const ttl = rec.ttlMin ?? 15;
   if (ttl === 0) return false;
   return nowMs < parseTs(rec.last_seen).getTime() + ttl * 60000;
@@ -4065,7 +4094,7 @@ export function presenceSnapshots() {
  * per-node files existed; nothing writes one now). Two nodes moving the same writerless file at
  * once make the same change, which merges cleanly. An empty file is never moved: it is what a
  * waiting loop creates for itself and the likeliest to be written again. */
-const nodeKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+export const nodeKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 /** The nodes that still write to the mesh, or null when the hub is not a git mesh at all. */
 export function liveMeshNodes({ root = HUB, days = 30 } = {}) {
   const repo = [root, HUB].find(d => d && fs.existsSync(path.join(d, '.git')));
@@ -4326,9 +4355,7 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
     .sort((a, b) => b.done > a.done ? 1 : -1)
     .map(mapTask);
 
-  const allJournal = [];
-  for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) allJournal.push(e);
-  const inbox = allJournal
+  const inbox = [...journalEntries()]
     .sort((a, b) => b.ts > a.ts ? 1 : -1)
     .slice(0, 30)
     .map(e => ({ ts: e.ts, project: e.project, agent: e.agent, kind: e.kind, text: e.text }));
