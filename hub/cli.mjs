@@ -19,11 +19,11 @@ import {
   runBrief, runClaim, runClaimCheck, runRelease, runKanban, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph,
   sectionsConfig, ensureProtocol, VERSION, harvestPrompt, runLint, runAudit, runNext, runAgenda, runRecall, runUsage, runUsageAdd, runRules, runOperatorGet,
-  journalFiles, journalTail, journalSince, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
+  journalFiles, journalTail, journalSince, journalSinceMs, journalCounts, MALFORMED_SETTLED_AFTER, logDuplication, versionSkew, meshStatus, meshNodes, caseCollisions,
   conflictedFiles, resolveCardConflicts, resolveQueueConflicts, CONFLICT_RE,
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
-  runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor,
+  runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor, sparklineData,
 } from './lib/core.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces, archiveStaleSubscribers } from './lib/queue.mjs';
@@ -2222,7 +2222,7 @@ function startServer(port) {
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#FAFAF8;color:#16181A;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.5}
-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #E3E3DE}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #E3E3DE}
 h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 #updated{color:#6B6B66;font-size:11px}
 #btn-rules{background:none;border:1px solid #E8590C;color:#E8590C;font-family:inherit;font-size:11px;padding:4px 10px;cursor:pointer;letter-spacing:.04em;border-radius:1px}
@@ -2233,19 +2233,7 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .btn-mode:first-child{border-radius:3px 0 0 3px}
 .btn-mode:last-child{border-radius:0 3px 3px 0;border-left:none}
 .btn-mode.active{background:#E8590C;color:#FAFAF8;border-color:#E8590C}
-/* timeline controls */
-#tl-bar{display:none;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid #E3E3DE}
-#tl-bar.show{display:flex}
-.tl-btn{background:none;border:1px solid #D0D0C8;color:#16181A;font-family:inherit;font-size:12px;padding:4px 10px;cursor:pointer;border-radius:3px}
-.tl-btn:hover{background:#ECECE8}
-.tl-btn:disabled{opacity:.35;cursor:default}
-#tl-slider{flex:1;height:20px;-webkit-appearance:none;appearance:none;background:#ECECE8;border-radius:10px;outline:none;margin:0 4px}
-#tl-slider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#E8590C;cursor:pointer}
-#tl-slider::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#E8590C;cursor:pointer;border:none}
-#tl-range-label{font-size:10px;color:#6B6B66;white-space:nowrap}
-/* playback highlight */
-.tl-entry{display:grid;grid-template-columns:90px 90px 60px 1fr;gap:8px;align-items:baseline;padding:7px 14px;border-bottom:1px solid #E3E3DE;font-size:11px;transition:background .3s}
-.tl-entry.now{background:#FFF4E6}
+/* live board */
 .board{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #E3E3DE}
 .col{border-right:1px solid #E3E3DE}
 .col:last-child{border-right:none}
@@ -2257,7 +2245,7 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .task-text{font-size:12px;color:#16181A}
 .task-blocked .task-text{color:#6B6B66}
 .task-meta{font-size:11px;color:#6B6B66;margin-top:3px}
-.empty{padding:14px;font-size:11px;color:#6B6B66;font-style:italic}
+.empty{font-size:11px;color:#6B6B66;font-style:italic;padding:14px}
 .act-head{padding:10px 14px;border-bottom:1px solid #E3E3DE;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
 .entry{padding:7px 14px;border-bottom:1px solid #E3E3DE;font-size:11px;display:grid;grid-template-columns:90px 90px 60px 1fr;gap:8px;align-items:baseline}
 .entry:last-child{border-bottom:none}
@@ -2265,11 +2253,35 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .e-proj{font-weight:600}
 .e-kind{color:#6B6B66}
 .e-text{overflow:hidden;text-overflow:ellipsis}
-#tl-feed{min-height:200px}
-#tl-more{padding:10px 14px;text-align:center}
-#tl-more button{background:none;border:1px solid #D0D0C8;color:#6B6B66;font-family:inherit;font-size:11px;padding:5px 20px;cursor:pointer;border-radius:3px}
-#tl-more button:hover{background:#ECECE8}
-#tl-more button:disabled{opacity:.35}
+/* ── History: sparkline hero + single card ── */
+#hist-wrap{display:none;flex-direction:column;align-items:center;padding:40px 20px 30px}
+#hist-wrap.show{display:flex}
+#sparkline-hero{display:flex;align-items:flex-end;gap:3px;height:120px;width:100%;max-width:720px}
+.spark-bar{flex:1;min-width:8px;background:#ECECE8;border-radius:3px 3px 0 0;cursor:pointer;transition:background .2s, height .3s;position:relative}
+.spark-bar:hover{background:#D0D0C8}
+.spark-bar.active{background:#E8590C}
+.spark-bar.past{background:#D0D0C8}
+#spark-labels{display:flex;justify-content:space-between;width:100%;max-width:720px;margin-top:6px;font-size:10px;color:#9B9B96;padding:0 4px}
+/* play controls row */
+#play-row{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:20px}
+.pb-btn{background:none;border:1px solid #D0D0C8;color:#16181A;font-family:inherit;font-size:13px;padding:5px 12px;cursor:pointer;border-radius:3px;transition:all .15s}
+.pb-btn:hover{background:#ECECE8}
+.pb-btn:disabled{opacity:.3;cursor:default}
+#pb-slider{width:180px;height:4px;-webkit-appearance:none;appearance:none;background:#ECECE8;border-radius:2px;outline:none;margin:0 6px}
+#pb-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#E8590C;cursor:pointer}
+#pb-slider::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#E8590C;cursor:pointer;border:none}
+/* event card */
+#event-card{width:100%;max-width:640px;margin-top:28px;border:1px solid #E3E3DE;border-radius:6px;overflow:hidden;transition:opacity .25s}
+#event-card.loading{opacity:.4}
+#event-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #E3E3DE;background:#FAFAF8}
+#event-meta{display:flex;align-items:center;gap:12px}
+#event-ts{font-size:12px;color:#6B6B66}
+#event-proj{font-weight:600;font-size:13px}
+#event-kind{font-size:11px;color:#E8590C;text-transform:uppercase;letter-spacing:.06em}
+#event-idx{font-size:11px;color:#B0B0A8}
+#event-body{padding:16px 20px;font-size:14px;line-height:1.65;color:#16181A;min-height:60px;white-space:pre-wrap}
+#event-empty{text-align:center;color:#B0B0A8;padding:40px;font-size:13px}
+/* modal */
 #modal{display:none;position:fixed;inset:0;background:rgba(22,24,26,.55);z-index:100;align-items:flex-start;justify-content:center;padding-top:60px}
 #modal.open{display:flex}
 #modal-panel{background:#FAFAF8;border:1px solid #E3E3DE;width:640px;max-width:90vw;max-height:72vh;display:flex;flex-direction:column}
@@ -2277,6 +2289,7 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 #modal-close{background:none;border:none;color:#6B6B66;font-size:18px;cursor:pointer;font-family:inherit;padding:0 2px;line-height:1}
 #modal-body{padding:16px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.6;color:#16181A}
 .hide{display:none!important}
+@media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
 </style>
 </head>
 <body>
@@ -2291,55 +2304,37 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   <button class="btn-mode active" data-mode="live">Live</button>
   <button class="btn-mode" data-mode="history">History</button>
 </div>
-<div id="tl-bar">
-  <button class="tl-btn" id="tl-start" title="Jump to earliest">&#9664;&#9664;</button>
-  <button class="tl-btn" id="tl-step-back" title="Step back">&#9664;</button>
-  <button class="tl-btn" id="tl-play" title="Play / Pause">&#9654;</button>
-  <input type="range" id="tl-slider" min="0" max="100" value="100">
-  <span id="tl-range-label">now</span>
-</div>
 <div id="live-view">
-<div class="board">
-  <div class="col">
-    <div class="col-head"><span class="col-title">Queued</span><span class="col-count" id="cnt-q">0</span></div>
-    <div id="col-q"></div>
+  <div class="board">
+    <div class="col"><div class="col-head"><span class="col-title">Queued</span><span class="col-count" id="cnt-q">0</span></div><div id="col-q"></div></div>
+    <div class="col"><div class="col-head"><span class="col-title">In progress</span><span class="col-count" id="cnt-p">0</span></div><div id="col-p"></div></div>
+    <div class="col"><div class="col-head"><span class="col-title">Done today</span><span class="col-count" id="cnt-d">0</span></div><div id="col-d"></div></div>
   </div>
-  <div class="col">
-    <div class="col-head"><span class="col-title">In progress</span><span class="col-count" id="cnt-p">0</span></div>
-    <div id="col-p"></div>
+  <div><div class="act-head">Activity</div><div id="activity"></div></div>
+</div>
+<div id="hist-wrap">
+  <div id="sparkline-hero"></div>
+  <div id="spark-labels"></div>
+  <div id="play-row">
+    <button class="pb-btn" id="pb-first" title="Earliest">&#171;</button>
+    <button class="pb-btn" id="pb-prev" title="Step back">&#8249;</button>
+    <button class="pb-btn" id="pb-play" title="Play" style="min-width:40px">&#9654;</button>
+    <button class="pb-btn" id="pb-next" title="Step forward">&#8250;</button>
+    <button class="pb-btn" id="pb-last" title="Latest">&#187;</button>
+    <input type="range" id="pb-slider" min="0" max="100" value="100">
   </div>
-  <div class="col">
-    <div class="col-head"><span class="col-title">Done today</span><span class="col-count" id="cnt-d">0</span></div>
-    <div id="col-d"></div>
-  </div>
+  <div id="event-card"><div id="event-empty">Click a bar or press play</div></div>
 </div>
-<div>
-  <div class="act-head">Activity</div>
-  <div id="activity"></div>
-</div>
-</div>
-<div id="history-view" class="hide">
-  <div class="act-head">Journal</div>
-  <div id="tl-feed"></div>
-  <div id="tl-more"><button id="tl-load-more">Load older</button></div>
-</div>
-<div id="modal">
-  <div id="modal-panel">
-    <div id="modal-head">
-      <span>Rules</span>
-      <button id="modal-close">&#215;</button>
-    </div>
-    <div id="modal-body"></div>
-  </div>
-</div>
+<div id="modal"><div id="modal-panel"><div id="modal-head"><span>Rules</span><button id="modal-close">&#215;</button></div><div id="modal-body"></div></div></div>
 <script>
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 var todayP3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
+
+/* ── Live ── */
 function taskEl(t){
   var blocked=t.blocked;
   var dlUrgent=t.deadline&&t.deadline<=todayP3;
-  var h='<div class="task'+(blocked?' task-blocked':'')+'">'+
-    '<div class="task-text">'+(blocked?'&#9939; ':'')+esc(t.text)+'</div>';
+  var h='<div class="task'+(blocked?' task-blocked':'')+'"><div class="task-text">'+(blocked?'&#9939; ':'')+esc(t.text)+'</div>';
   var meta=[];
   if(t.assignee)meta.push('@'+esc(t.assignee));
   if(t.deadline)meta.push((dlUrgent?'<span style="color:#E8590C">':'')+esc(t.deadline)+(dlUrgent?'</span>':''));
@@ -2358,160 +2353,133 @@ async function loadLive(){
     renderCol('col-p','cnt-p',d.inProgress);
     renderCol('col-d','cnt-d',d.doneToday);
     document.getElementById('activity').innerHTML=d.inbox.length?d.inbox.map(function(e){
-      return '<div class="entry">'+
-        '<span class="e-ts">'+esc(e.ts.slice(5,16))+'</span>'+
-        '<span class="e-proj">'+esc(e.project)+'</span>'+
-        '<span class="e-kind">'+esc(e.kind)+'</span>'+
-        '<span class="e-text">'+esc((e.text||'').slice(0,120))+'</span></div>';
-    }).join(''):'<div class="empty" style="padding:14px">no activity</div>';
+      return '<div class="entry"><span class="e-ts">'+esc(e.ts.slice(5,16))+'</span><span class="e-proj">'+esc(e.project)+'</span><span class="e-kind">'+esc(e.kind)+'</span><span class="e-text">'+esc((e.text||'').slice(0,120))+'</span></div>';
+    }).join(''):'<div class="empty">no activity</div>';
     document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
   }catch(e){document.getElementById('updated').textContent='error: '+e.message}
 }
 
-/* ── History / Timeline ── */
-var tlMode='live', tlTimer=null, tlEarliest=null, tlNewest=null;
-var tlEntries=[], tlCursor=null, tlHasMore=true, tlLoading=false;
-var tlPlayIdx=-1, tlPlaySpeed=800;
+/* ── History: sparkline hero + event card ── */
+var spMonths=[], spAll=[], spActive=-1, spMode='live', spTimer=null;
+var spIdx=0, spLoading=false, spSpeed=900;
 
-function tlEntryHtml(e,idx){
-  return '<div class="tl-entry'+(idx===tlPlayIdx?' now':'')+'" data-idx="'+idx+'">'+
-    '<span class="e-ts">'+esc(e.ts.slice(5,16))+'</span>'+
-    '<span class="e-proj">'+esc(e.project||'')+'</span>'+
-    '<span class="e-kind">'+esc(e.kind||'')+'</span>'+
-    '<span class="e-text">'+esc((e.text||'').slice(0,140))+'</span></div>';
+function renderSparkline(){
+  if(!spMonths.length)return;
+  var max=Math.max.apply(null,spMonths.map(function(m){return m.count}));
+  var h=document.getElementById('sparkline-hero');
+  h.innerHTML=spMonths.map(function(m,i){
+    var ht=Math.max(3,Math.round(m.count/max*110));
+    return '<div class="spark-bar'+(i===spActive?' active':(spActive>=0&&i<spActive?' past':''))+'" data-idx="'+i+'" style="height:'+ht+'px" title="'+m.label+' '+m.month.slice(0,4)+': '+m.count+'"></div>';
+  }).join('');
+  document.getElementById('spark-labels').innerHTML=spMonths.map(function(m,i){
+    return '<span style="flex:1;text-align:center">'+(spMonths.length<=12||i%2===0||i===spMonths.length-1?m.label:'')+'</span>';
+  }).join('');
+  h.querySelectorAll('.spark-bar').forEach(function(b){
+    b.onclick=function(){
+      var i=parseInt(this.dataset.idx);
+      spActive=i; renderSparkline();
+      loadAllSince(spMonths[i].month+'-01');
+    };
+  });
 }
 
-function renderTlFeed(){
-  var feed=document.getElementById('tl-feed');
-  feed.innerHTML=tlEntries.length?tlEntries.map(function(e,i){return tlEntryHtml(e,i)}).join(''):'<div class="empty" style="padding:14px">no journal entries</div>';
-  document.getElementById('tl-load-more').disabled=!tlHasMore||tlLoading;
-  if(!tlHasMore)document.getElementById('tl-load-more').textContent='End of journal';
-  else document.getElementById('tl-load-more').textContent=tlLoading?'Loading...':'Load older';
-}
-
-async function loadJournal(before,append){
-  if(tlLoading)return;
-  tlLoading=true;
-  try{
-    var q='/api/journal?limit=60'+(before?'&before='+encodeURIComponent(before):'');
-    var d=await fetch(q+location.search).then(function(r){return r.json()});
-    if(append){tlEntries=tlEntries.concat(d.entries)}else{tlEntries=d.entries}
-    tlCursor=d.oldest||null;
-    tlHasMore=d.hasMore;
-    if(d.newest&&(!tlNewest||d.newest>tlNewest))tlNewest=d.newest;
-    if(d.oldest&&(!tlEarliest||d.oldest<tlEarliest))tlEarliest=d.oldest;
-    renderTlFeed();
+function loadAllSince(monthStart){
+  if(spLoading)return;
+  spLoading=true;
+  fetch('/api/journal-since?ts='+encodeURIComponent(monthStart+'T00:00:00Z')+location.search).then(function(r){return r.json()}).then(function(d){
+    spAll=d.entries||[];
+    spAll.sort(function(a,b){return a.ts<b.ts?-1:a.ts>b.ts?1:0}); // oldest first for playback
+    spIdx=0;
+    showEvent();
     updateSlider();
-    document.getElementById('updated').textContent='journal · '+tlEntries.length+' entries';
-  }catch(e){document.getElementById('updated').textContent='error: '+e.message}
-  tlLoading=false;
+    document.getElementById('updated').textContent=spAll.length+' entries since '+monthStart.slice(0,7);
+  }).catch(function(e){document.getElementById('updated').textContent='error: '+e.message})
+  .then(function(){spLoading=false});
+}
+
+function showEvent(){
+  var card=document.getElementById('event-card');
+  if(!spAll.length||spIdx<0||spIdx>=spAll.length){
+    card.innerHTML='<div id="event-empty">'+(spAll.length?'end of range':'no entries in this month')+'</div>';
+    return;
+  }
+  var e=spAll[spIdx];
+  card.innerHTML=
+    '<div id="event-head">'+
+      '<div id="event-meta">'+
+        '<span id="event-ts">'+esc(e.ts.slice(0,16).replace('T',' '))+'</span>'+
+        '<span id="event-proj">'+esc(e.project||'·')+'</span>'+
+        '<span id="event-kind">'+esc(e.kind||'')+'</span>'+
+      '</div>'+
+      '<span id="event-idx">'+(spIdx+1)+' / '+spAll.length+'</span>'+
+    '</div>'+
+    '<div id="event-body">'+esc(e.text||'(no text)')+'</div>';
+  document.getElementById('updated').textContent=e.ts.slice(0,16).replace('T',' ');
+  updateSlider();
 }
 
 function updateSlider(){
-  if(!tlEarliest||!tlNewest)return;
-  var slider=document.getElementById('tl-slider');
-  var total=new Date(tlNewest).getTime()-new Date(tlEarliest).getTime();
-  if(total<=0){slider.value=100;return}
-  if(tlCursor){
-    var pos=100-Math.round(((new Date(tlCursor).getTime()-new Date(tlEarliest).getTime())/total)*100);
-    slider.value=Math.max(0,Math.min(100,pos));
-  }else{slider.value=100}
-  updateRangeLabel();
-}
-
-function updateRangeLabel(){
-  document.getElementById('tl-range-label').textContent=
-    tlCursor?tlCursor.slice(0,16).replace('T',' '):'now';
+  var s=document.getElementById('pb-slider');
+  if(!spAll.length){s.value=100;return}
+  s.value=Math.round((spIdx/(spAll.length-1))*100);
 }
 
 function stopPlayback(){
-  if(tlTimer){clearInterval(tlTimer);tlTimer=null}
-  tlPlayIdx=-1;
-  document.getElementById('tl-play').innerHTML='&#9654;';
-  renderTlFeed();
+  if(spTimer){clearInterval(spTimer);spTimer=null}
+  document.getElementById('pb-play').innerHTML='&#9654;';
 }
 
 function startPlayback(){
-  if(tlTimer)return stopPlayback();
-  if(!tlEntries.length)return;
-  document.getElementById('tl-play').innerHTML='&#9646;&#9646;';
-  tlPlayIdx=0;
-  renderTlFeed();
-  tlTimer=setInterval(function step(){
-    if(tlPlayIdx>=tlEntries.length-1){
-      if(tlHasMore&&!tlLoading){
-        stopPlayback();
-        loadJournal(tlCursor,true).then(function(){
-          tlPlayIdx=tlEntries.length-1;
-          renderTlFeed();
-          tlTimer=setInterval(step,tlPlaySpeed);
-        });
-        return;
-      }
-      stopPlayback();
-      return;
-    }
-    tlPlayIdx++;
-    renderTlFeed();
-    document.getElementById('updated').textContent='playback · '+
-      tlEntries[tlPlayIdx].ts.slice(0,16).replace('T',' ');
-  },tlPlaySpeed);
+  if(spTimer)return stopPlayback();
+  if(!spAll.length)return;
+  document.getElementById('pb-play').innerHTML='&#9646;&#9646;';
+  spTimer=setInterval(function(){
+    if(spIdx>=spAll.length-1){stopPlayback();return}
+    spIdx++; showEvent();
+  },spSpeed);
 }
 
-// Mode switching
+document.getElementById('pb-play').onclick=function(){if(spTimer)stopPlayback();else startPlayback()};
+document.getElementById('pb-prev').onclick=function(){stopPlayback();if(spIdx>0){spIdx--;showEvent()}};
+document.getElementById('pb-next').onclick=function(){stopPlayback();if(spIdx<spAll.length-1){spIdx++;showEvent()}};
+document.getElementById('pb-first').onclick=function(){stopPlayback();spIdx=0;showEvent()};
+document.getElementById('pb-last').onclick=function(){stopPlayback();spIdx=spAll.length-1;showEvent()};
+document.getElementById('pb-slider').oninput=function(){
+  stopPlayback();
+  if(!spAll.length)return;
+  spIdx=Math.round((parseInt(this.value)/100)*(spAll.length-1));
+  showEvent();
+};
+
+var liveTimer=null;
 document.querySelectorAll('.btn-mode').forEach(function(b){
   b.onclick=function(){
     document.querySelectorAll('.btn-mode').forEach(function(x){x.classList.remove('active')});
     this.classList.add('active');
-    tlMode=this.dataset.mode;
+    spMode=this.dataset.mode;
     stopPlayback();
-    if(tlMode==='live'){
+    if(spMode==='live'){
       document.getElementById('live-view').classList.remove('hide');
-      document.getElementById('history-view').classList.add('hide');
-      document.getElementById('tl-bar').classList.remove('show');
+      document.getElementById('hist-wrap').classList.remove('show');
       document.getElementById('mode-bar').style.borderBottom='1px solid #E3E3DE';
       loadLive();
       liveTimer=setInterval(loadLive,3000);
     }else{
       document.getElementById('live-view').classList.add('hide');
-      document.getElementById('history-view').classList.remove('hide');
-      document.getElementById('tl-bar').classList.add('show');
+      document.getElementById('hist-wrap').classList.add('show');
       document.getElementById('mode-bar').style.borderBottom='none';
       if(liveTimer){clearInterval(liveTimer);liveTimer=null}
-      if(!tlEntries.length)loadJournal(null,false);
+      if(!spMonths.length){
+        fetch('/api/sparkline'+location.search).then(function(r){return r.json()}).then(function(d){
+          spMonths=d.months||[];
+          renderSparkline();
+          if(spMonths.length){spActive=spMonths.length-1;renderSparkline();loadAllSince(spMonths[spMonths.length-1].month+'-01')}
+        });
+      }
     }
   };
 });
 
-// Timeline controls
-document.getElementById('tl-play').onclick=function(){
-  if(tlTimer)stopPlayback();else startPlayback();
-};
-document.getElementById('tl-step-back').onclick=function(){
-  stopPlayback();
-  if(tlPlayIdx>0){tlPlayIdx--;renderTlFeed();}
-};
-document.getElementById('tl-start').onclick=function(){
-  stopPlayback();
-  tlEntries=[];tlCursor=null;tlHasMore=true;tlEarliest=null;tlNewest=null;
-  loadJournal(null,false);
-};
-document.getElementById('tl-slider').oninput=function(){
-  stopPlayback();
-  if(!tlEarliest||!tlNewest)return;
-  var val=parseInt(this.value);
-  var total=new Date(tlNewest).getTime()-new Date(tlEarliest).getTime();
-  if(total<=0)return;
-  var targetTs=new Date(new Date(tlEarliest).getTime()+Math.round((100-val)/100*total)).toISOString();
-  tlEntries=[];tlCursor=null;tlHasMore=true;
-  loadJournal(targetTs,false);
-};
-document.getElementById('tl-load-more').onclick=function(){
-  stopPlayback();
-  if(tlHasMore&&!tlLoading)loadJournal(tlCursor,true);
-};
-
-var liveTimer=null;
 document.getElementById('btn-rules').onclick=function(){
   fetch('/api/rules'+location.search).then(function(r){return r.json()}).then(function(d){
     document.getElementById('modal-body').textContent=d.text;
@@ -2533,7 +2501,6 @@ liveTimer=setInterval(loadLive,3000);
     return { text: 'No AGENTS.md found. Run "hub init" to scaffold a team folder, or create ~/.hubd/AGENTS.md to define team rules.' };
   }
 
-  // Multi-tenant board (HUBD_MULTITENANT=1): opened by link board.hubd.net/?t=<token>.
   const MT = process.env.HUBD_MULTITENANT === '1';
   const TENANTS = path.join(HUB, 'tenants');
   const HOST = process.env.HUBD_HTTP_HOST || '127.0.0.1';
@@ -2544,43 +2511,17 @@ liveTimer=setInterval(loadLive,3000);
     return null;
   };
 
-  // Journal endpoint: paginated, reverse-chronological entries.
-  // before=<ISO> — entries older than this timestamp (exclusive). Omit for newest.
-  // limit=<N> — max entries to return (default 60, max 200).
-  function apiJournal(query) {
-    const before = query.get('before') || null;
-    const limit = Math.min(parseInt(query.get('limit') || '60') || 60, 200);
-    const files = journalFiles();
-    const all = [];
-    for (const f of files) {
-      try {
-        const txt = fs.readFileSync(f, 'utf8');
-        for (const line of txt.split('\n')) {
-          const t = line.trim(); if (!t) continue;
-          try { all.push(JSON.parse(t)); } catch {}
-        }
-      } catch {}
-    }
-    all.sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0));
-    let filtered = all;
-    if (before) {
-      const cutoff = new Date(before).getTime();
-      filtered = all.filter(e => new Date(e.ts).getTime() < cutoff);
-    }
-    const entries = filtered.slice(0, limit);
-    return {
-      entries,
-      hasMore: entries.length === limit && entries.length < filtered.length,
-      newest: all.length ? all[0].ts : null,
-      oldest: entries.length ? entries[entries.length - 1].ts : null,
-    };
+  // Journal entries at or after ?ts= (inclusive), through the same reader as every other view:
+  // one timestamp parser, torn lines skipped the same way.
+  function apiJournalSince(query) {
+    const cutoff = query.get('ts') ? parseTs(query.get('ts')).getTime() : 0;
+    return { entries: Number.isFinite(cutoff) ? journalSinceMs(cutoff) : [] };
   }
 
+  function apiSparkline() { return { months: sparklineData() }; }
+
   const handler = (req, res) => {
-    if (req.method !== 'GET') {
-      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
-      return res.end(JSON.stringify({ error: 'method not allowed' }));
-    }
+    if (req.method !== 'GET') { res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' }); return res.end(JSON.stringify({ error: 'method not allowed' })); }
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -2589,37 +2530,26 @@ liveTimer=setInterval(loadLive,3000);
         if (!dir) { res.writeHead(401); return res.end(JSON.stringify({ error: 'open with ?t=<token>' })); }
         if (!fs.existsSync(dir)) {
           if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], generated: now() }));
-          if (url.pathname === '/api/journal') return res.end(JSON.stringify({ entries: [], hasMore: false, newest: null, oldest: null }));
+          if (url.pathname === '/api/sparkline') return res.end(JSON.stringify({ months: [] }));
+          if (url.pathname === '/api/journal-since') return res.end(JSON.stringify({ entries: [] }));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
         setHubBase(dir);
       }
-      if (url.pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(HTML);
-      }
-      if (url.pathname === '/api/kanban') {
-        return res.end(JSON.stringify(runKanban({})));
-      }
-      if (url.pathname === '/api/rules') {
-        return res.end(JSON.stringify(getRules()));
-      }
-      if (url.pathname === '/api/journal') {
-        return res.end(JSON.stringify(apiJournal(url.searchParams)));
-      }
-      res.writeHead(404);
-      res.end(JSON.stringify({ error: 'not found' }));
-    } catch (e) {
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: e.message }));
-    }
+      if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(HTML); }
+      if (url.pathname === '/api/kanban') return res.end(JSON.stringify(runKanban({})));
+      if (url.pathname === '/api/rules') return res.end(JSON.stringify(getRules()));
+      if (url.pathname === '/api/sparkline') return res.end(JSON.stringify(apiSparkline()));
+      if (url.pathname === '/api/journal-since') return res.end(JSON.stringify(apiJournalSince(url.searchParams)));
+      res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
+    } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
   };
 
   const server = http.createServer(handler);
   server.listen(port, HOST, () => {
-    console.log(`hubd kanban  http://${HOST}:${port}${MT ? '  (multi-tenant — open with ?t=<token>)' : ''}`);
-    console.log('  Live: kanban board   History: timeline scroll + playback');
+    console.log('hubd kanban  http://' + HOST + ':' + port + (MT ? '  (multi-tenant — open with ?t=<token>)' : ''));
+    console.log('  Live: kanban   History: sparkline + event playback');
     console.log('Ctrl+C to stop');
   });
 }
