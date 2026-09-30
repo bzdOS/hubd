@@ -24,13 +24,14 @@ import {
   loadClaims, activeClaims, journalAppend, loadTasks,
   runHeartbeat, runPresence, envChecks, ownerWaiting, runWhereAmI, runAbsorb, runCardsCompact, cardLimits,
   runCardsMergeSections, runCardsMerge, cardSectionIssues, requireAuthor, sparklineData,
+  HUB_GITIGNORE, ensureHubGitignore, gitignoreAddedThisRun, trackedNodeLocal,
 } from './lib/core.mjs';
 import { runBoard } from './lib/board.mjs';
 import { runHubGc } from './lib/gc.mjs';
-import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch } from './lib/sense.mjs';
+import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { roleWork, assertRole } from './lib/queue.mjs';
-import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces, archiveStaleSubscribers } from './lib/queue.mjs';
+import { queueSend, queueWait, queueWaitAll, resolveQueueRoot, resolveQueueRootInfo, queueSummaryForBrief, buttonsSummary, ownerQueueItems, subscriberRoles, queueInventory, strandedQueues, outOfBandTrims, runQueueGc, queueLedger, subscriberNamespaces } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -379,7 +380,7 @@ deviations, test output); the cto appends "## Acceptance".*
 <out of scope; tempting-but-wrong; leave for later>
 `;
 
-const GITIGNORE_ENTRY = '.qstate/\nHUBD.md\npresence/\n.checkins.json\n.mesh-freeze\n';
+const GITIGNORE_ENTRY = HUB_GITIGNORE.join('\n') + '\n';
 // Defined here, not next to the freeze command below: `hub doctor` reads it, and a const declared
 // after its reader is a temporal dead zone — doctor crashed on exactly that while this was written.
 const FREEZE_FILE = path.join(HUB, '.mesh-freeze');
@@ -460,19 +461,17 @@ if (cmd === 'init') {
   ensureFile('queues/README.md', QUEUES_README_MD);
   ensureFile('specs/SPEC_template.md', SPEC_TEMPLATE);
 
-  // .gitignore: only create if entirely absent; if present but missing entry, hint
+  // .gitignore: created whole when absent; an existing one is kept and completed with the node-local
+  // lines it lacks (a hub made before a line existed would otherwise never get it)
   const giPath = path.join(targetDir, '.gitignore');
   if (!fs.existsSync(giPath)) {
     fs.writeFileSync(giPath, GITIGNORE_ENTRY, 'utf8');
     console.log('  created .gitignore');
   } else {
     const gi = fs.readFileSync(giPath, 'utf8');
-    if (!gi.includes('.qstate/')) {
-      console.log('  exists, kept .gitignore');
-      console.log('  hint: add .qstate/ to .gitignore');
-    } else {
-      console.log('  exists, kept .gitignore');
-    }
+    const missing = HUB_GITIGNORE.filter(e => !gi.split('\n').map(l => l.trim()).includes(e));
+    if (missing.length) fs.appendFileSync(giPath, (gi && !gi.endsWith('\n') ? '\n' : '') + missing.join('\n') + '\n');
+    console.log('  exists, kept .gitignore' + (missing.length ? ' — added ' + missing.join(' ') : ''));
   }
 
   console.log('');
@@ -685,6 +684,21 @@ if (cmd === 'doctor') {
     console.log('  since ' + (info.since || '?') + (ageH !== null ? ' (' + ageH + 'h)' : '') +
       ' by ' + (info.by || '?') + ': ' + (info.why || 'no reason recorded'));
     console.log('  hub unfreeze' + (stale ? '   — longer than any operation should take; if the work is done, unfreeze' : ''));
+  }
+
+  // Node-local files: the lines this run added to .gitignore, and the ones git tracks anyway (an
+  // ignore line does not untrack a file, so those still travel).
+  {
+    const added = gitignoreAddedThisRun(), tracked = trackedNodeLocal();
+    if (added.length || tracked.length) console.log('');
+    if (added.length) console.log('gitignore: added ' + added.join(' ') + ' — node-local, must not travel by mesh-sync');
+    if (tracked.length) {
+      warnings++;
+      console.log('gitignore: TRACKED anyway  WARNING — ' + tracked.join(' ') + ' travel to every peer on each sync');
+      console.log('  untrack on ONE node (keeps its copy):  git -C "' + HUB + '" rm -r -q --cached -- ' + tracked.map(t => t.replace(/\/$/, '')).join(' ') + ' && git -C "' + HUB + '" commit -q -m "untrack node-local files"');
+      console.log('  every peer\'s next pull then deletes its own copy (for .mesh-freeze: unfreezes a node frozen by accident);');
+      console.log('  a peer that changed the file meanwhile stops on a modify/delete conflict — do it while the others are quiet');
+    }
   }
 
   // team root
@@ -1399,9 +1413,16 @@ if (cmd === 'freeze' || cmd === 'unfreeze') {
     console.log('Leaving that one in place — hub unfreeze when the work is done.');
     done(0);
   }
+  // The marker must stay on this node: ignored, and not tracked from an older mistake.
+  ensureHubGitignore();
+  const trackedMarker = trackedNodeLocal().includes('.mesh-freeze');
   fs.writeFileSync(FREEZE_FILE, JSON.stringify({ by, why, since: now(), node: JOURNAL_NODE, pid: process.pid }, null, 1) + '\n', 'utf8');
   console.log('Frozen: mesh-sync on this node will skip every run until you unfreeze.');
   console.log('  ' + FREEZE_FILE);
+  if (trackedMarker) {
+    console.log('WARNING: .mesh-freeze is TRACKED in this hub\'s git — a commit made here by hand would carry the freeze');
+    console.log('  to every peer. hub doctor says how to untrack it; until then, commit nothing by hand in this directory.');
+  }
   console.log('Local writes still work and stay local. Back up before you touch anything:');
   console.log('  tar czf ~/hub-backup-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.tgz -C "' + path.dirname(HUB) + '" "' + path.basename(HUB) + '"');
   console.log('Other writers on this directory are NOT stopped by this — check them too:  hub doctor');
@@ -1770,7 +1791,7 @@ if (cmd === 'sense') {
       console.log(r.text); process.exit(r.code);
     }
     if (sub === 'brief') { console.log(runSenseBrief(head)); process.exit(0); }
-    if (sub === 'status') { console.log(JSON.stringify({ conf: senseConf(head), config: senseConfig(), state: loadSenseState(head) }, null, 1)); process.exit(0); }
+    if (sub === 'status') { console.log(JSON.stringify({ conf: senseConf(head), config: senseConfig(), state: loadSenseState(head), escalations: escalationsPath() }, null, 1)); process.exit(0); }
     fail('hub sense: events | check | verdict | brief | status');
   } catch (e) { fail(e.message); }
 }
@@ -1793,7 +1814,7 @@ if (cmd === 'board') {
   };
   const stateOf = (s) => s.kind === 'turn' ? `turn ${s.minutes ?? '?'}m${s.turn != null ? ' #' + s.turn : ''}`
     : s.kind === 'waiting' ? `waiting ${s.minutes ?? '?'}m` : s.kind === 'silent' ? `SILENT ${s.minutes}m`
-    : s.kind === 'exit' ? `exit${s.reason ? ': ' + s.reason : ''}` : s.kind;
+    : s.kind === 'exit' ? `exit${s.reason ? ': ' + s.reason : ''}` : s.kind === 'alive' && s.minutes != null ? `alive, seen ${s.minutes}m ago` : s.kind;
   const who = (t) => t.assignee ? ` @${t.assignee}${t.assigneeKnown ? (t.assigneeOff ? ' (off)' : '') : ' (not a role)'}` : '';
   if (!r.registry.roles) console.log('(no roles declared — tracks are projects with open work; declare roles: hub resource set <role> --type role --attr rank=head|worker ...)');
   for (const t of r.tracks) {
@@ -1962,48 +1983,6 @@ function authorOrDie(flag) {
 }
 
 if (cmd === 'gc') {
-  let removed = 0;
-  const nowMs = Date.now();
-  try {
-    for (const f of fs.readdirSync(HUB)) {
-      const full = path.join(HUB, f);
-      if (f.endsWith('.lock')) {                       // stale locks (live ones are stolen after 30s)
-        try { if (nowMs - fs.statSync(full).mtimeMs > 60000) { fs.unlinkSync(full); console.log('  removed stale lock ' + f); removed++; } } catch {}
-      } else if (f.startsWith('tasks.json.bak')) {     // ONLY the generated task-cache backup — never a user .bak file
-        try { fs.unlinkSync(full); console.log('  removed backup ' + f); removed++; } catch {}
-      } else if (f.includes('.tmp.')) {                // orphaned .tmp.<pid> from crashed atomicWrite
-        try { if (nowMs - fs.statSync(full).mtimeMs > 60000) { fs.unlinkSync(full); console.log('  removed stale tmp ' + f); removed++; } } catch {}
-      }
-    }
-  } catch (e) { die('cannot read hub dir: ' + e.message); }
-  // Per-subscriber cursor dirs accumulate one per session. Namespaces idle for a week — a
-  // live reader rewrites its .waiter every poll — are MOVED to .qstate/_archive/, not deleted
-  // (they used to be rm -rf'd): a reader that returns after a long absence can be put back
-  // and resumes where it stopped. Taps under __watchall__ go by the same rule.
-  // Shared cursors sit as plain files in .qstate and are never touched here.
-  try {
-    const subs = archiveStaleSubscribers({ root: resolveQueueRoot(), days: 7 });
-    for (const n of subs.moved) console.log('  archived idle reader ' + n + ' → .qstate/_archive/');
-    removed += subs.moved.length;
-  } catch {}
-  // Session records in .env-state.json accumulate the same way cursor dirs do — one per
-  // session that was told about a protocol change — so they go by the same rule.
-  try {
-    const esf = path.join(HUB, '.env-state.json');
-    const st = JSON.parse(fs.readFileSync(esf, 'utf8'));
-    const keep = {}, before = Object.keys(st.sessions || {}).length;
-    for (const [sid, rec] of Object.entries(st.sessions || {})) {
-      const at = rec && rec.at ? new Date(rec.at).getTime() : 0;
-      if (at && nowMs - at <= 7 * 86400000) keep[sid] = rec;
-    }
-    if (before !== Object.keys(keep).length) {
-      st.sessions = keep;
-      fs.writeFileSync(esf, JSON.stringify(st, null, 1));
-      const n = before - Object.keys(keep).length;
-      console.log('  removed ' + n + ' stale session record(s)'); removed += n;
-    }
-  } catch {}
-  console.log(removed ? `gc: removed ${removed} item(s)` : 'gc: nothing to clean');
   /* The classes that are judged by name (lib/gc.mjs): listed first, moved only with --apply --by.
    * Nothing is ever unlinked from the mesh — a queue goes to queues/archive/ with its bytes intact,
    * which is the one deletion mesh-sync accepts. */
@@ -2014,16 +1993,25 @@ if (cmd === 'gc') {
   if (args.includes('--json')) { console.log(JSON.stringify(g)); done(0); }
   for (const n of g.notes) console.log('  note: ' + n);
   const show = (title, rows, fmt) => { if (!rows.length) return; console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); };
-  show(`queues of no live role, untouched ${g.days}d+`, g.queues, q => `${pad(q.file, 44)} ${pad(q.reason, 20)} ${q.idleDays}d  ${q.bytes}B`);
+  const L = g.local;
+  show('this node\'s own litter (never synced)', [
+    ...L.locks.map(f => 'stale lock ' + f), ...L.backups.map(f => 'task cache backup ' + f), ...L.tmp.map(f => 'stale tmp ' + f),
+    ...L.readers.map(n => 'idle reader ' + n + ' → .qstate/_archive/'), ...(L.sessions ? [L.sessions + ' session record(s) older than 7d'] : []),
+  ], x => x);
+  show(`queues of no live role, untouched ${g.days}d+, that this node may archive`, g.queues, q => `${pad(q.file, 44)} ${pad(q.reason, 20)} ${pad(q.idleDays + 'd', 5)} ${pad(q.bytes + 'B', 8)} ${q.whose}`);
+  show('left where they are', g.skipped, q => `${pad(q.file, 44)} ${q.why}`);
   show('dead waiter markers', g.waiters, w => `${w.file}  (pid ${w.pid ?? '?'})`);
   show(`presence of names that are not roles, ${g.days}d+ old`, g.presence, p => `${pad(p.agent, 30)} last ${p.lastSeen}`);
   show('environment notices whose cause is gone', g.env, e => `${e.kind}: ${e.value}`);
   show('open tasks on names that are not live roles — decide per project, gc never touches them', g.tasks,
     t => `${pad(t.assignee, 24)} ${pad(t.reason, 20)} ${t.count} task(s) in ${t.projects.join(', ')}`);
+  const litter = L.locks.length + L.backups.length + L.tmp.length + L.readers.length + L.sessions;
   if (!g.apply) {
-    if (g.queues.length || g.waiters.length || g.presence.length || g.env.length) console.log(`\ndry run — archive with: hub gc --apply --by <you>${g.days !== 14 ? ' --days ' + g.days : ''}`);
+    if (g.queues.length || g.waiters.length || g.presence.length || g.env.length || litter) console.log(`\ndry run, nothing touched — apply with: hub gc --apply --by <you>${g.days !== 14 ? ' --days ' + g.days : ''}`);
+    else console.log('\nnothing to clean');
   } else {
     console.log(`\narchived ${g.moved.length} queue file(s) to queues/archive/, removed ${g.waitersRemoved} waiter marker(s), archived ${g.presenceMoved} presence record(s), cleared ${g.envCleared} notice(s)`);
+    console.log(`  local: removed ${g.localRemoved.removed} file(s), archived ${g.localRemoved.readers} idle reader(s), dropped ${g.localRemoved.sessions} session record(s)`);
     if (g.commit) console.log(`  one commit: ${g.commit} — mesh-sync carries it to every peer`);
     else if (g.moved.length) console.log(`  not committed${g.commitError ? ' (' + g.commitError + ')' : ''} — mesh-sync accepts the move on its next run, the bytes are in the archive`);
     for (const f of g.failed) console.log(`  FAILED ${f.file}: ${f.error}`);
@@ -2284,6 +2272,7 @@ if (cmd === 'queue') {
     for (const g of r.ghosts) {
       console.log(`  ${g.file}  ${g.messages} msg, ${g.bytes}B, ${g.newest ? 'newest ' + g.newest : 'empty'}, ${g.ageDays}d, never read`);
     }
+    for (const g of r.held) console.log(`  left: ${g.file}  ${g.why}`);
     for (const s of r.staleSubscribers) {
       console.log(`  reader ${s.tap ? '__watchall__/' : ''}${s.name}  last active ${s.lastActive || '?'} (${s.ageDays}d)`);
     }
@@ -2356,7 +2345,8 @@ else if (!cmd) {
     '  heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]   record liveness',
     '  presence [--role r] [--alive] [--json]  fleet roster (who has heartbeated, alive/stale)',
     '  sync [path] [-m "<digest>"]      sync a project (-m = non-interactive)',
-    '  gc                               remove stale locks and old backups',
+    '  gc [--days 14] [--json]          what has piled up, by class — dry: touches nothing',
+    '  gc --apply --by <you>            archive it (moved, never deleted) and clear this node\'s litter',
     '  install-hook [path]              git post-commit hook',
     '  queue send <role> "<text>" --from <who>',
     '  secret set|get|path|list|rm <name>   values kept outside the replicated hub',
@@ -2532,7 +2522,10 @@ details.item>summary .meta{font-weight:400}
 </div>
 <div id="modal"><div id="modal-panel"><div id="modal-head"><span>Rules</span><button id="modal-close">&#215;</button></div><div id="modal-body"></div></div></div>
 <script>
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+/* Every value from the hub goes through esc(), in text and in attributes alike, so it escapes both
+   quotes: a heartbeat status is free text any loop writes, and one quote in it used to end a
+   title="..." attribute and start an event handler in the owner's browser. */
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 var todayP3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
 
 /* ── Live ── */
@@ -2575,10 +2568,10 @@ function renderSparkline(){
   var h=document.getElementById('sparkline-hero');
   h.innerHTML=spMonths.map(function(m,i){
     var ht=Math.max(3,Math.round(m.count/max*110));
-    return '<div class="spark-bar'+(i===spActive?' active':(spActive>=0&&i<spActive?' past':''))+'" data-idx="'+i+'" style="height:'+ht+'px" title="'+m.label+' '+m.month.slice(0,4)+': '+m.count+'"></div>';
+    return '<div class="spark-bar'+(i===spActive?' active':(spActive>=0&&i<spActive?' past':''))+'" data-idx="'+i+'" style="height:'+ht+'px" title="'+esc(m.label+' '+m.month.slice(0,4)+': '+m.count)+'"></div>';
   }).join('');
   document.getElementById('spark-labels').innerHTML=spMonths.map(function(m,i){
-    return '<span style="flex:1;text-align:center">'+(spMonths.length<=12||i%2===0||i===spMonths.length-1?m.label:'')+'</span>';
+    return '<span style="flex:1;text-align:center">'+(spMonths.length<=12||i%2===0||i===spMonths.length-1?esc(m.label):'')+'</span>';
   }).join('');
   h.querySelectorAll('.spark-bar').forEach(function(b){
     b.onclick=function(){
@@ -2658,9 +2651,10 @@ document.getElementById('pb-slider').oninput=function(){
 };
 
 /* ── Tracks ── */
-var bdData=null, bdTrack=(location.hash.match(/track=([^&]+)/)||[])[1]||'', bdTimer=null, bdMore={};
+var bdData=null, bdTrack=(location.hash.match(/track=([^&]+)/)||[])[1]||'', bdTimer=null, bdMore={}, bdAll=false;
+try{bdAll=localStorage.getItem('hubd-all')==='1'}catch(e){}
 try{bdTrack=decodeURIComponent(bdTrack)}catch(e){}
-function hm(ts){return String(ts||'').replace('T',' ').slice(5,16)}
+function hm(ts){return esc(String(ts||'').replace('T',' ').slice(5,16))}
 var NL=String.fromCharCode(10);   // a literal newline escape would be eaten by the template this page is built from
 function item(title,full,meta,cls){
   var m=meta?'<div class="meta clamp2">'+meta+'</div>':'';
@@ -2684,11 +2678,13 @@ function listBlock(key,title,rows,fmt,limit){
   return h;
 }
 function stateText(s){
-  if(s.kind==='turn')return 'turn '+(s.minutes==null?'?':s.minutes)+'m'+(s.turn!=null?' #'+s.turn:'');
-  if(s.kind==='waiting')return 'waiting '+(s.minutes==null?'?':s.minutes)+'m';
-  if(s.kind==='silent')return 'silent '+s.minutes+'m';
+  var mm=s.minutes==null?'?':esc(s.minutes);
+  if(s.kind==='turn')return 'turn '+mm+'m'+(s.turn!=null?' #'+esc(s.turn):'');
+  if(s.kind==='waiting')return 'waiting '+mm+'m';
+  if(s.kind==='silent')return 'silent '+mm+'m';
   if(s.kind==='exit')return 'exit'+(s.reason?': '+esc(s.reason):'');
   if(s.kind==='unseen')return 'no heartbeat';
+  if(s.kind==='alive')return 'alive'+(s.minutes!=null?'<div class="meta">seen '+mm+'m ago</div>':'');
   return esc(s.kind);
 }
 function meta(parts){return parts.filter(Boolean).join(' &middot; ')}
@@ -2696,7 +2692,7 @@ function roleTr(r){
   return '<tr><td>'+esc(r.role)+'<div class="meta">'+meta([esc(r.rank),r.node?esc(r.node):''])+'</div></td>'+
     '<td class="st st-'+esc(r.state.kind)+'">'+stateText(r.state)+(r.statusText&&r.state.kind!=='off'?'<div class="meta" title="'+esc(r.statusText)+'">'+esc(String(r.statusText).slice(0,40))+'</div>':'')+'</td>'+
     '<td class="tk">'+(r.task?'#'+esc(r.task):'')+(r.tasks.length?'<div class="meta">'+r.tasks.length+' open'+(r.offered?' &middot; <span class="warn" title="ready and not started">'+r.offered+' offered</span>':'')+'</div>':'')+'</td>'+
-    '<td><div class="clamp2">'+(r.lastStep?'<span class="meta">'+hm(r.lastStep.ts)+'</span> '+esc(r.lastStep.text):'<span class="meta">no journal entry</span>')+'</div>'+
+    '<td><div class="clamp2">'+(r.lastStep?'<span class="meta">'+hm(r.lastStep.ts)+'</span> '+esc(r.lastStep.text):'<span class="meta">no journal entry in '+esc(bdData?bdData.journalDays:'')+'d</span>')+'</div>'+
     (r.handoff?'<details><summary class="meta" style="cursor:pointer">handoff</summary><div class="full">'+esc(r.handoff)+'</div></details>':'')+'</td></tr>';
 }
 function trackEl(t,d){
@@ -2718,7 +2714,7 @@ function trackEl(t,d){
       listBlock(k+'next','Next',t.next,function(x){return item('#'+x.id+' '+x.title,x.text,meta([who(x),x.importance&&x.importance!=='normal'?esc(x.importance):'',x.deadline?(x.overdue?'<span class="warn">'+esc(x.deadline)+'</span>':esc(x.deadline)):'',x.owner?'<span class="warn">yours</span>':'']))})+
     '</div><div class="t-col">'+
       listBlock(k+'blocked','Blocked',t.blocked,function(x){return item('#'+x.id+' '+x.title,x.text,'waits on '+x.waitingOn.map(function(w){return '#'+esc(w.id)+' '+esc(w.title)}).join('; '))})+
-      listBlock(k+'dec','Branch decisions',t.decisions,function(x){return '<div class="item"><span class="'+(x.verdict==='accept'?'st-turn':'warn')+'">'+x.verdict.toUpperCase()+'</span> '+esc(x.sha.slice(0,10))+' '+esc(x.branch||'')+'<div class="meta">'+meta([hm(x.ts),esc(x.agent||'')])+'</div></div>'},5)+
+      listBlock(k+'dec','Branch decisions',t.decisions,function(x){return '<div class="item"><span class="'+(x.verdict==='accept'?'st-turn':'warn')+'">'+esc(x.verdict.toUpperCase())+'</span> '+esc(x.sha.slice(0,10))+' '+esc(x.branch||'')+'<div class="meta">'+meta([hm(x.ts),esc(x.agent||'')])+'</div></div>'},5)+
     '</div></div></section>';
 }
 function renderTracks(){
@@ -2735,13 +2731,15 @@ function renderTracks(){
   if(bdTrack&&names.indexOf(bdTrack)<0)bdTrack='';
   document.getElementById('track-filter').innerHTML=(names.length>1?'<button class="chip'+(bdTrack?'':' active')+'" data-track="">all tracks</button>'+
     names.map(function(n){return '<button class="chip'+(bdTrack===n?' active':'')+'" data-track="'+esc(n)+'">'+esc(n)+'</button>'}).join(''):'')+
+    (d.registry.heads?'<button class="chip'+(bdAll?' active':'')+'" data-all="1" title="every project with open work, not only the tracks">+ other projects</button>':'')+
     (d.unknownAssignees.length?'<span class="meta warn" style="margin-left:auto" title="hub lint: assignee-outside-roster">open work on names that are not roles: '+esc(d.unknownAssignees.join(', '))+'</span>':'');
   var shown=d.tracks.filter(function(t){return !bdTrack||t.project===bdTrack});
   document.getElementById('tracks').innerHTML=shown.length?shown.map(function(t){return trackEl(t,d)}).join(''):
     '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>';
 }
 function loadTracks(){
-  return fetch('/api/board'+location.search).then(function(r){return r.json()}).then(function(d){
+  var q=location.search?location.search+'&':'?';
+  return fetch('/api/board'+q+(bdAll?'all=1':'all=0')).then(function(r){return r.json()}).then(function(d){
     if(d.error)throw new Error(d.error);
     bdData=d; renderTracks();
     document.getElementById('updated').textContent='tracks '+new Date().toLocaleTimeString();
@@ -2749,6 +2747,8 @@ function loadTracks(){
   }).catch(function(e){document.getElementById('updated').textContent='error: '+e.message});
 }
 document.getElementById('tracks-view').addEventListener('click',function(e){
+  var a=e.target.closest('[data-all]');
+  if(a){bdAll=!bdAll;try{localStorage.setItem('hubd-all',bdAll?'1':'0')}catch(x){}loadTracks();return}
   var c=e.target.closest('[data-track]');
   if(c){bdTrack=c.dataset.track;location.hash=bdTrack?'track='+encodeURIComponent(bdTrack):'';renderTracks();return}
   var m=e.target.closest('[data-more]');
@@ -2851,7 +2851,7 @@ document.getElementById('modal').onclick=function(e){if(e.target===this)this.cla
       // A tenant's queues are its own directory; the default resolution could reach the operator's.
       if (url.pathname === '/api/board') return res.end(JSON.stringify(runBoard({
         days: url.searchParams.get('days') || undefined, project: url.searchParams.get('project') || undefined,
-        queueRoot: MT ? HUB : undefined })));
+        all: url.searchParams.get('all') === '1', queueRoot: MT ? HUB : undefined })));
       res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
   };

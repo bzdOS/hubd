@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
+import { HUB, JOURNAL_NODE, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
   loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
@@ -1227,10 +1227,15 @@ export function archiveStaleSubscribers({ root, days = 7 } = {}) {
  *
  * @param {{ root?: string, days?: number, apply?: boolean }} options
  */
+/* Which ghosts THIS node may move: shardHold in core (its own shards and writerless ones, never
+ * another live node's, never an empty file). The others are listed as `held`, with the reason. */
 export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 } = {}) {
   const r = root ?? resolveQueueRoot();
   const inv = queueInventory({ root: r, days });
-  const ghosts = inv.filter(x => x.ghost);
+  const live = liveMeshNodes({ root: r, days: Math.max(days, 30) });
+  const why = (x) => shardHold(x.node, x.messages, live);
+  const held = inv.filter(x => x.ghost && why(x)).map(x => ({ ...x, why: why(x) }));
+  const ghosts = inv.filter(x => x.ghost && !why(x));
   // Report what the age threshold is holding back, never just what it caught: in this hub 42
   // of 43 files had never been consumed but only 5 were older than the default 30 days, and a
   // bare "5 ghosts" would read as "the other 38 are fine".
@@ -1238,7 +1243,7 @@ export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 
   // Reader namespaces are the other thing a queue leaves behind, on a much shorter clock: a
   // subscriber idle for a week is gone, while a queue file idle for a week may just be quiet.
   const staleSubscribers = subscriberNamespaces({ root: r, days: subscriberDays }).filter(n => n.stale);
-  if (!apply) return { apply: false, days, count: ghosts.length, ghosts, live: inv.length - ghosts.length, neverRead, total: inv.length,
+  if (!apply) return { apply: false, days, count: ghosts.length, ghosts, held, live: inv.length - ghosts.length - held.length, neverRead, total: inv.length,
     subscriberDays, staleSubscribers };
   const subs = archiveStaleSubscribers({ root: r, days: subscriberDays });
   const dir = path.join(r, 'queues', 'archive');
@@ -1252,7 +1257,7 @@ export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 
       moved.push(g.file);
     } catch { failed.push(g.file); }
   }
-  return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts,
+  return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts, held,
     subscriberDays, staleSubscribers, subscribersArchived: subs.moved, subscribersFailed: subs.failed };
 }
 

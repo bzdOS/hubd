@@ -45,7 +45,11 @@ export function runBoard(a = {}) {
   const known = (who) => !roles.size || !who || roles.has(slugify(who)) || owners.has(who);
   const isOwner = isOwnerTask(owners);
 
-  const journal = journalSinceMs(0);                    // newest first
+  /* A window, not the whole journal: this runs on every refresh of an open board, and a year of
+   * journal read every 30 seconds to find each role's last line is the cost of the board, not of
+   * the answer. A role silent for longer than the window says so ("no journal entry in N days"). */
+  const journalDays = Math.max(days, 30);
+  const journal = journalSinceMs(nowMs - journalDays * 86400000);   // newest first
   const lastBy = new Map();
   for (const e of journal) if (e.agent && !lastBy.has(e.agent)) lastBy.set(e.agent, e);
   const presence = new Map(runPresence({}).agents.map(p => [p.agent, p]));
@@ -84,7 +88,7 @@ export function runBoard(a = {}) {
     else if (p.state) {
       state = { kind: p.state, minutes: ageMin(p.state === 'turn' ? (p.turn_started || p.state_since) : p.state_since) };
       for (const [k, v] of [['turn', p.turn], ['empty', p.empty_count], ['silent', p.silent_count], ['reason', p.exit_reason]]) if (v != null) state[k] = v;
-    } else state = { kind: 'alive' };
+    } else state = { kind: 'alive', minutes: ageMin(p.last_seen) };   // no state fields: how fresh is all there is
     const last = lastBy.get(r.role);
     const handoff = card ? sectionBody(card, 'Handoff ' + r.role) : null;
     const row = {
@@ -171,7 +175,7 @@ export function runBoard(a = {}) {
     ? [...new Set(tasks.filter(t => t.status === 'open' && t.assignee && !known(t.assignee) && t.owner_kind !== 'human').map(t => t.assignee))].sort()
     : [];
   return {
-    days, registry: { roles: roles.size, heads: heads.length, fleet },
+    days, journalDays, all: !!a.all, registry: { roles: roles.size, heads: heads.length, fleet },
     tracks, allTracks: [...new Set([...heads.map(h => h.project)])].sort(),
     waiting, unknownAssignees, generated: now(),
   };

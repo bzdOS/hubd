@@ -118,6 +118,7 @@ intake for agents, over the network.
 | `HUBD_SUBSCRIBER` | — | stdio only: the reader name for broadcast-role cursors (else `HUBD_SESSION`, else `HUBD_AGENT`, else the client process) |
 | `HUBD_TASK_ID_PREFIX` | the node name | prefix of new task ids (`<prefix>-<n>`), when the hostname should not appear in them |
 | `HUBD_SENSE_DIR` | `<hub>/.sense` | where `hub sense` keeps each head's sensor state (node-local) |
+| `HUBD_SENSE_ESCALATIONS` | `<sense dir>/escalations.log` | the file `hub sense` appends escalations to (`<epoch>\t<head>\t<text>`); point it at your monitor's file |
 | `HUBD_HTTP_HOST` | `127.0.0.1` | bind address (keep it localhost behind a TLS proxy) |
 | `HUBD_HTTP_PORT` | `8787` | port (or pass `--http <port>`) |
 | `HUBD_RATE_LIMIT` | `120` | max POSTs per minute per client IP (over the limit → 429) |

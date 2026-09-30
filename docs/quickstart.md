@@ -203,9 +203,11 @@ hub queue gc --apply      # move them to queues/archive/ (moved, never deleted)
 An owner's own queue is never collected: a human reads it as a file, so having
 no cursor is normal there. Once roles are declared, `hub gc` lists the rest of what
 piles up — queues of names that are no live role, dead waiter markers, stale
-presence — and `hub gc --apply --by <you>` archives it in one commit. Never `rm` a
-queue in a mesh hub: mesh-sync refuses a deleted log (it would delete that history
-on every peer) and accepts only a move into `queues/archive/` with the bytes intact.
+presence, this node's own litter — and touches nothing; `hub gc --apply --by <you>`
+archives it in one commit. Each node archives its own queue files (and ones no node
+writes any more), never another live node's. Never `rm` a queue in a mesh hub:
+mesh-sync refuses a deleted log (it would delete that history on every peer) and
+accepts only a move into `queues/archive/` with the bytes intact.
 
 A role can take its tasks, not only its messages, from the queue:
 
