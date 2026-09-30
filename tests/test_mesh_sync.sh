@@ -113,8 +113,25 @@ rm -f "$TMP/a/journal.seed.jsonl"
 HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out6" 2>&1; rc=$?
 ok "$([ $rc -eq 4 ] && echo 1 || echo 0)" "deleted log: removing an append-only log refuses with 4 (got $rc)"
 ok "$(grep -q 'journal.seed.jsonl' "$TMP/out6" && echo 1 || echo 0)" "deleted log: the refusal names the file"
-ok "$(grep -q 'queue gc --apply' "$TMP/out6" && echo 1 || echo 0)" "deleted log: and points at the operation that retires a queue properly"
+ok "$(grep -q 'gc --apply' "$TMP/out6" && echo 1 || echo 0)" "deleted log: and points at the operation that retires a queue properly"
 git -C "$TMP/a" checkout -q -- . 2>/dev/null
+
+# ── the one accepted deletion: a move into an archive, bytes intact ───────────
+# hub gc (and hub queue gc) retire a queue by moving it to queues/archive/. The guard used to
+# refuse exactly the operation its own message recommended.
+mkdir -p "$TMP/a/queues"
+printf '\n## 2026-01-01 00:00 · from x\nold order\n' > "$TMP/a/queues/dead.n.queue.md"
+git -C "$TMP/a" add -A && git -C "$TMP/a" -c user.name=t -c user.email=t@t commit -q -m q
+mkdir -p "$TMP/a/queues/archive" && mv "$TMP/a/queues/dead.n.queue.md" "$TMP/a/queues/archive/"
+HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out9" 2>&1; rc=$?
+ok "$([ $rc -ne 4 ] && echo 1 || echo 0)" "archive: a queue moved to queues/archive/ with its bytes intact is accepted (got $rc)"
+ok "$([ -z "$(git -C "$TMP/a" status --porcelain)" ] && git -C "$TMP/a" cat-file -e HEAD:queues/archive/dead.n.queue.md 2>/dev/null && echo 1 || echo 0)" "archive: and the move is committed as a move"
+printf '\n## 2026-01-01 00:00 · from x\nanother\n' > "$TMP/a/queues/dead2.n.queue.md"
+git -C "$TMP/a" add -A && git -C "$TMP/a" -c user.name=t -c user.email=t@t commit -q -m q2
+mv "$TMP/a/queues/dead2.n.queue.md" "$TMP/a/queues/archive/" && printf 'edited\n' >> "$TMP/a/queues/archive/dead2.n.queue.md"
+HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out10" 2>&1; rc=$?
+ok "$([ $rc -eq 4 ] && echo 1 || echo 0)" "archive: a moved copy whose bytes changed is still a deletion and refused (got $rc)"
+rm -f "$TMP/a/queues/archive/dead2.n.queue.md"; git -C "$TMP/a" checkout -q -- . 2>/dev/null
 
 # ── a shared hub stays group-writable after a pull ────────────────────────────
 # The fleet case: this script runs as root, the roles run as another user in the group. Anything
