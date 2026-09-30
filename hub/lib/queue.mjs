@@ -24,7 +24,6 @@
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { HUB, JOURNAL_NODE, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
   loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea } from './core.mjs';
@@ -253,7 +252,7 @@ const BLOCK_HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm;
 const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[m.length - 1] : null; };
 
 // Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <N>`
-const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/m;
+const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
 
 // ── Delivery acknowledgement ──
 // When a block is delivered (cursor advanced past it), its id is recorded as "delivered".
@@ -361,8 +360,7 @@ function drainFile(qdir, stateDir, f) {
       writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
       // Record delivery ack for any blocks with ids in the chunk
       try {
-        const re = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
-        for (const m of (chunk || '').matchAll(re)) {
+        for (const m of (chunk || '').matchAll(BLOCK_ID_RE)) {
           const id = parseInt(m[1], 10);
           if (id) writeAck(acksPath(path.join(qdir, f)), id, 'delivered');
         }
@@ -472,7 +470,6 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
  *
  * Messages keep working exactly as before and ride along: the newest blocks that name a task are
  * attached to it, so a clarification is read with the work it clarifies. */
-export { taskClaimArea };
 
 export function roleWork(role, { root, messages = 5 } = {}) {
   const tasks = loadTasks().tasks;
@@ -792,11 +789,12 @@ export function peekQueueDepth(role, { root } = {}) {
  *  Writes "acked" to the blocks ack file, or "delivered" if not yet recorded.
  *  Idempotent: acking an already-acked block is a no-op.
  *  @returns {{ ok: true, id: number, status: string }} */
-export function queueAck(role, blockId, { root } = {}) {
+export function queueAck(role, id, { root } = {}) {
+  // the ack log compares ids as numbers, and a "12" from a client would never match its own ack
+  const blockId = Number(id);
+  if (!Number.isInteger(blockId) || blockId < 1) throw new Error(`block id must be a positive integer, got ${JSON.stringify(id)}`);
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
-  const stateDir = path.join(r, '.qstate');
-  fs.mkdirSync(stateDir, { recursive: true });
   const fileRe = roleFileRe(role);
   let files;
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { files = []; }
@@ -813,7 +811,7 @@ export function queueAck(role, blockId, { root } = {}) {
     const full = path.join(qdir, f);
     try {
       const text = fs.readFileSync(full, 'utf8');
-      if (text.includes(`· id ${blockId}`)) {
+      if (new RegExp(`· id ${blockId}(?![0-9])`).test(text)) {   // id 1 is not id 12
         const af = acksPath(full);
         const acks = readAcks(af);
         if (!acks.some(a => a.id === blockId)) writeAck(af, blockId, 'delivered');
@@ -836,14 +834,14 @@ export function getUnacked(role, { root } = {}) {
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { blocks: [], total: 0 }; }
   const blocks = [];
   for (const f of files) {
-    const full = path.join(qdir, f);
-    const af = acksPath(full);
-    const acks = readAcks(af);
-    for (const a of acks) {
-      if (a.status === 'delivered') {
-        blocks.push({ id: a.id, status: a.status, ts: a.ts, roleFile: f });
-      }
+    // The ack log is append-only, so an acked block still has its "delivered" line: an id is
+    // unacked only while no "acked" line follows it, and a redelivery does not count it twice.
+    const pending = new Map();
+    for (const a of readAcks(acksPath(path.join(qdir, f)))) {
+      if (a.status === 'acked') pending.set(a.id, null);
+      else if (a.status === 'delivered' && !pending.has(a.id)) pending.set(a.id, a);
     }
+    for (const a of pending.values()) if (a) blocks.push({ id: a.id, status: a.status, ts: a.ts, roleFile: f });
   }
   return { blocks, total: blocks.length };
 }

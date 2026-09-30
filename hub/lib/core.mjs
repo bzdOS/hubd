@@ -3195,7 +3195,7 @@ export function runCardsMerge(a = {}) {
   }
 
   if (!a.apply) {
-    return { ok: true, from, into, sections, aliasExisted: !!canonProject(from), applied: false };
+    return { ok: true, from, into, sections, aliasExisted: !!projectAliases()[from], applied: false };
   }
 
   // Create alias

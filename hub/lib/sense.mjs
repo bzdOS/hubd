@@ -39,8 +39,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
-  HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, roleRegistry, runPresence,
-  runReport, atomicWrite, withLock, taskTitle, parseVerdict, shareMode,
+  HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, runPresence,
+  runReport, atomicWrite, withLock, parseVerdict, shareMode,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
 
@@ -478,4 +478,3 @@ export function runSenseBrief(head, cwd = process.cwd()) {
     (conf.plan ? ` The plan toward the goal is ${conf.plan} in ${conf.base}: \`git -C ${conf.review} show origin/${conf.base}:${conf.plan}\`.` : '');
 }
 
-export { taskTitle, roleRegistry };
