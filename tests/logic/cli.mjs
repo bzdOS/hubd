@@ -1,8 +1,8 @@
-// cli.mjs — the CLI: init outside a checkout, JSON through a pipe, a wrapper that cannot load, flags and help
+// cli.mjs — the CLI: init, help, the argument parser, JSON through a pipe, a wrapper that cannot load
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { REPO, CLI, ok, mktmp, run, done } from './_h.mjs';
+import { REPO, CLI, ok, mktmp, run, cli, done } from './_h.mjs';
 
 // ── init does not scaffold a team into somebody's source checkout ──
 // Found by healthchecking 0.9.0: `hub init` with no argument took the cwd, and run from a code
@@ -85,5 +85,81 @@ const HL = mktmp();
   const sub = run('cards', { HUBD_DIR: HL });
   ok(sub.code === 1 && /no such subcommand/.test(sub.out) && /cards compact/.test(sub.out), 'cli: a command without its subcommand says so and lists them');
 }
+
+// ── init scaffolds a team folder, and a second run changes nothing ──
+{
+  const IN = mktmp(), team = path.join(IN, 'team'); fs.mkdirSync(team);
+  const i1 = cli(['init', team]);
+  ok(i1.code === 0 && /created/i.test(i1.out), 'init: exit 0, and it says what it created');
+  ok(['AGENTS.md', 'INBOX.md', 'queues/README.md', '.gitignore'].every(f => fs.existsSync(path.join(team, f))),
+    'init: AGENTS.md, INBOX.md, queues/README.md and .gitignore are there');
+  // the template describes the CURRENT queue model: a fresh team root otherwise gets a manual contradicting HUBD.md
+  ok(/subscriber-roles\.json/.test(fs.readFileSync(path.join(team, 'queues', 'README.md'), 'utf8')), 'init: queues/README.md documents fan-out (subscriber-roles.json)');
+  const kept = ['AGENTS.md', 'INBOX.md', 'queues/README.md'], before = kept.map(f => fs.readFileSync(path.join(team, f), 'utf8'));
+  const i2 = cli(['init', team]);
+  ok(i2.code === 0 && /exists/i.test(i2.out), 'init again: exit 0, and it says the files exist');
+  ok(kept.every((f, k) => fs.readFileSync(path.join(team, f), 'utf8') === before[k]), 'init again: AGENTS.md, INBOX.md and queues/README.md are byte-for-byte what they were');
+  ok(cli(['init', path.join(IN, 'nope')]).code !== 0, 'init: a folder that does not exist is an error');
+}
+
+// ── an unknown command is an error; no arguments is the help ──
+{
+  const u = cli(['definitely-not-a-cmd']);
+  ok(u.code !== 0 && /unknown command/i.test(u.out), 'cli: an unknown command is an error that says so');
+  const h = cli([]);
+  ok(h.code === 0 && /\binit\b/.test(h.out) && /\bdoctor\b/.test(h.out), 'cli: no arguments prints the help, exit 0');
+}
+
+// ── the argument parser: a flag is never taken for the text, whatever the order ──
+{
+  const P = mktmp(), env = { HUBD_DIR: P, HUBD_TEAM_DIR: P };
+  // `hub task add -p x --by y` used to file a task whose text was "-p", forever, in an append-only log
+  const t = cli(['task', 'add', '-p', 'smokeproj', '--by', 'smoke'], { env });
+  ok(t.code !== 0 && /Text required/.test(t.out), 'task add: a flag where the text belongs is refused with the usage');
+  ok(!fs.readdirSync(P).filter(f => /^tasks\..*\.events\.jsonl$/.test(f)).some(f => /"text":"-p"/.test(fs.readFileSync(path.join(P, f), 'utf8'))),
+    'task add: and nothing is written');
+
+  // bodies that were literally "--from", "--text", "--agent": the parser took args[3] blindly
+  const qdir = path.join(P, 'queues');
+  const blocks = () => (fs.existsSync(qdir) ? fs.readdirSync(qdir) : []).filter(f => /^qs\..*\.queue\.md$/.test(f))
+    .map(f => fs.readFileSync(path.join(qdir, f), 'utf8')).join('').split(/^## \d{4}-\d{2}-\d{2} .*$/m).slice(1);
+  const last = () => { const b = blocks(); return (b[b.length - 1] || '').replace(/^\n/, ''); };
+  const send = (argv, input) => cli(['queue', 'send', 'qs', ...argv], { env, input });
+  ok(send(['line one\nline two', '--from', 'smoke']).code === 0 && /^line one\nline two$/m.test(last()), 'queue send: a multiline positional body lands whole');
+  ok(send(['--from', 'smoke', 'flag before text']).code === 0 && /^flag before text$/m.test(last()), 'queue send: --from before the text, and the body is the text, not the word --from');
+  ok(send(['--from', 'smoke', '--text', '- starts with a dash']).code === 0 && /^- starts with a dash$/m.test(last()), 'queue send: --text carries a body that starts with -');
+  ok(send(['--agent', 'smoke', 'agent alias']).code === 0 && /^agent alias$/m.test(last()), 'queue send: --agent names the sender and the body is intact');
+  const n = blocks().length;
+  const r1 = send(['-oops', '--from', 'smoke']), r2 = send(['text', '--nope', 'x', '--from', 'smoke']), r3 = send(['--from', 'smoke']);
+  ok(r1.code !== 0 && /unknown flag -oops/.test(r1.out), 'queue send: a bare body starting with - is refused with an explicit error');
+  ok(r2.code !== 0 && /unknown flag --nope/.test(r2.out), 'queue send: an unknown flag is an error, not a swallowed body');
+  ok(r3.code !== 0 && blocks().length === n, 'queue send: a missing body is an error, and none of the refused sends wrote anything');
+  const big = Array.from({ length: 120 }, (_, i) => `line ${i}: "quotes" $dollars \`ticks\` \\backslash %percent -- \u00fcn\u00efc\u00f8d\u00e9`).join('\n') + '\n';
+  ok(Buffer.byteLength(big) > 8000 && send(['-', '--from', 'smoke'], big).code === 0 && last().replace(/\n+$/, '\n') === big,
+    'queue send: an 8 KB stdin body with quotes, dollars, ticks and backslashes arrives byte-for-byte');
+
+  const c1 = cli(['claim', '--agent', 'smoke', '-t', '5', 'smokeproj', 'src/**'], { env });
+  ok(c1.code === 0 && /^Lock: /m.test(c1.out), 'claim: flags before the positionals still claim');
+  ok(cli(['claim', 'check', 'src/a.ts', '-p', 'smokeproj', '--agent', 'other'], { env }).code === 1, "claim: the area claimed was 'src/**', not '--agent' (check finds it)");
+  const c3 = cli(['claim', 'smokeproj', 'x', '--bogus', '1', '--agent', 'smoke'], { env });
+  ok(c3.code !== 0 && /unknown flag --bogus/.test(c3.out), 'claim: an unknown flag is refused, not swallowed as the area');
+  const tid = (/^Task #(\S+) added/m.exec(cli(['task', 'add', 'close me', '-p', 'smokeproj', '--by', 'smoke'], { env }).out) || [])[1];
+  const td = cli(['task', 'done', '--by', 'smoke', String(tid)], { env });
+  ok(tid && td.code === 0 && /closed/.test(td.out), 'task done: --by before the id closes the id, not the word --by');
+}
+
+// ── presence and the log have a machine-readable form ──
+// Fleet tooling regex-parsed the one-line renders, and for presence read presence/*.json behind the hub's back.
+{
+  const J = mktmp(), env = { HUBD_DIR: J, HUBD_TEAM_DIR: J };
+  cli(['heartbeat', 'json-probe', '--status', 'a status longer than the eleven columns of the table'], { env });
+  let pj = null; try { pj = JSON.parse(cli(['presence', '--json'], { env }).stdout); } catch {}
+  const a = pj && pj.agents.find(x => x.agent === 'json-probe');
+  ok(a && a.status.includes('eleven columns') && 'alive' in a && Array.isArray(pj.coverage), 'presence --json: the full status, alive and coverage, the object hub_presence returns');
+  cli(['report', '-p', 'jsonproj', '--agent', 'smoke', '-k', 'note', '-m', 'json log entry'], { env });
+  let lj = null; try { lj = JSON.parse(cli(['log', 'jsonproj', '-n', '5', '--json'], { env }).stdout); } catch {}
+  ok(Array.isArray(lj) && lj.some(e => e.agent === 'smoke' && e.project === 'jsonproj' && e.text.includes('json log entry') && e.ts), 'log --json: entries with ts, project, agent and text');
+}
+
 
 done();

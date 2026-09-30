@@ -1,8 +1,8 @@
-// doctor.mjs — doctor: rewrites, the rules source, a malformed line, the node-local files
+// doctor.mjs — doctor: rewrites, the rules source, locks and cursors, which dir is the hub, freeze, a malformed line
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { ok, mktmp, run, core, doc, queueLib, done } from './_h.mjs';
+import { REPO, ok, mktmp, run, cli, core, doc, queueLib, done } from './_h.mjs';
 
 // ── CLI: doctor catches a LARGE destructive rewrite (numstat, no maxBuffer blind spot) ──
 const T2 = mktmp();
@@ -235,6 +235,52 @@ const GI = mktmp();
   const fr2 = run('freeze "again" --by dev-t', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
   ok(/WARNING: \.mesh-freeze is TRACKED/.test(fr2.out), 'freeze: says so when its marker would travel with a hand-made commit');
   run('unfreeze', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+}
+
+// ── doctor on a fresh team is ok; a stale lock and a cursor past the end are warnings ──
+{
+  const D = mktmp(), hub = path.join(D, 'hub'), team = path.join(D, 'team'); fs.mkdirSync(team);
+  const env = { HUBD_DIR: hub, HUBD_TEAM_DIR: team, HUBD_QUEUE_DIR: team };
+  const dr = () => cli(['doctor'], { env, cwd: team });
+  cli(['init', team], { env });
+  const d0 = dr(), tail0 = d0.out.trim().split('\n').pop();
+  ok(d0.code === 0 && /doctor:/i.test(tail0) && /ok/i.test(tail0), `doctor: a fresh team is ok, exit 0 (last line: ${tail0})`);
+  fs.mkdirSync(hub, { recursive: true });
+  const lock = path.join(hub, 'tasks.json.lock'), past = Date.now() / 1000 - 120;
+  fs.writeFileSync(lock, ''); fs.utimesSync(lock, past, past);
+  const d1 = dr();
+  ok(d1.code !== 0 && /stale/i.test(d1.out), 'doctor: a two-minute-old task lock is a stale-lock warning, exit non-zero');
+  fs.rmSync(lock);
+  // the cursor is keyed by the FULL file name, the path the consumer writes and doctor must read
+  fs.mkdirSync(path.join(team, '.qstate'), { recursive: true }); fs.mkdirSync(path.join(team, 'queues'), { recursive: true });
+  fs.writeFileSync(path.join(team, 'queues', 'smoketest.queue.md'), '');
+  fs.writeFileSync(path.join(team, '.qstate', 'smoketest.queue.md.offset'), '999999');
+  const d2 = dr();
+  ok(d2.code !== 0 && /offset beyond file size/i.test(d2.out), 'doctor: a cursor past the end of its file is the offset warning, exit non-zero');
+}
+
+// ── HUBD_TEAM_DIR alone names the whole hub, not only the queues ──
+// A fleet that passes one directory to every role expects presence, journal and tasks there too.
+{
+  const ONLY = mktmp(), env = { HUBD_DIR: undefined, HUBD_QUEUE_DIR: undefined, HUBD_TEAM_DIR: ONLY };
+  ok(cli(['doctor'], { env, cwd: ONLY }).out.includes(`path:     ${ONLY}  (via env HUBD_TEAM_DIR)`), 'team dir: HUBD_TEAM_DIR without HUBD_DIR is the hub base, and doctor says so');
+  cli(['task', 'add', 'one dir', '-p', 'onlyproj', '--by', 'smoke'], { env, cwd: ONLY });
+  ok(fs.readdirSync(ONLY).some(f => /^tasks\..*\.events\.jsonl$/.test(f)), 'team dir: a task filed under HUBD_TEAM_DIR lands in that directory');
+  const H = mktmp();
+  ok(cli(['doctor'], { env: { HUBD_DIR: H, HUBD_TEAM_DIR: ONLY } }).out.includes(`path:     ${H}  (via env HUBD_DIR)`), 'team dir: HUBD_DIR still wins when both are set');
+}
+
+// ── freeze is the stop-cock, and a forgotten one is not silent ──
+{
+  const F = mktmp(), env = { HUBD_DIR: F, HUBD_TEAM_DIR: F };
+  const f0 = cli(['freeze'], { env });
+  ok(f0.code !== 0 && /say why/.test(f0.out), 'freeze: refused without a reason');
+  const f1 = cli(['freeze', 'purge duplicate blocks', '--by', 'dev-t'], { env });
+  ok(f1.code === 0 && fs.existsSync(path.join(F, '.mesh-freeze')) && /mesh: FROZEN/.test(cli(['doctor'], { env }).out),
+    'freeze: writes the marker mesh-sync looks for, and doctor states it');
+  ok(/FROZEN/.test(execSync(`sh ${REPO}/scripts/mesh-sync.sh 2>&1`, { env: { ...process.env, HUBD_DIR: F }, encoding: 'utf8' })), 'freeze: mesh-sync skips the run and says why');
+  const f2 = cli(['unfreeze'], { env });
+  ok(f2.code === 0 && !fs.existsSync(path.join(F, '.mesh-freeze')) && /Unfrozen/.test(f2.out), 'unfreeze: removes it and says the mesh runs again');
 }
 
 done();

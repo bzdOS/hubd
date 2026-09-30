@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -22,6 +22,15 @@ process.on('exit', () => { for (const d of temps) fs.rmSync(d, { recursive: true
 export function run(args, env) {
   try { return { code: 0, out: execSync(`${CLI} ${args}`, { env: { ...process.env, ...env }, encoding: 'utf8' }) }; }
   catch (e) { return { code: e.status ?? 1, out: (e.stdout || '') + (e.stderr || '') }; }
+}
+
+// the CLI with an argument list and no shell in between, so a body with quotes, dollars or a
+// line break reaches it as the caller's argv holds it; an env value of undefined unsets it
+export function cli(argv, { env = {}, cwd, input } = {}) {
+  const e = { ...process.env, ...env };
+  for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
+  const r = spawnSync(process.execPath, [path.join(REPO, 'hub/cli.mjs'), ...argv], { env: e, cwd, input, encoding: 'utf8' });
+  return { code: r.status ?? 1, out: (r.stdout || '') + (r.stderr || ''), stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 // a port nobody holds right now: the files run side by side, so a fixed number can be taken
