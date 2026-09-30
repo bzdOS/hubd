@@ -220,7 +220,7 @@ export function atomicWrite(file, data) {
  * user happens to write the card, so on a shared hub it needs the same group bit as every other
  * append: the first writer used to leave it rw-r--r--, and the next user's card write then failed
  * on the history step, before the card itself was saved. One helper, so no caller forgets. */
-function appendHistory(name, text) {
+export function appendHistory(name, text) {
   const f = path.join(HISTORY, name + '.md');
   fs.mkdirSync(HISTORY, { recursive: true });
   fs.appendFileSync(f, text);
@@ -409,153 +409,6 @@ export function readCard(name) {
 
 export const CONFLICT_RE = /^<<<<<<< |^=======$|^>>>>>>> /m;
 
-/* Files left holding git conflict markers.
- *
- * Every OTHER shared file in a hub is per-node and append-only, so it cannot conflict. Project
- * cards can: they are one mutable file that any node rewrites, and two nodes appending to the same
- * section is a same-hunk change. The mesh script aborts on conflict rather than leaving markers,
- * deliberately — but an abort is not the only way a merge ends, and a card that keeps its markers
- * is worse than one that fails to merge. `<<<<<<<` in a card is not a broken file to a reader: it
- * is CONTENT. readCard returns it, digestOf slices it, hub_context hands it to an agent, and the
- * agent reads two contradictory versions of the project's state as though both were true.
- *
- * QUEUES were missing from this check for three releases, and they are the worse case. A card is
- * only READ; a queue is DELIVERED. 83 marker lines turned out to be committed as content across
- * eight queue files on one mesh — 57 in a single file — and every one of them had been handed to
- * a worker as the text of a message. The markers got there the ordinary way: an earlier merge was
- * resolved by hand, incompletely, and committed, after which each new merge nested markers inside
- * the leftovers (`<<<<<<<` with no `=======`, two `=======` in a row).
- *
- * Reported with the kind, because the remedy differs: `hub card resolve` unions list hunks and
- * refuses prose, `hub queue resolve` unions blocks and appends. Telling a reader to run the wrong
- * one is the same class of mistake as the "upgrade that node" line 0.9.7 removed. */
-/* queueRoot is passed in rather than resolved here: the team root can differ from the hub base
- * (HUBD_TEAM_DIR), and the resolver for it lives in queue.mjs, which imports this file. Taking it
- * as an argument keeps the dependency pointing one way. */
-export function conflictedFiles({ queueRoot } = {}) {
-  const out = [];
-  const scan = (dir, kind, ext) => {
-    let names = [];
-    try { names = fs.readdirSync(dir).filter(f => f.endsWith(ext)); } catch { return; }
-    for (const f of names) {
-      try {
-        if (CONFLICT_RE.test(fs.readFileSync(path.join(dir, f), 'utf8'))) out.push({ file: path.join(dir, f), kind });
-      } catch {}
-    }
-  };
-  scan(PROJ, 'card', '.md');
-  scan(RESOURCES, 'resource', '.md');
-  if (queueRoot) scan(path.join(queueRoot, 'queues'), 'queue', '.queue.md');
-  return out.sort((a, b) => (a.file < b.file ? -1 : 1));
-}
-
-/* Resolve a conflicted QUEUE file: ours, then whatever blocks only theirs has, appended at the end.
- *
- * Queue files are append-only by contract but have no union merge (only journal.*.jsonl and
- * tasks.*.events.jsonl do), so two sides that both appended are a real conflict. It happens: one
- * node came back after two days holding 49 local commits, with five queue files conflicted at
- * once, and every block on both sides was a message somebody really sent.
- *
- * Appending theirs at the END rather than merging by timestamp is the whole point, and it is a
- * better trade than the ts-ordered union this was first designed as. Cursors are byte offsets:
- * insert a block anywhere before a cursor and that cursor silently points at the wrong place, so
- * a ts-ordered merge has to recompute every cursor in the hub, including the ones on other nodes
- * that this node cannot see. Appending inserts nothing before anything, so every existing cursor
- * stays exactly as valid as it was. The cost is that the file is no longer in strict time order —
- * which costs nothing, because a reader walks forward from its cursor and every block carries its
- * own timestamp.
- *
- * Deduplicated on the whole block, not the header: the same minute and sender can carry two
- * different messages, and dropping one of those would be losing work to save a line. */
-export function resolveQueueConflicts(text) {
-  const lines = String(text).split('\n');
-  const out = [];
-  const theirs = [];
-  let hunks = 0, malformed = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^<<<<<<< /.test(lines[i])) { out.push(lines[i]); continue; }
-    let mid = -1, end = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (mid === -1 && lines[j] === '=======') mid = j;
-      else if (/^>>>>>>> /.test(lines[j])) { end = j; break; }
-    }
-    if (mid === -1 || end === -1) { malformed++; out.push(lines[i]); continue; }
-    out.push(...lines.slice(i + 1, mid));
-    theirs.push(...lines.slice(mid + 1, end));
-    hunks++;
-    i = end;
-  }
-  if (!hunks) return { text: String(text), hunks: 0, carried: 0, malformed };
-  const blocksOf = (arr) => {
-    const src = arr.join('\n');
-    const idx = [];
-    const re = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm;
-    for (let m; (m = re.exec(src));) idx.push(m.index);
-    return idx.map((s, k) => src.slice(s, k + 1 < idx.length ? idx[k + 1] : src.length).replace(/\s+$/, ''));
-  };
-  const have = new Set(blocksOf(out));
-  const carried = blocksOf(theirs).filter(b => b && !have.has(b));
-  const body = out.join('\n').replace(/\s+$/, '');
-  return {
-    text: (carried.length ? body + '\n\n' + carried.join('\n\n') : body) + '\n',
-    hunks, carried: carried.length, malformed,
-  };
-}
-
-/* Resolve a conflicted card the way a human resolving one actually reasons.
- *
- * A card's accumulating sections are bullet lists — Facts, Next step, decisions — and two nodes
- * appending to one of them have not disagreed about anything. Both bullets are true; the conflict
- * is an artefact of them landing in the same hunk. Union is the correct resolution, and it is what
- * was done by hand three times in one hour before this existed.
- *
- * Prose is the opposite. A one-line digest, a heading, a paragraph: if both sides rewrote it, one
- * of them meant to replace the other, and picking for them would be inventing a decision nobody
- * made. Those hunks are left exactly as they are and named, so the file still fails the check and
- * a person still has to look.
- *
- * Identical bullets on both sides collapse to one. That is the only lossy step, and it is the same
- * reasoning as the log dedup: two byte-identical lines are indistinguishable to every reader. */
-export function resolveCardConflicts(text) {
-  const lines = String(text).split('\n');
-  const out = [];
-  let resolved = 0;
-  const unresolved = [];
-  const isBullet = (l) => /^\s*[-*+] \S/.test(l) || /^\s*$/.test(l);
-  let heading = '(top of file)';
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (/^## /.test(l)) heading = l.replace(/^##\s*/, '').trim();
-    if (!/^<<<<<<< /.test(l)) { out.push(l); continue; }
-    // Collect ours / theirs. A malformed hunk (no separator or no terminator) is left untouched:
-    // guessing at the shape of a half-written conflict is how a resolver corrupts a file.
-    let mid = -1, end = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (mid === -1 && lines[j] === '=======') mid = j;
-      else if (/^>>>>>>> /.test(lines[j])) { end = j; break; }
-    }
-    if (mid === -1 || end === -1) { out.push(l); continue; }
-    const ours = lines.slice(i + 1, mid);
-    const theirs = lines.slice(mid + 1, end);
-    if (ours.every(isBullet) && theirs.every(isBullet) && (ours.some(x => x.trim()) || theirs.some(x => x.trim()))) {
-      const seen = new Set(ours.map(x => x.trim()).filter(Boolean));
-      out.push(...ours);
-      for (const t of theirs) {
-        const k = t.trim();
-        if (!k || seen.has(k)) continue;
-        seen.add(k);
-        out.push(t);
-      }
-      resolved++;
-    } else {
-      unresolved.push({ section: heading, ours: ours.length, theirs: theirs.length });
-      out.push(...lines.slice(i, end + 1));
-    }
-    i = end;
-  }
-  return { text: out.join('\n'), resolved, unresolved };
-}
-
 /* The "## Digest" body ends at the NEXT "## " heading — never at a literal "## Facts".
  * Cutting on that one name only worked for cards whose following section happens to be
  * Facts. On a hub that localises its sections (HUB/sections.json) or on any card_set card
@@ -644,102 +497,12 @@ function* readLogEntries(files, nodeOf) {
 
 /* journal.<node>.jsonl, and the month archives rotated out of it as
  * journal.<node>-<YYYY-MM>[.<n>].jsonl — all one node. */
-const journalNodeOf = (base) => {
+export const journalNodeOf = (base) => {
   const m = base.match(/^journal\.(.+)\.jsonl$/);
   if (!m) return '';                                    // legacy single-file journal.jsonl
   return m[1].replace(/-\d{4}-\d{2}(\.\d+)?$/, '');
 };
-const taskEventNodeOf = (base) => (base.match(/^tasks\.(.+)\.events\.jsonl$/) || [])[1] || 'node';
-
-/** Raw vs distinct line counts per node log family — exactly what readLogEntries drops, so the
- *  dedup is visible instead of merely applied. Empty when the logs are clean. */
-export function logDuplication() {
-  const groups = [];
-  for (const [kind, files, nodeOf] of [['tasks', taskEventFiles(), taskEventNodeOf],
-                                       ['journal', journalFiles(), journalNodeOf]]) {
-    const byNode = new Map();
-    for (const f of files) {
-      const node = nodeOf(path.basename(f));
-      let g = byNode.get(node);
-      if (!g) byNode.set(node, g = { kind, node, files: [], lines: 0, seen: new Set() });
-      g.files.push(path.basename(f));
-      try {
-        for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-          const line = l.trim();
-          if (!line) continue;
-          g.lines++; g.seen.add(line);
-        }
-      } catch {}
-    }
-    for (const g of byNode.values()) {
-      if (g.lines <= g.seen.size) continue;
-      groups.push({ kind: g.kind, node: g.node, files: g.files, lines: g.lines, distinct: g.seen.size, duplicate: g.lines - g.seen.size });
-    }
-  }
-  return groups.sort((a, b) => b.duplicate - a.duplicate);
-}
-
-/** What `hub doctor` says about the journal: raw lines on disk vs entries a reader actually sees.
- *  The two diverge when a mesh merge duplicated lines, so reporting only one of them would hide
- *  either the bloat or the correction. Counts distinct-per-node, exactly as readLogEntries does. */
-/* `malformedRecent` exists because of a rule this tool states about itself and then broke: a
- * warning that can never be cleared is one a reader learns to skip, which costs more than the
- * warning is worth. Two malformed lines — a stray plain-text line and a write torn mid-key — sat
- * in one node's journal, and there is no legitimate repair: editing them would rewrite an
- * append-only file and trip the sync guard on every peer. So doctor was set to nag about them
- * forever, in the same release whose own comment forbids exactly that.
- *
- * The distinction that matters is not "is it malformed" but "is it STILL HAPPENING". A torn write
- * at the tail of a live log means a writer is failing now and someone should look. The same line
- * with a hundred good entries appended after it is history: the writer plainly recovered, readers
- * already drop the line, and nothing can be done. Recent ones warn; old ones are stated and left.
- *
- * The measure is HOW MANY GOOD ENTRIES FOLLOW IT, not how far back it sits in the file. A line
- * count cannot tell the difference: the first version of this counted a fixed window of trailing
- * lines, which called two June-era lines at the head of a 58-line log "happening NOW" simply
- * because the whole file fitted inside the window. Entries-after is scale-free. */
-export const MALFORMED_SETTLED_AFTER = 20;
-
-export function journalCounts() {
-  const files = journalFiles();
-  const seen = new Map();
-  let lines = 0, entries = 0, malformed = 0, malformedRecent = 0;
-  for (const f of files) {
-    const base = path.basename(f);
-    const node = journalNodeOf(base);
-    // A month-archive is closed history — journalAppend only ever renames INTO one.
-    const archived = /-\d{4}-\d{2}(\.\d+)?\.jsonl$/.test(base);
-    let dup = seen.get(node);
-    if (!dup) seen.set(node, dup = new Set());
-    try {
-      const all = fs.readFileSync(f, 'utf8').split('\n');
-      // Good entries following each position, so "did the writer recover after this" is answerable
-      // without a second pass per malformed line.
-      const goodAfter = new Array(all.length + 1).fill(0);
-      for (let i = all.length - 1; i >= 0; i--) {
-        let ok = false;
-        const t = all[i].trim();
-        if (t) { try { JSON.parse(t); ok = true; } catch {} }
-        goodAfter[i] = goodAfter[i + 1] + (ok ? 1 : 0);
-      }
-      for (let i = 0; i < all.length; i++) {
-        const line = all[i].trim();
-        if (!line) continue;
-        lines++;
-        if (dup.has(line)) continue;
-        dup.add(line);
-        try { JSON.parse(line); entries++; }
-        catch {
-          malformed++;
-          if (!archived && goodAfter[i + 1] < MALFORMED_SETTLED_AFTER) malformedRecent++;
-        }
-      }
-    } catch {}
-  }
-  let distinct = 0;
-  for (const s of seen.values()) distinct += s.size;
-  return { files: files.length, lines, entries, malformed, malformedRecent, duplicate: lines - distinct };
-}
+export const taskEventNodeOf = (base) => (base.match(/^tasks\.(.+)\.events\.jsonl$/) || [])[1] || 'node';
 
 // Numeric compare, not string: '0.9.10' is NEWER than '0.9.2' and sorts before it as text.
 export function cmpVersion(a, b) {
@@ -847,142 +610,6 @@ export function writerVersions() {
     });
   }
   return out.sort((a, b) => (a.node < b.node ? -1 : a.node > b.node ? 1 : 0));
-}
-
-/** Nodes whose newest stamped journal entry came from a hubd other than the one installed here.
- *  `ahead` matters more than `behind`: it means THIS copy is the stale one, and a stale reader is
- *  exactly the reader that cannot be relied on to notice anything else. */
-export function versionSkew() {
-  const nodes = writerVersions();
-  const stamped = nodes.filter(g => g.last);
-  const pick = (g) => ({ node: g.node, v: g.last, at: g.lastAt });
-  return {
-    installed: VERSION,
-    nodes,
-    stamped: stamped.length,
-    behind: stamped.filter(g => cmpVersion(g.last, VERSION) < 0).map(pick),
-    ahead: stamped.filter(g => cmpVersion(g.last, VERSION) > 0).map(pick),
-    concurrent: nodes.filter(g => g.concurrent.length > 1)
-      .map(g => ({ node: g.node, versions: g.concurrent, by: g.concurrentBy })),
-  };
-}
-
-/* ── Is the mesh actually syncing? ──
- *
- * The incident this exists for: one node's sync had been failing every 60 seconds for **228
- * commits** of the other nodes' history. Its launchd job ran, wrote a line to a log file, exited
- * non-zero, and was restarted a minute later to fail identically. Nothing else in hubd looked at
- * that log, so `hub status`, `hub brief` and `hub doctor` all reported a healthy hub the whole
- * time — a hub they were reading from a copy that had stopped receiving anyone else's work.
- *
- * A sync loop that keeps retrying is indistinguishable from a working one unless somebody counts
- * the commits. So doctor counts them, from git rather than from the log: the log says whatever the
- * script chose to say, and in this case the script's own diagnosis was wrong. */
-export function meshStatus() {
-  if (!fs.existsSync(path.join(HUB, '.git'))) return null;
-  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
-  const remotes = sh('git remote', HUB).split('\n').filter(Boolean);
-  if (!remotes.includes('origin')) return { branch, remote: null };
-  const counts = sh(`git rev-list --left-right --count origin/${branch}...HEAD`, HUB).split(/\s+/);
-  const behind = parseInt(counts[0], 10), ahead = parseInt(counts[1], 10);
-  // The script's last word, quoted rather than trusted: worth showing a human, but the counts
-  // above are what decides whether anything is wrong.
-  let lastError = null;
-  try {
-    const log = fs.readFileSync(path.join(HUB, '.mesh-sync.log'), 'utf8').split('\n').filter(l => l.trim());
-    for (let i = log.length - 1; i >= 0 && i > log.length - 40; i--) {
-      if (/mesh-sync: (REFUSED|.*failed)/.test(log[i])) { lastError = log[i].trim(); break; }
-    }
-  } catch {}
-  return {
-    branch, remote: 'origin',
-    behind: Number.isFinite(behind) ? behind : null,
-    ahead: Number.isFinite(ahead) ? ahead : null,
-    lastError,
-  };
-}
-
-/* Which PEER has gone quiet in the mesh.
- *
- * meshStatus above answers "am I in sync", and only this node can ask it. The failure it cannot see
- * is the one that matters most: another node whose pull has been aborting for days. Pine sat 77
- * commits behind on a single card conflict — its own doctor said so, and nobody was running its
- * doctor. From any other node the evidence was already there and unread: mesh-sync commits as the
- * node it runs on, so a peer that stopped pushing stops appearing in the shared history.
- *
- * Only real participants are judged — a node that has never committed here is an absorbed log or a
- * legacy name, not a machine that went quiet — and only while the mesh itself is moving, so a
- * weekend when nobody worked does not light up every row. Case-insensitive, because mesh-sync takes
- * the raw hostname ("Pine") and the file names take the normalised one ("pine"). */
-export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
-  if (!fs.existsSync(path.join(HUB, '.git'))) return [];
-  const last = new Map();                       // node (lowercased) -> newest commit ISO
-  let newest = null;
-  for (const line of sh(`git log -${scan} --format=%cI%x09%cn`, HUB).split('\n')) {
-    const [iso, name] = line.split('\t');
-    if (!iso || !name) continue;
-    if (!newest) newest = iso;
-    const k = name.trim().toLowerCase();
-    if (!last.has(k)) last.set(k, iso);
-  }
-  if (!newest) return [];
-  const newestMs = new Date(newest).getTime();
-  // A mesh nobody has touched in a while is not evidence about any single node.
-  if (Date.now() - newestMs > staleHours * 3600000) return [];
-  const known = new Set();
-  try {
-    // The same node-from-filename rules the log readers use, so "a node" means one thing here.
-    for (const f of fs.readdirSync(HUB)) {
-      const node = /^journal\..+\.jsonl$/.test(f) ? journalNodeOf(f)
-        : /^tasks\..+\.events\.jsonl$/.test(f) ? taskEventNodeOf(f) : '';
-      if (node) known.add(node.toLowerCase());
-    }
-  } catch {}
-  const out = [];
-  for (const node of known) {
-    const iso = last.get(node);
-    if (!iso) continue;                         // never a committer here: absorbed or legacy, not quiet
-    const ageH = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000);
-    if (ageH >= staleHours) out.push({ node, lastCommit: iso, ageHours: ageH });
-  }
-  return out.sort((a, b) => b.ageHours - a.ageHours);
-}
-
-/* Two tracked paths that differ only by case. On Linux they are two files; on macOS and Windows
- * they are one, and git cannot check out the second without overwriting the first — so the merge
- * refuses, every time, forever. That is what actually stopped the sync above.
- *
- * The pairs got there honestly. Queue files used to be named from the raw hostname while journals
- * went through JOURNAL_NODE, which lowercases; unifying them on JOURNAL_NODE was correct and was
- * argued carefully at the time, including why no message would be stranded (readers match
- * <role>.<anything>.queue.md, so the old files are still read). What nobody examined was what two
- * spellings of one node would mean to a case-insensitive filesystem three nodes away.
- *
- * Read from git, not from the directory: on the filesystem where this matters, the collision is
- * invisible by definition — both names resolve to the same file. Only the index has both.
- *
- * And read the REMOTE's tree as well as this hub's index. The pair that blocks a merge usually
- * arrived from another node and is not tracked here yet — which is the whole failure: the node
- * cannot pull the commits that would give it the second name, so looking only at its own index
- * finds nothing wrong with a hub that cannot sync. */
-export function caseCollisions() {
-  if (!fs.existsSync(path.join(HUB, '.git'))) return [];
-  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
-  const files = [
-    ...sh('git ls-files', HUB).split('\n'),
-    ...sh(`git ls-tree -r --name-only origin/${branch}`, HUB).split('\n'),
-  ].filter(Boolean);
-  const byLower = new Map();
-  for (const f of files) {
-    const k = f.toLowerCase();
-    let s = byLower.get(k);
-    if (!s) byLower.set(k, s = new Set());
-    s.add(f);
-  }
-  return [...byLower.entries()]
-    .filter(([, paths]) => paths.size > 1)
-    .map(([lower, paths]) => ({ lower, paths: [...paths].sort() }))
-    .sort((a, b) => (a.lower < b.lower ? -1 : 1));
 }
 
 function readTaskEvents() {
@@ -1102,109 +729,6 @@ export function loadTasks() {
     } catch { return rebuildTaskCache(); }
   }
   try { return JSON.parse(fs.readFileSync(TASKS, 'utf8')); } catch { return { seq: 0, tasks: [] }; }
-}
-
-/* ── Usage: how long, how many tokens, how much ──
- * The hub knows WHO did WHAT. It does not know what that cost, and the PMF question for a solo
- * operator running a fleet is "what does each project cost me per week". So this exists — with one
- * hard line through the middle of it:
- *
- *   MEASURED is what the hub can observe in its own logs: a task's open-to-close span, and events
- *   per project. It is derived, never stored, and cannot be wrong about itself.
- *
- *   SUPPLIED is seconds, tokens and money — none of which the hub can see. Only the client knows
- *   them, so they arrive by explicit call and are labelled as reported, not observed.
- *
- * The split is the feature. A cost number that quietly mixes a measured span with a guessed rate
- * is worse than no number, because it will be quoted later as if someone had counted. Per-host
- * append-only (usage.<node>.jsonl), same shape as the journal and the task log, so several
- * machines can report into one hub without conflicting — and it IS mesh-synced, because
- * "what did the fleet cost" is a fleet-wide question. */
-export function usageFile() { return path.join(HUB, `usage.${JOURNAL_NODE}.jsonl`); }
-export function usageFiles() {
-  try { return fs.readdirSync(HUB).filter(f => /^usage\..+\.jsonl$/.test(f)).sort().map(f => path.join(HUB, f)); }
-  catch { return []; }
-}
-
-// An ABSENT value must stay absent: Number(null) is 0, and a 0 that means "not reported" is the
-// exact lie this log exists to avoid — an empty entry would have recorded a $0 session.
-// `true` appears because the CLI's flag parser returns it for a bare flag with no value.
-const num = (v) => {
-  if (v === null || v === undefined || v === '' || v === true) return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-};
-
-export function runUsageAdd(a = {}) {
-  const agent = requireAuthor(a.agent ?? a.by, 'agent');
-  const rec = {
-    ts: now(), node: JOURNAL_NODE, agent,
-    project: a.project ? canonProject(a.project) : null,
-    task: (a.task ?? null) === null ? null : String(a.task),
-    seconds: num(a.seconds), tokensIn: num(a.tokensIn), tokensOut: num(a.tokensOut),
-    costUsd: num(a.costUsd), model: a.model ? String(a.model) : null,
-  };
-  if (rec.seconds === null && rec.tokensIn === null && rec.tokensOut === null && rec.costUsd === null) {
-    throw new Error('nothing to record: pass at least one of seconds, tokensIn, tokensOut, costUsd — this log holds what only YOU can see, so an empty entry says nothing');
-  }
-  fs.appendFileSync(usageFile(), JSON.stringify(rec) + '\n');
-  shareMode(usageFile());
-  return { ok: true, recorded: rec };
-}
-
-export function runUsage(a = {}) {
-  const days = a.days ?? 7;
-  const cutoff = Date.now() - days * 86400000;
-  const proj = a.project ? canonProject(a.project) : null;
-
-  const supplied = { calls: 0, seconds: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, byProject: {}, byAgent: {}, models: {} };
-  for (const f of usageFiles()) {
-    try {
-      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-        if (!l.trim()) continue;
-        let e; try { e = JSON.parse(l); } catch { continue; }
-        if (!e.ts || parseTs(e.ts).getTime() < cutoff) continue;
-        if (proj && e.project !== proj) continue;
-        if (a.agent && e.agent !== a.agent) continue;
-        supplied.calls++;
-        for (const k of ['seconds', 'tokensIn', 'tokensOut', 'costUsd']) supplied[k] += Number(e[k]) || 0;
-        const pk = e.project || 'unassigned', ak = e.agent || 'unknown';
-        supplied.byProject[pk] = supplied.byProject[pk] || { seconds: 0, tokens: 0, costUsd: 0 };
-        supplied.byProject[pk].seconds += Number(e.seconds) || 0;
-        supplied.byProject[pk].tokens += (Number(e.tokensIn) || 0) + (Number(e.tokensOut) || 0);
-        supplied.byProject[pk].costUsd += Number(e.costUsd) || 0;
-        supplied.byAgent[ak] = supplied.byAgent[ak] || { seconds: 0, tokens: 0, costUsd: 0 };
-        supplied.byAgent[ak].seconds += Number(e.seconds) || 0;
-        supplied.byAgent[ak].tokens += (Number(e.tokensIn) || 0) + (Number(e.tokensOut) || 0);
-        supplied.byAgent[ak].costUsd += Number(e.costUsd) || 0;
-        if (e.model) supplied.models[e.model] = (supplied.models[e.model] || 0) + 1;
-      }
-    } catch {}
-  }
-  supplied.costUsd = Math.round(supplied.costUsd * 100) / 100;
-
-  // Measured: the hub's own arithmetic over its own logs. A closed task's span is real; nothing
-  // here is inferred from a rate card.
-  const closed = loadTasks().tasks.filter(t => t.status === 'done' && t.done && t.created &&
-    parseTs(t.done).getTime() >= cutoff && (!proj || t.project === proj));
-  const spans = closed.map(t => (parseTs(t.done).getTime() - parseTs(t.created).getTime()) / 86400000)
-    .filter(d => d >= 0).sort((x, y) => x - y);
-  const median = spans.length ? Math.round(spans[Math.floor(spans.length / 2)] * 10) / 10 : null;
-  const events = {};
-  for (const e of journalSince(days * 24)) {
-    if (!e.project || (proj && e.project !== proj)) continue;
-    events[e.project] = (events[e.project] || 0) + 1;
-  }
-
-  return {
-    windowDays: days, project: proj,
-    supplied,
-    measured: { tasksClosed: closed.length, medianDaysToClose: median, journalEventsByProject: events },
-    note: supplied.calls
-      ? 'seconds/tokens/cost are SUPPLIED by callers (hub_usage_add) — the hub cannot observe them. tasksClosed and journal events are MEASURED from its own logs.'
-      : 'nothing supplied in this window: the hub cannot see time, tokens or money — a client has to report them with hub_usage_add. The measured half below is the hub\'s own arithmetic.',
-    generated: now(),
-  };
 }
 
 /* ── Claims ── */
@@ -1419,7 +943,7 @@ export function sectionBody(text, heading) {
 }
 
 const headingFor = (key) => (sectionsConfig().find(s => s.key === key) || {}).heading || key;
-const isPlaceholder = (body) => !body || /^<[^>]*>$/.test(body.trim());
+export const isPlaceholder = (body) => !body || /^<[^>]*>$/.test(body.trim());
 
 /** A project's declared MODE — a bare "MODE: ..." line anywhere in its card. */
 export function modeOf(card) {
@@ -1439,7 +963,7 @@ export function modeClass(mode) {
 // Reserved cards (operator) live in projects/ so that every card tool reaches them for free, but
 // they are NOT projects: counting one as a project would have it audited for gates it cannot have
 // and listed in a status table it does not belong in. Recall asks for them on purpose.
-function projectCards({ includeReserved = false } = {}) {
+export function projectCards({ includeReserved = false } = {}) {
   const out = [];
   try {
     for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
@@ -2484,6 +2008,14 @@ export function ackEnvNotices(session) {
  * a manual `git add -A` in a frozen hub committed the marker, the next sync carried it to a peer,
  * and the peer froze too. A frozen node does not pull, so it could not receive the fix either. */
 export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/'];
+
+/* `hub freeze`: the node-local marker scripts/mesh-sync.sh checks before every run. */
+export const freezeFile = () => path.join(HUB, '.mesh-freeze');
+/** The marker's record: null when this node is not frozen, {} when the marker cannot be read. */
+export function readFreeze() {
+  if (!fs.existsSync(freezeFile())) return null;
+  try { return JSON.parse(fs.readFileSync(freezeFile(), 'utf8')); } catch { return {}; }
+}
 const gitignoreAdded = [];
 function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
@@ -2910,7 +2442,7 @@ function cardBaseFor(name) {
 }
 // Append (or set) one line under a "## Heading" of a card, preserving everything else;
 // replaces a lone "<placeholder>" body or creates the section if it is missing.
-function editSection(text, heading, payload, mode) {
+export function editSection(text, heading, payload, mode) {
   const m = headingRe(heading).exec(text);
   if (!m) return text.replace(/\s*$/, '') + '\n\n## ' + heading + '\n\n' + payload + '\n';
   const bodyStart = m.index + m[0].length;
@@ -2968,8 +2500,8 @@ export function cardLimits() {
 
 /* Sections that are NOT rotated. Digest has its own cap and its own history trail; Facts (auto) is
  * regenerated from git on every sync, so moving it to history would archive a derived value. */
-const NO_ROTATE = new Set(['Digest', 'Facts (auto)']);
-const MOVED_MARK = '- … older entries moved to ';
+export const NO_ROTATE = new Set(['Digest', 'Facts (auto)']);
+export const MOVED_MARK = '- … older entries moved to ';
 
 /* Split a section body into ENTRIES. A list item starts an entry; anything that follows without
  * starting one belongs to it (a fact that wrapped, a fenced block). Prose with no list at all
@@ -3019,216 +2551,6 @@ export function rotateCardOverflow(text, slug, by, limits = cardLimits()) {
     return head + '\n\n' + MOVED_MARK + histRel + '\n' + keep.map(e => e.join('\n')).join('\n') + '\n';
   });
   return { text: outParts.join(''), moved };
-}
-
-/** Bring every existing card under the cap — the one-off for a hub that grew before the cap
- *  existed. Dry by default: the plan says which section of which card loses how much, and where
- *  it goes. Cards already inside the limit are untouched and unlisted. */
-export function runCardsCompact(a = {}) {
-  if (a.apply) requireAuthor(a.by, 'by');   // the move is journaled, and history records who moved it
-  const lim = cardLimits();
-  const cards = [];
-  let files = [];
-  try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch {}
-  for (const f of files.sort()) {
-    const slug = f.replace(/\.md$/, '');
-    let text = '';
-    try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
-    const before = Buffer.byteLength(text, 'utf8');
-    if (CONFLICT_RE.test(text)) { cards.push({ slug, before, skipped: 'conflict markers — resolve it first (hub card resolve)' }); continue; }
-    // Dry run must not write history, so the plan is measured on a copy and only re-run for real
-    // when applying. rotateCardOverflow appends to history as it goes, which is right for a live
-    // write and wrong for a preview.
-    const planned = [];
-    for (const part of text.split(/(?=^## )/m)) {
-      const m = /^## (.+?)[ \t]*$/m.exec(part);
-      if (!m || NO_ROTATE.has(m[1].trim())) continue;
-      const body = part.slice(m.index + m[0].length);
-      const bytes = Buffer.byteLength(body, 'utf8');
-      if (bytes > lim.sectionBytes) planned.push({ section: m[1].trim(), bytes, over: bytes - lim.sectionBytes });
-    }
-    if (!planned.length) continue;
-    if (!a.apply) { cards.push({ slug, before, sections: planned }); continue; }
-    const rot = rotateCardOverflow(text, slug, a.by || 'hubd', lim);
-    if (!rot.moved.length) continue;
-    atomicWrite(path.join(PROJ, f), rot.text);
-    cards.push({ slug, before, after: Buffer.byteLength(rot.text, 'utf8'), moved: rot.moved });
-  }
-  if (a.apply && cards.length) {
-    journalAppend({ ts: now(), project: 'hub', agent: a.by || 'hubd', kind: 'note',
-      text: `cards compacted: ${cards.length} card(s) over ${lim.sectionBytes}B per section; the overflow is in projects/history/<slug>.md` });
-  }
-  return { ok: true, apply: !!a.apply, limits: lim, cards };
-}
-
-/* ── One card, two sections that mean the same thing ──
- *
- * editSection writes into the FIRST heading that matches, so every later section of the same name
- * is dead: nothing can append to it, and hub_get still hands it to a reader, who then sees two
- * "Next step"s with different contents and no way to tell which is live. One hub had three
- * "## Handoff barechat-linux" in one card, and "## Next step" beside its localised heading in two
- * (task maple-112). Two shapes, both found here:
- *   - the same heading more than once (a merge resolved by hand, a heading typed twice);
- *   - one section KEY under two of its headings (the English default and the sections.json one) —
- *     a card written before the hub was localised, or on a node with another locale.
- * A heading that only resembles a key is NOT folded in: "## Facts" beside the localised facts heading is
- * a hand-written section on the cards it appears on, and merging it would let rotation move the
- * curated facts to history. Declare it an alias in sections.json if it really is the same. */
-function sectionGroupId(heading) {
-  const h = heading.trim().toLowerCase();
-  for (const s of sectionsConfig()) if (sectionHeadings(s.key).some(x => x.toLowerCase() === h)) return 'key:' + s.key;
-  return 'h:' + h;
-}
-
-/** What is doubled in a card: same-heading repeats and one key under several headings. */
-export function cardSectionIssues(text) {
-  const groups = new Map();
-  for (const m of String(text || '').matchAll(/^## (.+?)[ \t]*$/gm)) {
-    const id = sectionGroupId(m[1]);
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(m[1].trim());
-  }
-  const out = [];
-  for (const [id, heads] of groups) {
-    if (heads.length < 2) continue;
-    out.push(id.startsWith('key:')
-      ? { key: id.slice(4), headings: heads, kind: new Set(heads.map(h => h.toLowerCase())).size > 1 ? 'locales' : 'repeated' }
-      : { heading: heads[0], count: heads.length, kind: 'repeated' });
-  }
-  return out;
-}
-
-/** Fold every doubled section into one. Lists concatenate in file order at the position of the
- *  live section (the one writers reach); for "next", which is SET rather than appended, the live
- *  step stays and the dead variants go to history — two current steps is the defect, not a fix. */
-export function mergeCardSections(text, slug, by) {
-  const merged = [];
-  if (!text || CONFLICT_RE.test(text)) return { text, merged };
-  const parts = String(text).split(/(?=^## )/m).map(p => {
-    const m = /^## (.+?)[ \t]*$/m.exec(p);
-    return m && m.index === 0 ? { heading: m[1].trim(), body: p.slice(m[0].length), id: sectionGroupId(m[1]) } : { raw: p };
-  });
-  const byId = new Map();
-  parts.forEach((p, i) => { if (p.id) { if (!byId.has(p.id)) byId.set(p.id, []); byId.get(p.id).push(i); } });
-  const drop = new Set();
-  for (const [id, idx] of byId) {
-    if (idx.length < 2) continue;
-    const key = id.startsWith('key:') ? id.slice(4) : null;
-    const live = key ? liveHeading(text, key).toLowerCase() : null;
-    const target = key ? (idx.find(i => parts[i].heading.toLowerCase() === live) ?? idx[0]) : idx[0];
-    const bodyOf = (i) => parts[i].body.replace(/^\n+/, '').replace(/\s+$/, '');
-    const others = idx.filter(i => i !== target);
-    if (key === 'next') {
-      for (const i of others) {
-        const b = bodyOf(i);
-        if (b && !isPlaceholder(b)) appendHistory(slug, `\n---\n### until ${now()} (## ${parts[i].heading} — a second next-step section, superseded by ## ${parts[target].heading}; merged by ${by || 'hubd'})\n${b}\n`);
-      }
-    } else {
-      let movedMark = null;
-      const lines = [];
-      for (const i of idx) {
-        const b = bodyOf(i);
-        if (!b || isPlaceholder(b)) continue;
-        for (const l of b.split('\n')) {
-          if (l.startsWith(MOVED_MARK)) { movedMark = movedMark || l; continue; }
-          lines.push(l);
-        }
-      }
-      parts[target].body = '\n\n' + [movedMark, ...lines].filter(x => x != null).join('\n') + '\n\n';
-    }
-    for (const i of others) drop.add(i);
-    merged.push({ section: parts[target].heading, from: others.map(i => parts[i].heading), mode: key === 'next' ? 'kept live step, others to history' : 'concatenated' });
-  }
-  if (!merged.length) return { text, merged };
-  const out = parts.filter((_, i) => !drop.has(i)).map(p => p.raw != null ? p.raw : `## ${p.heading}${p.body}`).join('');
-  return { text: out.replace(/\n{3,}/g, '\n\n'), merged };
-}
-
-/** Run the merge over every card. Dry by default; --apply writes, rotates and journals once. */
-export function runCardsMergeSections(a = {}) {
-  const by = a.apply ? requireAuthor(a.by, 'by') : (a.by || null);
-  const cards = [];
-  let files = [];
-  try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')).sort(); } catch {}
-  for (const f of files) {
-    const slug = f.replace(/\.md$/, '');
-    let text; try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
-    const issues = cardSectionIssues(text);
-    if (!issues.length) continue;
-    if (CONFLICT_RE.test(text)) { cards.push({ slug, issues, skipped: 'conflict markers — resolve it first (hub card resolve)' }); continue; }
-    if (!a.apply) { cards.push({ slug, issues }); continue; }
-    const r = mergeCardSections(text, slug, by);
-    const rot = rotateCardOverflow(r.text, slug, by);
-    atomicWrite(path.join(PROJ, f), rot.text);
-    cards.push({ slug, issues, merged: r.merged, ...(rot.moved.length ? { rotated: rot.moved } : {}) });
-  }
-  if (a.apply && cards.some(c => c.merged)) {
-    journalAppend({ ts: now(), project: 'hub', agent: by, kind: 'note',
-      text: `card sections merged: ${cards.filter(c => c.merged).map(c => c.slug).join(', ')} — doubled headings folded into the live one` });
-  }
-  return { ok: true, apply: !!a.apply, cards };
-}
-
-/** Merge two project cards that describe the same project under different slugs.
- *  Creates an alias from → into in project-aliases.json; moves from.md to projects/history/.
- *  The journal entries are untouched (they belong to the old slug via the alias system).
- *  Non-empty sections from the duplicate card are appended to the canonical card.
- *  Dry by default; --apply writes and journals. */
-export function runCardsMerge(a = {}) {
-  const from = slugify(a.from);
-  const into = slugify(a.into);
-  const by = a.apply ? requireAuthor(a.by, 'by') : (a.by || null);
-  if (from === into) throw new Error('cannot merge a card into itself');
-  const fromCard = readCard(from);
-  if (!fromCard) throw new Error(`no card: ${from}.md`);
-  const intoCard = readCard(into);
-  if (!intoCard) throw new Error(`no card: ${into}.md`);
-
-  // Collect non-empty sections from the duplicate
-  const sections = [];
-  const headings = fromCard.match(/^## .+$/gm) || [];
-  for (const h of headings) {
-    const body = sectionBody(fromCard, h.replace(/^## /, ''));
-    if (body && !isPlaceholder(body)) {
-      sections.push({ heading: h.replace(/^## /, ''), count: body.split('\n').filter(Boolean).length });
-    }
-  }
-
-  if (!a.apply) {
-    return { ok: true, from, into, sections, aliasExisted: !!projectAliases()[from], applied: false };
-  }
-
-  // Create alias
-  const af = path.join(HUB, 'project-aliases.json');
-  let aliases = {};
-  try { aliases = JSON.parse(fs.readFileSync(af, 'utf8')); } catch {}
-  const aliasExisted = !!aliases[from];
-  if (!aliasExisted) aliases[from] = into;
-  fs.writeFileSync(af, JSON.stringify(aliases, null, 1));
-
-  // Append sections from duplicate to canonical
-  let text = intoCard;
-  for (const s of sections) {
-    const body = sectionBody(fromCard, s.heading);
-    text = editSection(text, s.heading, body, 'append');
-  }
-
-  // Move duplicate to history
-  const histDir = path.join(PROJ, 'history');
-  fs.mkdirSync(histDir, { recursive: true });
-  const histFile = path.join(histDir, `${from}.md`);
-  let n = 1;
-  while (fs.existsSync(histFile + (n > 1 ? `.${n}` : ''))) n++;
-  fs.renameSync(cardPath(from), n > 1 ? histFile + '.' + n : histFile);
-
-  // Write updated canonical card
-  const rot = rotateCardOverflow(text, into, by);
-  atomicWrite(cardPath(into), rot.text);
-
-  journalAppend({ ts: now(), project: into, agent: by, kind: 'note',
-    text: `cards merged: ${from} → ${into}${sections.length ? ' (' + sections.length + ' section(s) moved)' : ''}` });
-
-  return { ok: true, from, into, sections, aliasExisted, applied: true, moved: rot.moved };
 }
 
 /* The current step of a "## Next step" body: its text, and who set it when, read back from the
@@ -3587,128 +2909,13 @@ export function runRules(a = {}) {
   return { ok: true, file, appended: body };
 }
 
-/* ── Recall: what do we know about X, and was it still true when we learned it ──
- * hub_search is exact and flat: every line that contains the substring, in file order, a decision
- * from June next to a passing note from yesterday. hub_get is the opposite failure — everything
- * about one project when the question spanned three. Neither answers "what do we know about X",
- * which is the question a returning session actually has.
- *
- * Ranking is deterministic and dependency-free on purpose (no embeddings, no index to rebuild, no
- * model in the loop): a hit scores on WHERE it lives (a decision outranks a digest, a digest
- * outranks a passing note), how many query terms it carries, and how recent it is. Anyone can
- * read the scoring and predict the order, which matters more here than cleverness.
- *
- * And every hit carries its own date plus a staleness verdict, because the failure mode of recall
- * is not missing a fact — it is handing over a two-month-old fact with the same confidence as
- * this morning's. A stale hit says so, in the words a reader needs: it was true THEN, check it. */
-const RECALL_WEIGHT = { decision: 5, digest: 4, section: 3, task: 2, journal: 1 };
-
-/* Words that carry no topic. "IMM not established attention overlap" returned eight hits and
- * none from the project the question was about: the first was scored on "not" and "overlap",
- * the next two on "not" and an "imm" found INSIDE "committing", and five more on "not" alone
- * (task maple-77). Coverage of a stop-word is not coverage, and a substring is not a word.
- * Both lists are small on purpose — a term that is not here still counts, and the response says
- * which ones were dropped so a query that "deflated" shows why. */
-const RECALL_STOP = new Set([
-  'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'is', 'are', 'was', 'were', 'be',
-  'not', 'no', 'it', 'its', 'this', 'that', 'these', 'those', 'with', 'by', 'as', 'from', 'but', 'if',
-  'then', 'so', 'do', 'does', 'did', 'we', 'you', 'i', 'he', 'she', 'they', 'my', 'our', 'your', 'about',
-  // Russian stop-words, written as \u escapes: the public repository is ASCII-only by its own gate
-  // (tests/check_clean.sh), and the list is data, not prose.
-  '\u0438', '\u043d\u0435', '\u0432', '\u043d\u0430', '\u0434\u043b\u044f', '\u0447\u0442\u043e', '\u043a\u0430\u043a', '\u044d\u0442\u043e', '\u0430', '\u043d\u043e', '\u0438\u043b\u0438', '\u0441', '\u043a', '\u043f\u043e', '\u0438\u0437', '\u0443', '\u043e',
-  '\u043e\u0431', '\u043e\u0442', '\u0434\u043e', '\u0437\u0430', '\u0436\u0435', '\u043b\u0438', '\u0431\u044b', '\u0442\u043e', '\u0442\u0430\u043a', '\u0432\u043e\u0442', '\u043e\u043d', '\u043e\u043d\u0430', '\u043e\u043d\u0438', '\u043c\u044b', '\u0432\u044b', '\u044f',
-  '\u043c\u043e\u0439', '\u043d\u0430\u0448', '\u0432\u0430\u0448', '\u0435\u0433\u043e', '\u0435\u0451', '\u0438\u0445', '\u0435\u0449\u0451', '\u0435\u0449\u0435', '\u0443\u0436\u0435', '\u043d\u0438', '\u0434\u0430', '\u043d\u0435\u0442', '\u043f\u0440\u0438', '\u043f\u0440\u043e',
-]);
-/* A term matches at the start of a word — "imm" matches "IMM", "IMM's" and "immediately", never
- * "committing". Prefix rather than whole-word because the hub is written in two inflecting
- * languages; infix never, because that is how "not" inside "note" counted as a hit. */
-const termRe = (t) => new RegExp('(^|[^\\p{L}\\p{N}_])' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
 /* `project` as a slug, a comma-separated list or an array → a Set of slugs, or null for "all". */
-function projectFilter(p) {
+export function projectFilter(p) {
   const list = Array.isArray(p) ? p : String(p ?? '').split(',');
   // Blanks go BEFORE slugify: slugify('') is not '' (it names the fallback project), and one
   // blank would have turned "no filter" into "only the fallback project" — zero hits, silently.
   const set = new Set(list.map(x => String(x ?? '').trim()).filter(Boolean).map(slugify));
   return set.size ? set : null;
-}
-
-export function runRecall(a = {}) {
-  const raw = String(a.query || '').trim();
-  if (!raw) throw new Error('query required: a word or phrase to recall');
-  const tokens = [...new Set(raw.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
-  const dropped = tokens.filter(t => RECALL_STOP.has(t));
-  const terms = tokens.filter(t => !RECALL_STOP.has(t));
-  if (!terms.length) throw new Error(tokens.length
-    ? `query is only stop-words (${dropped.join(', ')}) — add a word that names the thing you are asking about`
-    : 'query too short');
-  const res = Object.fromEntries(terms.map(t => [t, termRe(t)]));
-  const only = projectFilter(a.project);
-  const staleDays = a.staleDays ?? 30;
-  const limit = a.limit ?? 20;
-  const nowMs = Date.now();
-  const hits = [];
-
-  const score = (kind, text, ts) => {
-    const low = String(text).toLowerCase();
-    const matched = terms.filter(t => res[t].test(low));
-    if (!matched.length) return null;
-    // A whole-phrase hit is worth more than the same words scattered; recency decays slowly
-    // (half a point per month) so an old DECISION still outranks a fresh passing note.
-    const phrase = low.includes(raw.toLowerCase()) ? 3 : 0;
-    const ageDays = ts ? Math.max(0, (nowMs - parseTs(ts).getTime()) / 86400000) : null;
-    const recency = ageDays === null ? 0 : Math.max(0, 1.5 - (ageDays / 30) * 0.5);
-    // Term coverage outweighs the field weight on purpose: a note matching BOTH words of a
-    // two-word question answers it better than a decision matching one. With the field weight
-    // leading (spread 1..5), "queue offset" surfaced decisions containing only "queue" and buried
-    // the lines actually about offsets — the ranking was measuring prestige, not relevance.
-    return { s: RECALL_WEIGHT[kind] + matched.length * 3 + phrase + recency, matched, ageDays };
-  };
-  const push = (kind, where, project, text, ts) => {
-    if (only && !only.has(slugify(String(project || '')))) return;
-    const r = score(kind, text, ts);
-    if (!r) return;
-    hits.push({ kind, where, project, text: String(text).trim().slice(0, 300), asOf: ts || null,
-      ageDays: r.ageDays === null ? null : Math.round(r.ageDays),
-      stale: r.ageDays !== null && r.ageDays >= staleDays,
-      score: Math.round(r.s * 100) / 100, matched: r.matched });
-  };
-
-  for (const c of projectCards({ includeReserved: true })) {
-    const touched = (c.text.match(/- (?:synced|set): (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/) || [])[1] || null;
-    const dg = digestOf(c.text);
-    if (dg) push('digest', `${c.slug} card / Digest`, c.slug, dg, touched);
-    for (const s of sectionsConfig()) {
-      const body = sectionBody(c.text, s.heading);
-      if (isPlaceholder(body)) continue;
-      for (const line of body.split('\n')) {
-        if (!line.trim()) continue;
-        // A dated line carries its OWN date (that is what section writes stamp), which beats the
-        // card's last-touched time: one line can be a year older than the card holding it.
-        const own = (line.match(/(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)/) || [])[1] || touched;
-        push(s.key === 'decisions' ? 'decision' : 'section', `${c.slug} card / ${s.heading}`, c.slug, line, own);
-      }
-    }
-  }
-  for (const e of journalTail(null, 4000)) {
-    push(e.kind === 'decision' ? 'decision' : 'journal',
-      `journal ${e.ts} [${e.project || '?'}/${e.agent || '?'}]`, e.project || null, e.text || '', e.ts);
-  }
-  for (const t of loadTasks().tasks) {
-    push('task', `task #${t.id} (${t.status})`, t.project, t.text || '', t.done || t.created);
-  }
-
-  hits.sort((x, y) => y.score - x.score);
-  const top = hits.slice(0, limit);
-  const staleCount = top.filter(h => h.stale).length;
-  return {
-    query: raw, terms, ...(dropped.length ? { dropped } : {}), ...(only ? { project: [...only] } : {}),
-    total: hits.length, hits: top,
-    stale: staleCount,
-    hint: staleCount
-      ? `${staleCount} of ${top.length} hit(s) are older than ${staleDays}d — each says what it was true as of. Verify before acting on one, or re-state it as a fresh FACT.`
-      : undefined,
-    generated: now(),
-  };
 }
 
 /* ── Bootstrap: cwd → project (memory series #164) ──
@@ -5129,216 +4336,3 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
   return { queued, inProgress, doneToday, inbox, generated: now() };
 }
 
-/* ── Absorb: fold a hub base that was written in isolation into this one ──
- *
- * The case this exists for: a set of agents wrote to a directory that was NOT the shared hub for a
- * while — a misrouted env var, a private ~/.hubd, a laptop that never joined the mesh — and the
- * work in it (tasks, reports, queue traffic) must join the shared base without losing anything and
- * without touching a byte of the shared base's own append-only logs.
- *
- * Model. The shared hub already understands "another node's log": every log is per node
- * (tasks.<node>.events.jsonl, journal.<node>.jsonl, usage.<node>.jsonl) and the fold keys tasks by
- * (node, id). So the isolated base is absorbed AS A NEW NODE: its logs become <kind>.<label>.*
- * files here, which are new files (the mesh-sync guard checks removed lines, never new files) and
- * travel to every peer on the next sync. Nothing in the shared base is rewritten.
- *
- * Ids. The isolated base minted its own `<node>-<n>` ids, which collide with the shared base's ids
- * from the same hostname (pine-1..23 existed in both, naming different work). The fold would
- * remap the newcomers to bare numbers and every "see pine-4" in their reports would then point at
- * a stranger's task. So each absorbed id is renamed `<label>-<n>`, keeping its number, in every
- * field and in every text — events, journal, queue blocks, cards — of the COPIES only. The mapping
- * is printed and kept in the manifest; it is a rename of new files, not a rewrite of history.
- *
- * What is not absorbed, and why: presence and .qstate cursors are node-local and describe processes
- * that no longer exist; claims expire on their own; tasks.json is a cache; HUBD.md is generated.
- * Cards and resources whose slug already exists here are kept verbatim under absorbed/<label>/ —
- * two digests written a day apart by different agents are not a list to union, a human picks. Queue
- * files go to absorbed/<label>/queues/ with the delivered offset recorded per file: consumed history
- * is preserved for `grep`, and NOT re-delivered to a live waiter (a second delivery of a day's
- * orders is the incident this tool was written after). What was never read is listed so the
- * operator re-sends it on purpose.
- *
- * Refuses while a waiter pid recorded in the source is still alive (an agent is still writing
- * there — the copy would be stale the moment it lands), and when the source is itself a git repo
- * (that is a mesh node; sync it, do not absorb it). `force` overrides both. */
-const ABSORB_LABEL_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
-export function runAbsorb(a = {}) {
-  const from = a.from ? path.resolve(String(a.from)) : null;
-  const label = a.as ? String(a.as) : null;
-  if (!from) throw new Error('from required: the hub base to absorb (an absolute directory)');
-  if (!label || !ABSORB_LABEL_RE.test(label)) throw new Error('as required: a node label for the absorbed logs, e.g. pine-agent (lowercase, digits, - and _)');
-  if (!fs.existsSync(from) || !fs.statSync(from).isDirectory()) throw new Error('not a directory: ' + from);
-  const hubReal = fs.realpathSync(HUB), fromReal = fs.realpathSync(from);
-  if (hubReal === fromReal) throw new Error('source is this hub base itself');
-  if (hubReal.startsWith(fromReal + path.sep) || fromReal.startsWith(hubReal + path.sep)) throw new Error('source and hub base nest: ' + from + ' vs ' + HUB);
-  if (a.apply) requireAuthor(a.by, 'by');   // the absorb is journaled under that author
-
-  const refusals = [];
-  if (fs.existsSync(path.join(from, '.git'))) refusals.push('source is a git repository - a mesh node syncs, it is not absorbed');
-  const liveWaiters = [];
-  try {
-    for (const f of fs.readdirSync(path.join(from, '.qstate')).filter(f => f.endsWith('.waiter'))) {
-      let pid = 0;
-      try { pid = JSON.parse(fs.readFileSync(path.join(from, '.qstate', f), 'utf8')).pid | 0; } catch {}
-      if (!pid) continue;
-      let alive = false;
-      try { process.kill(pid, 0); alive = true; } catch (e) { alive = e && e.code === 'EPERM'; }
-      if (alive) liveWaiters.push({ role: f.replace(/\.waiter$/, ''), pid });
-    }
-  } catch {}
-  if (liveWaiters.length) refusals.push('live waiter(s) in the source: ' + liveWaiters.map(w => w.role + ' pid ' + w.pid).join(', ') + ' - stop them first, or the copy is stale the moment it lands');
-  const taken = [];
-  for (const f of [`tasks.${label}.events.jsonl`, `journal.${label}.jsonl`, `usage.${label}.jsonl`, path.join('absorbed', label)]) {
-    if (fs.existsSync(path.join(HUB, f))) taken.push(f);
-  }
-  try { for (const f of fs.readdirSync(HUB)) if (new RegExp('^journal\\.' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d{4}-\\d{2}').test(f)) taken.push(f); } catch {}
-  if (taken.length) refusals.push('label already used here: ' + taken.join(', ') + ' - pick another, an absorb happens once');
-  const hardRefusals = refusals.filter(r => !a.force || r.startsWith('label already used'));
-  if (hardRefusals.length) throw new Error('refused: ' + hardRefusals.join('; '));
-
-  const ls = (dir, re) => { try { return fs.readdirSync(dir).filter(f => re.test(f)).sort(); } catch { return []; } };
-  const readLines = (file) => { try { return fs.readFileSync(file, 'utf8').split('\n').filter(l => l.trim()); } catch { return []; } };
-  const eventFiles = ls(from, /^tasks\..+\.events\.jsonl$/);
-  const journalFilesSrc = ls(from, /^journal.*\.jsonl$/);
-  const usageFilesSrc = ls(from, /^usage\..+\.jsonl$/);
-
-  // ── id map: every id the source ADDED, renamed <label>-<n> with its own number when unique ──
-  const idMap = new Map();
-  const addIds = [];
-  for (const f of eventFiles) for (const l of readLines(path.join(from, f))) {
-    let e; try { e = JSON.parse(l); } catch { continue; }
-    if (e.ev === 'add' && e.id !== undefined && e.id !== null && !idMap.has(String(e.id))) { addIds.push(String(e.id)); idMap.set(String(e.id), null); }
-  }
-  const usedN = new Set();
-  let maxN = 0;
-  for (const id of addIds) { const m = /(\d+)$/.exec(id); if (m) maxN = Math.max(maxN, parseInt(m[1], 10)); }
-  for (const id of addIds) {
-    const m = /(\d+)$/.exec(id);
-    let n = m ? parseInt(m[1], 10) : ++maxN;
-    if (usedN.has(n)) n = ++maxN;
-    usedN.add(n);
-    idMap.set(id, `${label}-${n}`);
-  }
-  // In prose only node-scoped ids are safe to rename: a bare "7" is a number before it is an id.
-  const proseIds = [...idMap.keys()].filter(id => id.includes('-')).sort((x, y) => y.length - x.length);
-  const proseRe = proseIds.length
-    ? new RegExp('(?<![A-Za-z0-9_-])(' + proseIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![0-9])', 'g')
-    : null;
-  const renameText = (s) => (proseRe ? s.replace(proseRe, (m) => idMap.get(m)) : s);
-  const renameValue = (v, key) => {
-    if (typeof v === 'string') {
-      if (idMap.has(v) && (key === 'id' || key === 'task' || key === 'task_id' || key === 'taskId' || key === 'depends_on' || key === 'done' || key === 'blocks')) return idMap.get(v);
-      return renameText(v);
-    }
-    if (typeof v === 'number' && (key === 'id' || key === 'task_id' || key === 'depends_on') && idMap.has(String(v))) return idMap.get(String(v));
-    if (Array.isArray(v)) return v.map(x => renameValue(x, key));
-    if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = renameValue(x, k); return o; }
-    return v;
-  };
-
-  // ── logs ──
-  const outEvents = [], outJournal = [], outUsage = [];
-  let malformed = 0;
-  for (const f of eventFiles) for (const l of readLines(path.join(from, f))) {
-    let e; try { e = JSON.parse(l); } catch { malformed++; continue; }
-    const r = renameValue(e, '');
-    r.node = label;                    // the file it lives in and the node it names agree: a plain final-id log
-    outEvents.push(JSON.stringify(r));
-  }
-  for (const f of journalFilesSrc) for (const l of readLines(path.join(from, f))) {
-    let e; try { e = JSON.parse(l); } catch { malformed++; continue; }
-    outJournal.push(JSON.stringify(renameValue(e, '')));
-  }
-  for (const f of usageFilesSrc) for (const l of readLines(path.join(from, f))) {
-    let e; try { e = JSON.parse(l); } catch { malformed++; continue; }
-    outUsage.push(JSON.stringify(renameValue(e, '')));
-  }
-
-  // ── queues: kept, never re-delivered ──
-  const queues = [];
-  for (const f of ls(path.join(from, 'queues'), /\.queue\.md$/)) {
-    const file = path.join(from, 'queues', f);
-    let size = 0; try { size = fs.statSync(file).size; } catch {}
-    let offset = 0; try { offset = parseInt(fs.readFileSync(path.join(from, '.qstate', f + '.offset'), 'utf8').trim(), 10) || 0; } catch {}
-    const text = (() => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } })();
-    const blocks = (text.match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || []).length;
-    const unreadText = Buffer.from(text, 'utf8').subarray(Math.min(offset, size)).toString('utf8');   // cursors are BYTE offsets
-    const unreadBlocks = (unreadText.match(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm) || []).length;
-    queues.push({ file: f, bytes: size, delivered: Math.min(offset, size), blocks, unreadBytes: Math.max(0, size - offset), unreadBlocks, cursor: offset > 0, text });
-  }
-
-  // ── cards and resources: new slugs join, existing slugs are kept aside verbatim ──
-  const cards = [], resources = [];
-  for (const f of ls(path.join(from, 'projects'), /\.md$/)) {
-    const slug = f.replace(/\.md$/, '');
-    cards.push({ slug, file: f, exists: fs.existsSync(path.join(PROJ, f)), text: fs.readFileSync(path.join(from, 'projects', f), 'utf8') });
-  }
-  for (const f of ls(path.join(from, 'resources'), /\.md$/)) {
-    resources.push({ slug: f.replace(/\.md$/, ''), file: f, exists: fs.existsSync(path.join(RESOURCES, f)), text: fs.readFileSync(path.join(from, 'resources', f), 'utf8') });
-  }
-  const skipped = ['presence/', '.qstate/', 'claims.json', 'tasks.json', 'HUBD.md', '.checkins.json', '.env-state.json'].filter(f => fs.existsSync(path.join(from, f)));
-
-  const plan = {
-    from, as: label, apply: !!a.apply, warnings: a.force ? refusals : [],
-    tasks: { files: eventFiles, events: outEvents.length, added: addIds.length, idMap: Object.fromEntries(idMap) },
-    journal: { files: journalFilesSrc, entries: outJournal.length },
-    usage: { files: usageFilesSrc, entries: outUsage.length },
-    malformed,
-    queues: queues.map(({ text, ...q }) => q),
-    unread: queues.filter(q => q.unreadBlocks > 0).map(q => ({ file: q.file, blocks: q.unreadBlocks, bytes: q.unreadBytes, everRead: q.cursor })),
-    cards: cards.map(c => ({ slug: c.slug, kept: c.exists ? `absorbed/${label}/projects/${c.file}` : `projects/${c.file}` })),
-    resources: resources.map(r => ({ slug: r.slug, kept: r.exists ? `absorbed/${label}/resources/${r.file}` : `resources/${r.file}` })),
-    skipped,
-    writes: [],
-  };
-  if (outEvents.length) plan.writes.push(`tasks.${label}.events.jsonl`);
-  if (outJournal.length) plan.writes.push(`journal.${label}.jsonl`);
-  if (outUsage.length) plan.writes.push(`usage.${label}.jsonl`);
-  for (const q of queues) plan.writes.push(`absorbed/${label}/queues/${q.file}`);
-  for (const c of plan.cards) plan.writes.push(c.kept);
-  for (const r of plan.resources) plan.writes.push(r.kept);
-  plan.writes.push(`absorbed/${label}/manifest.json`);
-  if (!a.apply) return plan;
-
-  for (const w of plan.writes) if (fs.existsSync(path.join(HUB, w))) throw new Error('refused: would overwrite ' + w);
-  // All or nothing. The first field run hit EACCES half-way: absorbed/ had arrived by a root git
-  // pull without group write, the logs were already on disk, and the label counted as used while
-  // the queues and manifest were missing. Every path that will be written is probed first; if a
-  // write still fails, everything written so far is removed before the error surfaces.
-  const written = [];
-  const write = (rel, text) => {
-    const p = path.join(HUB, rel);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, text, 'utf8');
-    written.push(p);
-    shareMode(p);          // a card absorbed into projects/ is rewritten by other users afterwards
-  };
-  try {
-    for (const dir of new Set(plan.writes.map(w => path.dirname(path.join(HUB, w))))) {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.accessSync(dir, fs.constants.W_OK);
-    }
-    for (const q of queues) write(`absorbed/${label}/queues/${q.file}`, renameText(q.text));
-    for (const c of cards) write(c.exists ? `absorbed/${label}/projects/${c.file}` : `projects/${c.file}`, renameText(c.text));
-    for (const r of resources) write(r.exists ? `absorbed/${label}/resources/${r.file}` : `resources/${r.file}`, renameText(r.text));
-    if (outEvents.length) write(`tasks.${label}.events.jsonl`, outEvents.join('\n') + '\n');
-    if (outJournal.length) write(`journal.${label}.jsonl`, outJournal.join('\n') + '\n');
-    if (outUsage.length) write(`usage.${label}.jsonl`, outUsage.join('\n') + '\n');
-    const manifest = { ...plan, absorbedAt: now(), by: a.by, hubdVersion: VERSION };
-    write(`absorbed/${label}/manifest.json`, JSON.stringify(manifest, null, 1) + '\n');
-  } catch (e) {
-    for (const p of written.reverse()) { try { fs.unlinkSync(p); } catch {} }
-    try { fs.rmSync(path.join(HUB, 'absorbed', label), { recursive: true, force: true }); } catch {}
-    throw new Error('absorb aborted, nothing kept: ' + (e && e.message ? e.message : e) + ' - fix the permission (the hub dir must be writable by you, including directories a git pull created) and run it again');
-  }
-
-  const db = rebuildTaskCache();
-  plan.tasksVisible = db.tasks.filter(t => t._origin && t._origin.node === label).length;
-  journalAppend({
-    ts: now(), project: 'hub', agent: a.by, kind: 'note',
-    text: `absorbed ${from} as node ${label}: ${addIds.length} task(s) (${plan.tasksVisible} visible after fold), ${outJournal.length} journal entr(y/ies), ${queues.length} queue file(s) kept under absorbed/${label}/ - ${plan.unread.length} with unread block(s)` +
-      (cards.filter(c => c.exists).length ? `; ${cards.filter(c => c.exists).length} card(s) kept aside (slug exists)` : '') +
-      (addIds.length ? `; ids renamed ${addIds[0]} -> ${idMap.get(addIds[0])} ...` : ''),
-  });
-  return plan;
-}

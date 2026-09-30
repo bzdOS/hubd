@@ -22,6 +22,12 @@ const T0 = mktmp();
 process.env.HUBD_DIR = T0;
 process.env.HUBD_NODE = 'cedar';
 const core = await import(path.join(REPO, 'hub/lib/core.mjs'));
+const doc = await import(path.join(REPO, 'hub/lib/doctor.mjs'));
+const conflictsLib = await import(path.join(REPO, 'hub/lib/conflicts.mjs'));
+const usageLib = await import(path.join(REPO, 'hub/lib/usage.mjs'));
+const cardsLib = await import(path.join(REPO, 'hub/lib/cards.mjs'));
+const recallLib = await import(path.join(REPO, 'hub/lib/recall.mjs'));
+const absorbLib = await import(path.join(REPO, 'hub/lib/absorb.mjs'));
 
 // Bug: a deleted id must not be reused by another node and then corrupted by the
 // original node's later `set` (set-after-del lands on the wrong task).
@@ -2059,14 +2065,14 @@ fs.writeFileSync(path.join(RC, 'projects', 'p.md'),
   `# p\n\n- slug: p\n- set: ${old} by dev-t\n\n## Digest\n\nthe widget pipeline runs nightly\n\n## Decisions\n\n- ${old}: chose the widget queue over polling\n\n## Metrics\n\n- ${old}: widget throughput 40/s\n`);
 fs.writeFileSync(path.join(RC, 'journal.t.jsonl'),
   JSON.stringify({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'touched the widget config today' }) + '\n');
-const rcl = core.runRecall({ query: 'widget queue', staleDays: 30 });
+const rcl = recallLib.runRecall({ query: 'widget queue', staleDays: 30 });
 ok(rcl.hits.length >= 3 && rcl.hits.every(h => h.asOf !== null), 'recall: every hit carries the date it was true as of');
 ok(/widget queue/i.test(rcl.hits[0].text),
   `recall: a hit matching BOTH terms outranks one matching a single term (top: ${rcl.hits[0].text.slice(0, 50)})`);
 ok(rcl.hits.some(h => h.stale === true) && /verify/i.test(rcl.hint || ''),
   'recall: an old hit is flagged stale and the answer says to verify before acting');
 ok(rcl.hits.some(h => h.stale === false), 'recall: a fresh hit is not flagged');
-let rcErr = ''; try { core.runRecall({ query: '  ' }); } catch (e) { rcErr = e.message; }
+let rcErr = ''; try { recallLib.runRecall({ query: '  ' }); } catch (e) { rcErr = e.message; }
 ok(/query required/.test(rcErr), 'recall: an empty query is refused, not answered with everything');
 
 // ── recall: stop-words are not coverage, a substring is not a word, project narrows (task maple-77) ──
@@ -2074,18 +2080,18 @@ fs.writeFileSync(path.join(RC, 'journal.t.jsonl'),
   JSON.stringify({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'touched the widget config today' }) + '\n' +
   JSON.stringify({ ts: core.now(), project: 'other', agent: 'dev-t', kind: 'note', text: 'committing the release; overlap is not a concern' }) + '\n' +
   JSON.stringify({ ts: core.now(), project: 'psy', agent: 'dev-t', kind: 'fact', text: 'IMM not established: attention overlap explains it' }) + '\n');
-const rc77 = core.runRecall({ query: 'IMM not established attention overlap' });
+const rc77 = recallLib.runRecall({ query: 'IMM not established attention overlap' });
 ok(rc77.dropped && rc77.dropped.includes('not') && !rc77.terms.includes('not'), `recall: "not" is dropped and reported (dropped=${JSON.stringify(rc77.dropped)})`);
 ok(rc77.hits.length && /IMM not established/.test(rc77.hits[0].text), `recall: the line about the topic is the top hit (top: ${rc77.hits[0] && rc77.hits[0].text.slice(0, 40)})`);
 ok(!rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.includes('imm')), 'recall: "imm" does not match inside "committing"');
 ok(rc77.hits.some(h => /committing the release/.test(h.text) && h.matched.length === 1 && h.matched[0] === 'overlap'),
   'recall: the other line matches on its real word only, ranked below full coverage');
-ok(core.runRecall({ query: 'immediately' }).total === 0 && core.runRecall({ query: 'imm' }).hits.some(h => /IMM not/.test(h.text)), 'recall: prefix at a word start matches, infix never');
-let rcStop = ''; try { core.runRecall({ query: 'not the \u0438 \u043d\u0435' }); } catch (e) { rcStop = e.message; }
+ok(recallLib.runRecall({ query: 'immediately' }).total === 0 && recallLib.runRecall({ query: 'imm' }).hits.some(h => /IMM not/.test(h.text)), 'recall: prefix at a word start matches, infix never');
+let rcStop = ''; try { recallLib.runRecall({ query: 'not the \u0438 \u043d\u0435' }); } catch (e) { rcStop = e.message; }
 ok(/only stop-words/.test(rcStop) && /not, the/.test(rcStop), `recall: a stop-words-only query is refused and names them (${rcStop.slice(0, 60)})`);
-const rcP = core.runRecall({ query: 'overlap', project: 'psy' });
+const rcP = recallLib.runRecall({ query: 'overlap', project: 'psy' });
 ok(rcP.total === 1 && rcP.hits[0].project === 'psy' && rcP.project[0] === 'psy', 'recall: project narrows to that project only');
-ok(core.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'recall: project accepts a comma-separated list');
+ok(recallLib.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'recall: project accepts a comma-separated list');
 {
   const wn = core.runWhatsNew({ agent: 'wn-77', hours: 48, project: 'psy' });
   ok(wn.entries.length === 1 && wn.entries[0].project === 'psy' && wn.project[0] === 'psy', `whatsnew: project narrows the delta (got ${wn.entries.length})`);
@@ -2146,21 +2152,21 @@ ok(core.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 'reca
 // ── usage: measured and supplied never mix ──
 const US = mktmp();
 core.setHubBase(US);
-let usErr = ''; try { core.runUsageAdd({ agent: 'dev-t', project: 'p' }); } catch (e) { usErr = e.message; }
+let usErr = ''; try { usageLib.runUsageAdd({ agent: 'dev-t', project: 'p' }); } catch (e) { usErr = e.message; }
 ok(/nothing to record/.test(usErr),
   'usage: an entry with no numbers is refused — an absent value must not become a recorded zero');
-core.runUsageAdd({ agent: 'dev-t', project: 'p', seconds: 900, tokensIn: 120000, tokensOut: 8000, costUsd: 1.85, model: 'm' });
-core.runUsageAdd({ agent: 'other-t', project: 'q', costUsd: 0.15 });
+usageLib.runUsageAdd({ agent: 'dev-t', project: 'p', seconds: 900, tokensIn: 120000, tokensOut: 8000, costUsd: 1.85, model: 'm' });
+usageLib.runUsageAdd({ agent: 'other-t', project: 'q', costUsd: 0.15 });
 const usTask = core.runTaskAdd({ project: 'p', text: 'closed one', by: 'dev-t' }).task;
 core.runTaskUpdate({ id: usTask.id, status: 'done', by: 'dev-t' });
-const us = core.runUsage({ days: 7 });
+const us = usageLib.runUsage({ days: 7 });
 ok(us.supplied.calls === 2 && us.supplied.costUsd === 2 && us.supplied.tokensIn === 120000,
   `usage: supplied numbers aggregate (${JSON.stringify({ c: us.supplied.calls, $: us.supplied.costUsd })})`);
 ok(us.supplied.byProject.p.seconds === 900 && us.supplied.byAgent['other-t'].costUsd === 0.15,
   'usage: split by project and by agent');
 ok(us.measured.tasksClosed === 1 && /SUPPLIED/.test(us.note) && /MEASURED/.test(us.note),
   'usage: the measured half is the hub\'s own arithmetic, and the answer says which half is which');
-ok(core.runUsage({ days: 7, project: 'q' }).supplied.calls === 1, 'usage: filters by project');
+ok(usageLib.runUsage({ days: 7, project: 'q' }).supplied.calls === 1, 'usage: filters by project');
 
 // ── scope layers: the operator, the private braid, the rules ──
 const SL = mktmp();
@@ -2175,7 +2181,7 @@ ok(core.runOperatorGet().exists === true, 'operator: reads back');
 ok(!core.runStatus().projects.some(p => p.project === 'operator') &&
    core.runStatus().projects.some(p => p.project === 'realproject'),
   'operator: it is a card but NOT a project — it never appears in the project table');
-ok(core.runRecall({ query: 'health collected' }).hits.some(h => /never collected/.test(h.text)),
+ok(recallLib.runRecall({ query: 'health collected' }).hits.some(h => /never collected/.test(h.text)),
   'operator: recall reaches it on purpose — person-level facts are exactly what recall is for');
 
 const priv = core.runReport({ project: 'personal', by: 'dev-t', text: 'energy was low', private: true });
@@ -2401,13 +2407,13 @@ fs.appendFileSync(path.join(DUP, 'journal.pine.jsonl'), dline('2026-08-01 10:00'
 ok(core.journalTail(null, 50).length === 4,
   'journal: two different entries written in the same minute both survive');
 
-const jcounts = core.journalCounts();
+const jcounts = doc.journalCounts();
 ok(jcounts.lines === 9 && jcounts.entries === 4 && jcounts.duplicate === 5,
   `journalCounts: 9 lines on disk, 4 entries, 5 dropped (got ${jcounts.lines}/${jcounts.entries}/${jcounts.duplicate})`);
-const jdup = core.logDuplication().find(g => g.kind === 'journal' && g.node === 'pine');
+const jdup = doc.logDuplication().find(g => g.kind === 'journal' && g.node === 'pine');
 ok(jdup && jdup.lines === 8 && jdup.distinct === 3,
   `logDuplication: names the inflated node log family (${jdup ? jdup.lines + '/' + jdup.distinct : 'missing'})`);
-ok(!core.logDuplication().some(g => g.node === 'fir'),
+ok(!doc.logDuplication().some(g => g.node === 'fir'),
   'logDuplication: a clean log is not reported as duplicated');
 
 /* The task logs are where this actually cost work — union made the replays that the 0.9.2 fold
@@ -2418,7 +2424,7 @@ fs.writeFileSync(path.join(DUP, 'tasks.pine.events.jsonl'),
     t: { id: 'pine-1', project: 'p', text: 'one task', status: 'open' } }) + '\n').repeat(9));
 ok(core.foldTasks().tasks.length === 1,
   `fold: nine duplicate lines of one add are one task (got ${core.foldTasks().tasks.length})`);
-const tdup = core.logDuplication().find(g => g.kind === 'tasks' && g.node === 'pine');
+const tdup = doc.logDuplication().find(g => g.kind === 'tasks' && g.node === 'pine');
 ok(tdup && tdup.lines === 9 && tdup.distinct === 1,
   `logDuplication: reports the task logs too (${tdup ? tdup.lines + '/' + tdup.distinct : 'missing'})`);
 
@@ -2494,11 +2500,11 @@ ok(wvAttic && wvAttic.last === null && wvAttic.unstamped === 1,
 ok(core.cmpVersion('0.9.10', '0.9.2') > 0 && core.cmpVersion('0.9.2', '0.9.10') < 0 && core.cmpVersion('1.0', '1.0.0') === 0,
   'cmpVersion: compares numerically, so 0.9.10 outranks 0.9.2');
 
-const wvSkew = core.versionSkew();
+const wvSkew = doc.versionSkew();
 ok(wvSkew.installed === core.VERSION && wvSkew.behind.some(n => n.node === 'pine' && n.v === '0.9.2'),
   'versionSkew: names a node whose newest write came from an older hubd than this install');
 fs.writeFileSync(path.join(WV, 'journal.future.jsonl'), wvl('2026-08-05 09:00', '99.0.0', 'from ahead') + '\n');
-ok(core.versionSkew().ahead.some(n => n.node === 'future'),
+ok(doc.versionSkew().ahead.some(n => n.node === 'future'),
   'versionSkew: a node writing with a NEWER hubd means this copy is the stale one');
 
 /* Interleaving, not mere co-presence: an upgrade partitions old lines from new ones, two installs
@@ -2509,7 +2515,7 @@ fs.writeFileSync(path.join(WV, 'journal.clean.jsonl'),
 fs.writeFileSync(path.join(WV, 'journal.twoinstalls.jsonl'),
   wvl('2026-08-01 09:00', '0.4.8', 'a', 'resident') + '\n' + wvl('2026-08-02 09:00', '0.9.4', 'b', 'fresh') + '\n' +
   wvl('2026-08-03 09:00', '0.4.8', 'c', 'resident') + '\n' + wvl('2026-08-04 09:00', '0.9.4', 'd', 'fresh') + '\n');
-const wvCon = core.versionSkew().concurrent;
+const wvCon = doc.versionSkew().concurrent;
 ok(!wvCon.some(n => n.node === 'clean'),
   'writerVersions: a clean upgrade cutover is not reported as two versions running side by side');
 ok(wvCon.some(n => n.node === 'twoinstalls' && n.versions.join(',') === '0.4.8,0.9.4'),
@@ -2524,7 +2530,7 @@ const wvWho = (v) => ((wvCon.find(n => n.node === 'twoinstalls') || {}).by || {}
 ok(wvWho('0.4.8').join(',') === 'resident' && wvWho('0.9.4').join(',') === 'fresh',
   `writerVersions: reports which agents wrote each version, so the stale process is addressable (got ${JSON.stringify(wvWho('0.4.8'))})`);
 fs.appendFileSync(path.join(WV, 'journal.twoinstalls.jsonl'), wvl('2026-08-05 09:00', '0.4.8', 'e', 'fresh') + '\n');
-const wvBoth = ((core.versionSkew().concurrent.find(n => n.node === 'twoinstalls') || {}).by || {})['0.4.8'] || [];
+const wvBoth = ((doc.versionSkew().concurrent.find(n => n.node === 'twoinstalls') || {}).by || {})['0.4.8'] || [];
 ok(wvBoth.join(',') === 'fresh,resident',
   `writerVersions: one agent name under both versions is reported as such, not smoothed away (got ${JSON.stringify(wvBoth)})`);
 
@@ -2555,12 +2561,12 @@ fs.rmSync(wvEmpty, { recursive: true, force: true });
  * script decided to say, and in that incident the script's own diagnosis named the wrong cause. */
 const MS = mktmp();
 core.setHubBase(MS);
-ok(core.meshStatus() === null, 'meshStatus: a hub that is not a git repo reports nothing to sync');
+ok(doc.meshStatus() === null, 'meshStatus: a hub that is not a git repo reports nothing to sync');
 core.sh('git init -q -b main', MS);
 core.sh('git config user.email t@t && git config user.name t', MS);
 fs.writeFileSync(path.join(MS, 'journal.a.jsonl'), '{"ts":"2026-09-01 10:00","kind":"note","text":"x"}\n');
 core.sh('git add -A && git commit -q -m seed', MS);
-const msNoRemote = core.meshStatus();
+const msNoRemote = doc.meshStatus();
 ok(msNoRemote && msNoRemote.remote === null && msNoRemote.branch === 'main',
   'meshStatus: a hub with no origin is not a mesh member and is not warned about');
 
@@ -2568,17 +2574,17 @@ const MSUP = mktmp();
 core.sh(`git clone -q "${MS}" "${MSUP}"`, MS);
 core.setHubBase(MSUP);
 core.sh('git config user.email t@t && git config user.name t', MSUP);
-ok(core.meshStatus().behind === 0 && core.meshStatus().ahead === 0,
+ok(doc.meshStatus().behind === 0 && doc.meshStatus().ahead === 0,
   'meshStatus: a fresh clone is in sync, and reports 0/0 rather than staying silent');
 fs.appendFileSync(path.join(MS, 'journal.a.jsonl'), '{"ts":"2026-09-01 11:00","kind":"note","text":"y"}\n');
 core.sh('git add -A && git commit -q -m more', MS);
 core.sh('git fetch -q origin', MSUP);
-const msBehind = core.meshStatus();
+const msBehind = doc.meshStatus();
 ok(msBehind.behind === 1 && msBehind.ahead === 0,
   `meshStatus: counts the commits this hub has not received (got ${msBehind.behind}/${msBehind.ahead})`);
 fs.writeFileSync(path.join(MSUP, '.mesh-sync.log'),
   'mesh-sync: ok (n 2026-09-01 10:00, main)\nmesh-sync: pull/merge failed on main (bogus reason) - aborted\n');
-ok(core.meshStatus().lastError === 'mesh-sync: pull/merge failed on main (bogus reason) - aborted',
+ok(doc.meshStatus().lastError === 'mesh-sync: pull/merge failed on main (bogus reason) - aborted',
   'meshStatus: quotes the sync\'s last complaint for a human, without trusting it for the verdict');
 const msDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
 ok(/mesh: +origin\/main: 1 behind, 0 ahead {2}WARNING/.test(msDoc.out) && /not receiving the other nodes/.test(msDoc.out),
@@ -2597,11 +2603,11 @@ const csTree = core.sh('git write-tree', MS);
 const csCommit = core.sh(`git commit-tree ${csTree} -p HEAD -m pair`, MS);
 core.sh(`git update-ref refs/heads/main ${csCommit}`, MS);
 core.sh('git fetch -q origin', MSUP);
-const coll = core.caseCollisions();
+const coll = doc.caseCollisions();
 ok(coll.length === 1 && coll[0].paths.join(' ') === 'queues/r.Node.queue.md queues/r.node.queue.md',
   `caseCollisions: finds a pair that exists only in the remote's tree (got ${JSON.stringify(coll)})`);
 core.setHubBase(MS);
-ok(core.caseCollisions().length === 1,
+ok(doc.caseCollisions().length === 1,
   'caseCollisions: and finds it from the index too, on the node that can hold both');
 const collDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
 ok(/r\.Node\.queue\.md {2}\+ {2}queues\/r\.node\.queue\.md/.test(collDoc.out),
@@ -2683,7 +2689,7 @@ const qrcText = qrcHead +
   '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from ours\nmine\n' +
   '=======\n\n## 2026-09-02 09:00 · from theirs\ntheirs\n' +
   '>>>>>>> abc\n';
-const qrc = core.resolveQueueConflicts(qrcText);
+const qrc = conflictsLib.resolveQueueConflicts(qrcText);
 ok(qrc.hunks === 1 && qrc.carried === 1,
   `resolveQueueConflicts: one hunk, one block carried over (got ${qrc.hunks}/${qrc.carried})`);
 ok(qrc.text.startsWith(qrcHead),
@@ -2692,18 +2698,18 @@ ok(qrc.text.indexOf('from ours') < qrc.text.indexOf('from theirs'),
   'resolveQueueConflicts: theirs lands at the END even though its timestamp is EARLIER — position beats chronology, because position is what a cursor means');
 /* Dedup is on the whole block, not the header: the same minute and sender can carry two different
  * messages, and collapsing those would be losing work to save a line. */
-const qrcSame = core.resolveQueueConflicts(
+const qrcSame = conflictsLib.resolveQueueConflicts(
   '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nfirst\n=======\n\n## 2026-09-02 11:00 · from bob\nsecond\n>>>>>>> abc\n');
 ok(qrcSame.carried === 1 && /first/.test(qrcSame.text) && /second/.test(qrcSame.text),
   'resolveQueueConflicts: same minute and sender, different bodies — both survive');
-const qrcDup = core.resolveQueueConflicts(
+const qrcDup = conflictsLib.resolveQueueConflicts(
   '<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nsame\n=======\n\n## 2026-09-02 11:00 · from bob\nsame\n>>>>>>> abc\n');
 ok(qrcDup.carried === 0 && (qrcDup.text.match(/from bob/g) || []).length === 1,
   'resolveQueueConflicts: an identical block on both sides appears once');
-const qrcClean = core.resolveQueueConflicts(qrcHead);
+const qrcClean = conflictsLib.resolveQueueConflicts(qrcHead);
 ok(qrcClean.hunks === 0 && qrcClean.text === qrcHead,
   'resolveQueueConflicts: a file with no conflict is returned byte-for-byte');
-const qrcTorn = core.resolveQueueConflicts('<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nx\n');
+const qrcTorn = conflictsLib.resolveQueueConflicts('<<<<<<< HEAD\n\n## 2026-09-02 11:00 · from bob\nx\n');
 ok(qrcTorn.hunks === 0 && qrcTorn.malformed === 1 && qrcTorn.text.includes('<<<<<<< HEAD'),
   'resolveQueueConflicts: a hunk with no separator is counted and left untouched');
 fs.mkdirSync(path.join(QRC, 'queues'), { recursive: true });
@@ -2729,7 +2735,7 @@ const ccText = ['# demo', '', '## Digest', '<<<<<<< HEAD', 'our digest', '======
   '>>>>>>> abc', '', '## Facts', '- fact: already here', '<<<<<<< HEAD', '- fact: ours',
   '- fact: both wrote this', '=======', '- fact: both wrote this', '- fact: theirs', '>>>>>>> abc', ''].join('\n');
 fs.writeFileSync(ccCard, ccText);
-ok(core.conflictedFiles().length === 1 && core.conflictedFiles()[0].file === ccCard && core.conflictedFiles()[0].kind === 'card',
+ok(conflictsLib.conflictedFiles().length === 1 && conflictsLib.conflictedFiles()[0].file === ccCard && conflictsLib.conflictedFiles()[0].kind === 'card',
   'conflictedFiles: a card holding markers is found, and named as a card');
 /* Queues were missing from this for three releases, and they are the worse case: a card is READ,
  * a queue is DELIVERED. 83 marker lines were found committed across eight queue files on one
@@ -2737,12 +2743,12 @@ ok(core.conflictedFiles().length === 1 && core.conflictedFiles()[0].file === ccC
 fs.mkdirSync(path.join(CC, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(CC, 'queues', 'q.n1.queue.md'),
   '\n## 2026-09-01 10:00 · from alice\nx\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> abc\n');
-const ccAll = core.conflictedFiles({ queueRoot: CC });
+const ccAll = conflictsLib.conflictedFiles({ queueRoot: CC });
 ok(ccAll.length === 2 && ccAll.some(c => c.kind === 'queue'),
   `conflictedFiles: a queue holding markers is found too (got ${JSON.stringify(ccAll.map(c => c.kind))})`);
-ok(core.conflictedFiles().filter(c => c.kind === 'queue').length === 0,
+ok(conflictsLib.conflictedFiles().filter(c => c.kind === 'queue').length === 0,
   'conflictedFiles: and queues are only scanned when a queue root is given — the team root can differ from the hub base');
-const ccRes = core.resolveCardConflicts(ccText);
+const ccRes = conflictsLib.resolveCardConflicts(ccText);
 ok(ccRes.resolved === 1 && ccRes.unresolved.length === 1 && ccRes.unresolved[0].section === 'Digest',
   `resolveCardConflicts: unions the list hunk, refuses the prose one (got ${ccRes.resolved}/${JSON.stringify(ccRes.unresolved)})`);
 const ccLines = ccRes.text.split('\n');
@@ -2754,7 +2760,7 @@ ok(ccRes.text.includes('<<<<<<< HEAD') && ccRes.text.includes('our digest') && c
   'resolveCardConflicts: the prose hunk is left byte-for-byte, both sides intact');
 /* A half-written hunk is left alone: guessing at the shape of one is how a resolver corrupts a
  * file that a human could still have read. */
-const ccTorn = core.resolveCardConflicts('## Facts\n<<<<<<< HEAD\n- fact: a\n');
+const ccTorn = conflictsLib.resolveCardConflicts('## Facts\n<<<<<<< HEAD\n- fact: a\n');
 ok(ccTorn.resolved === 0 && ccTorn.text === '## Facts\n<<<<<<< HEAD\n- fact: a\n',
   'resolveCardConflicts: a hunk with no separator or terminator is not touched');
 const ccDoc = run('doctor', { HUBD_DIR: CC, HUBD_TEAM_DIR: CC });
@@ -2786,7 +2792,7 @@ const mlGood = (n) => Array.from({ length: n }, (_, i) =>
   JSON.stringify({ ts: '2026-08-0' + (1 + (i % 9)) + '10:00', project: 'p', agent: 'dev-t', kind: 'note', text: 'ok' + i })).join('\n');
 // Torn line at the HEAD, 30 good entries after it: the writer plainly recovered.
 fs.writeFileSync(path.join(ML, 'journal.old.jsonl'), 'oject":"p","kind":"note"\n' + mlGood(30) + '\n');
-let mlc = core.journalCounts();
+let mlc = doc.journalCounts();
 ok(mlc.malformed === 1 && mlc.malformedRecent === 0,
   `journalCounts: an old torn line counts as malformed but not as recent (got ${mlc.malformed}/${mlc.malformedRecent})`);
 ok(!/WARNING/.test(run('doctor', { HUBD_DIR: ML, HUBD_TEAM_DIR: ML }).out.split('\n').find(l => /journal:/.test(l)) || ''),
@@ -2795,7 +2801,7 @@ ok(/not repairable without rewriting an append-only log/.test(run('doctor', { HU
   'doctor: and it says why nothing can be done about it');
 // Torn line at the TAIL of a live log: a writer is failing right now.
 fs.appendFileSync(path.join(ML, 'journal.old.jsonl'), 'oject":"p","kind":"task"\n');
-mlc = core.journalCounts();
+mlc = doc.journalCounts();
 ok(mlc.malformed === 2 && mlc.malformedRecent === 1,
   `journalCounts: a tear at the tail IS recent (got ${mlc.malformed}/${mlc.malformedRecent})`);
 const mlDoc = run('doctor', { HUBD_DIR: ML, HUBD_TEAM_DIR: ML });
@@ -2803,7 +2809,7 @@ ok(/journal:.*malformed  WARNING/.test(mlDoc.out) && /a writer is tearing writes
   'doctor: warns, loudly, only while it is still happening');
 // The same tear inside a month-archive is closed history: journalAppend only renames INTO one.
 fs.writeFileSync(path.join(ML, 'journal.old-2026-07.jsonl'), mlGood(3) + '\noject":"p","kind":"note"\n');
-ok(core.journalCounts().malformedRecent === 1,
+ok(doc.journalCounts().malformedRecent === 1,
   'journalCounts: a tear at the end of a month-archive is history, whatever its position');
 fs.rmSync(ML, { recursive: true, force: true });
 
@@ -2887,12 +2893,12 @@ fs.rmSync(ML, { recursive: true, force: true });
   commitAs('fir', 'journal.fir.jsonl', iso(0.2));
   fs.writeFileSync(path.join(MN, 'journal.pine-agent.jsonl'), '{}\n');   // absorbed: never a committer
   core.setHubBase(MN);
-  const quiet = core.meshNodes({ staleHours: 6 });
+  const quiet = doc.meshNodes({ staleHours: 6 });
   ok(quiet.length === 1 && quiet[0].node === 'pine' && quiet[0].ageHours >= 29,
     `mesh peers: the node that stopped pushing is named, matched across hostname case (got ${JSON.stringify(quiet)})`);
   ok(!quiet.find(n => n.node === 'pine-agent'),
     'mesh peers: a node that never committed here is an absorbed log, not a machine gone quiet');
-  ok(core.meshNodes({ staleHours: 72 }).length === 0, 'mesh peers: within the threshold, nothing is reported');
+  ok(doc.meshNodes({ staleHours: 72 }).length === 0, 'mesh peers: within the threshold, nothing is reported');
   // A mesh nobody has touched for days says nothing about any single node.
   const MN2 = mktmp();
   const git2 = (args, env) => execSync(`git -C ${MN2} ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
@@ -2902,7 +2908,7 @@ fs.rmSync(ML, { recursive: true, force: true });
   git2('add -A');
   git2('-c user.name=Pine -c user.email=x@x commit -q -m sync', { GIT_COMMITTER_DATE: iso(200), GIT_AUTHOR_DATE: iso(200) });
   core.setHubBase(MN2);
-  ok(core.meshNodes({ staleHours: 6 }).length === 0,
+  ok(doc.meshNodes({ staleHours: 6 }).length === 0,
     'mesh peers: a mesh where NOBODY has committed lately is a quiet week, not a stuck node');
   for (const d of [MN, MN2]) fs.rmSync(d, { recursive: true, force: true });
 }
@@ -3018,7 +3024,7 @@ fs.writeFileSync(path.join(ABSRC, 'presence', 'barechat-dev.json'), '{}');
 fs.writeFileSync(path.join(ABSRC, 'claims.json'), '{"claims":[]}');
 fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
 {
-  const plan = core.runAbsorb({ from: ABSRC, as: 'pine-agent' });
+  const plan = absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent' });
   ok(plan.apply === false && !fs.existsSync(path.join(AB, 'tasks.pine-agent.events.jsonl')), 'absorb: without apply nothing is written');
   ok(plan.tasks.added === 2 && plan.tasks.idMap['pine-1'] === 'pine-agent-1' && plan.tasks.idMap['pine-12'] === 'pine-agent-12',
     `absorb: ids are renamed <label>-<n> keeping their number (got ${JSON.stringify(plan.tasks.idMap)})`);
@@ -3027,23 +3033,23 @@ fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
   ok(plan.cards.find(c => c.slug === 'barechat').kept.startsWith('absorbed/pine-agent/') && plan.cards.find(c => c.slug === 'newproj').kept === 'projects/newproj.md',
     'absorb: an existing slug is kept aside, a new slug joins the hub');
   ok(plan.skipped.includes('presence/') && plan.skipped.includes('claims.json') && plan.skipped.includes('tasks.json'), 'absorb: node-local and generated files are listed as not absorbed');
-  let thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true }); } catch (e) { thrown = e.message; }
+  let thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true }); } catch (e) { thrown = e.message; }
   ok(/by required/.test(thrown || ''), 'absorb: apply without an author is refused');
-  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'Pine Agent' }); } catch (e) { thrown = e.message; }
+  thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'Pine Agent' }); } catch (e) { thrown = e.message; }
   ok(/as required/.test(thrown || ''), 'absorb: a label with spaces or capitals is refused');
   fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.waiter'), JSON.stringify({ pid: process.pid }));
-  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
   ok(/live waiter/.test(thrown || ''), 'absorb: a waiter still alive in the source refuses the copy');
-  ok(core.runAbsorb({ from: ABSRC, as: 'pine-agent', force: true }).warnings.length === 1, 'absorb: force passes the live waiter as a warning');
+  ok(absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent', force: true }).warnings.length === 1, 'absorb: force passes the live waiter as a warning');
   fs.writeFileSync(path.join(ABSRC, '.qstate', 'barechat-dev.waiter'), JSON.stringify({ pid: 999999 }));
   fs.mkdirSync(path.join(ABSRC, '.git'));
-  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
   ok(/git repository/.test(thrown || ''), 'absorb: a source that is itself a mesh node is refused');
   fs.rmdirSync(path.join(ABSRC, '.git'));
-  thrown = null; try { core.runAbsorb({ from: AB, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
+  thrown = null; try { absorbLib.runAbsorb({ from: AB, as: 'pine-agent' }); } catch (e) { thrown = e.message; }
   ok(/itself/.test(thrown || ''), 'absorb: the hub base cannot absorb itself');
 
-  const done = core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'head-orchestrator' });
+  const done = absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'head-orchestrator' });
   ok(done.tasksVisible === 2, `absorb: both absorbed tasks are visible after the fold (got ${done.tasksVisible})`);
   const db2 = core.foldTasks();
   const t = (id) => db2.tasks.find(x => x.id === id);
@@ -3061,18 +3067,18 @@ fs.writeFileSync(path.join(ABSRC, 'tasks.json'), '{}');
   const man = JSON.parse(fs.readFileSync(path.join(AB, 'absorbed', 'pine-agent', 'manifest.json'), 'utf8'));
   ok(man.by === 'head-orchestrator' && man.tasks.idMap['pine-12'] === 'pine-agent-12' && man.unread.length === 1, 'absorb: the manifest records author, id map and unread blocks');
   ok(core.journalTail('hub', 5).some(e => /absorbed .* as node pine-agent: 2 task/.test(e.text) && e.agent === 'head-orchestrator'), 'absorb: the absorb itself is journaled under the author');
-  thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'x', force: true }); } catch (e) { thrown = e.message; }
+  thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent', apply: true, by: 'x', force: true }); } catch (e) { thrown = e.message; }
   ok(/label already used/.test(thrown || ''), 'absorb: a second absorb under the same label is refused, even forced');
   // A write that fails half-way leaves nothing behind: the label stays free and no log is on disk.
   // (Field run: absorbed/ arrived by a root git pull without group write; the logs landed, the queues did not.)
   if (process.getuid && process.getuid() !== 0) {
     fs.chmodSync(path.join(AB, 'absorbed'), 0o555);          // as a root git pull leaves it: no group write
-    thrown = null; try { core.runAbsorb({ from: ABSRC, as: 'pine-agent3', apply: true, by: 'x' }); } catch (e) { thrown = e.message; }
+    thrown = null; try { absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent3', apply: true, by: 'x' }); } catch (e) { thrown = e.message; }
     ok(/aborted, nothing kept/.test(thrown || ''), `absorb: a failed write aborts with a clear message (got ${thrown})`);
     ok(!fs.existsSync(path.join(AB, 'journal.pine-agent3.jsonl')) && !fs.existsSync(path.join(AB, 'tasks.pine-agent3.events.jsonl')),
       'absorb: no log of the failed label is left on disk');
     fs.chmodSync(path.join(AB, 'absorbed'), 0o755);
-    ok(core.runAbsorb({ from: ABSRC, as: 'pine-agent3', apply: true, by: 'x' }).tasksVisible === 2, 'absorb: the same label works once the permission is fixed');
+    ok(absorbLib.runAbsorb({ from: ABSRC, as: 'pine-agent3', apply: true, by: 'x' }).tasksVisible === 2, 'absorb: the same label works once the permission is fixed');
   }
   const cli = run(`absorb ${ABSRC} --as pine-agent2`, { HUBD_DIR: AB, HUBD_TEAM_DIR: AB });
   ok(cli.code === 0 && /Would absorb .* as node pine-agent2/.test(cli.out) && /UNREAD  barechat-dev.Pine.queue.md: 1 block/.test(cli.out) && /pine-1 -> pine-agent2-1/.test(cli.out),
@@ -3164,27 +3170,27 @@ core.setHubBase(MS2);
   fs.writeFileSync(path.join(MS2, 'projects', 'dup.md'),
     '# dup\n\n- slug: dup\n\n## Digest\n\nd\n\n## Up next\n\n- live step — set 2026-09-20 10:00 by dev-t\n\n## Handoff linux\n\n- first\n\n' +
     '## Next step\n\n- stale english step\n\n## Handoff linux\n\n- second\n\n## Handoff linux\n\n- third\n');
-  const iss = core.cardSectionIssues(core.readCard('dup'));
+  const iss = cardsLib.cardSectionIssues(core.readCard('dup'));
   ok(iss.some(i => i.key === 'next' && i.kind === 'locales') && iss.some(i => i.heading === 'Handoff linux' && i.count === 3),
     `sections: detection names one key under two headings and a heading repeated three times (${JSON.stringify(iss)})`);
-  const dry = core.runCardsMergeSections({});
+  const dry = cardsLib.runCardsMergeSections({});
   ok(dry.apply === false && dry.cards.some(c => c.slug === 'dup') && !dry.cards.some(c => c.merged) && /stale english step/.test(core.readCard('dup')),
     'merge: dry run lists and writes nothing');
-  let thrown = null; try { core.runCardsMergeSections({ apply: true }); } catch (e) { thrown = e.message; }
+  let thrown = null; try { cardsLib.runCardsMergeSections({ apply: true }); } catch (e) { thrown = e.message; }
   ok(/by required/.test(thrown || ''), 'merge: --apply needs an author');
-  core.runCardsMergeSections({ apply: true, by: 'dev-t' });
+  cardsLib.runCardsMergeSections({ apply: true, by: 'dev-t' });
   card = core.readCard('dup');
   ok((card.match(/^## Handoff linux$/gm) || []).length === 1 && /- first\n- second\n- third/.test(card),
     'merge: a repeated heading is folded into the first, entries in file order');
   ok((card.match(/^## (Up next|Next step)$/gm) || []).length === 1 && /live step/.test(card) && !/stale english step/.test(card),
     'merge: two next-step sections leave the LIVE one, not two current steps');
   ok(/stale english step/.test(fs.readFileSync(path.join(MS2, 'projects', 'history', 'dup.md'), 'utf8')), 'merge: the superseded step is in history, not dropped');
-  ok(core.cardSectionIssues(card).length === 0, 'merge: nothing doubled is left');
+  ok(cardsLib.cardSectionIssues(card).length === 0, 'merge: nothing doubled is left');
   // Declared aliases are the only way a look-alike heading joins a key.
   fs.writeFileSync(path.join(MS2, 'projects', 'hand.md'), '# hand\n\n## Digest\n\nd\n\n## Facts\n\n- curated\n\n## Known things\n\n- fact: x\n');
-  ok(core.cardSectionIssues(core.readCard('hand')).length === 0, 'sections: an undeclared look-alike ("Facts") is a separate hand section');
+  ok(cardsLib.cardSectionIssues(core.readCard('hand')).length === 0, 'sections: an undeclared look-alike ("Facts") is a separate hand section');
   fs.writeFileSync(path.join(MS2, 'sections.json'), JSON.stringify({ next: 'Up next', facts: { heading: 'Known things', aliases: ['Facts'] } }));
-  ok(core.cardSectionIssues(core.readCard('hand')).some(i => i.key === 'facts'), 'sections: once declared as an alias it is reported as the same section');
+  ok(cardsLib.cardSectionIssues(core.readCard('hand')).some(i => i.key === 'facts'), 'sections: once declared as an alias it is reported as the same section');
   const doc = run('doctor', { HUBD_DIR: MS2, HUBD_TEAM_DIR: MS2 });
   ok(/card\(s\) hold a section twice/.test(doc.out) && /hand: ## Facts \+ ## Known things/.test(doc.out), 'doctor: names the cards that hold a section twice');
   const cliM = run('cards merge-sections', { HUBD_DIR: MS2, HUBD_TEAM_DIR: MS2 });
@@ -3264,7 +3270,7 @@ core.setHubBase(TL);
   ok(/names a model/.test(e1 || ''), 'author: a claim holder is held to the author rule');
   let e2 = null; try { core.runHeartbeat({ agent: 'agent' }); } catch (e) { e2 = e.message; }
   ok(/names a model|placeholder/.test(e2 || ''), 'author: a heartbeat name is held to the author rule');
-  let e3 = null; try { core.runCardsCompact({ apply: true }); } catch (e) { e3 = e.message; }
+  let e3 = null; try { cardsLib.runCardsCompact({ apply: true }); } catch (e) { e3 = e.message; }
   ok(/by required/.test(e3 || ''), 'author: cards compact --apply needs an author');
 
   // A stale lock is stolen, and nothing is left behind by the steal.
@@ -3744,9 +3750,9 @@ core.setHubBase(AK);
 {
   core.runCardSet({ project: 'mg-a', digest: 'dup', by: 'dev-t' });
   core.runCardSet({ project: 'mg-b', digest: 'canon', by: 'dev-t' });
-  ok(core.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === false, 'cards merge: a dry run without an alias says so');
+  ok(cardsLib.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === false, 'cards merge: a dry run without an alias says so');
   fs.writeFileSync(path.join(AK, 'project-aliases.json'), JSON.stringify({ 'mg-a': 'mg-b' }));
-  ok(core.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
+  ok(cardsLib.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
   const fl = run('report --message x', { HUBD_DIR: AK, HUBD_AGENT: 'dev-t' });
   ok(fl.code === 1 && /unknown flag: --message/.test(fl.out), 'cli: a flag no command reads is an error, not silently dropped (use -m)');
 }
