@@ -547,6 +547,10 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
     if (!declared) recordEnvObservation('cursor-conflict', role);
     else if (sharedKey) recordEnvObservation('subscriber-shared', sharedKey);
   } else if (sharedKey) clearEnvObservation('subscriber-shared', sharedKey);
+  // A work queue that is back to one waiter is healthy again: cleared the same way, or the notice
+  // outlives its cause forever — on one fleet it rode on every tool answer for a day after the
+  // duplicate waiters were gone, and an orchestrator escalated it as a live defect.
+  else if (!declared) clearEnvObservation('cursor-conflict', role);
 
   // Before blocking, not after: a consumer that cannot advance its cursors would otherwise sit in a
   // long-poll that can only ever answer NO_CHANGES, and the first message to arrive would be the one
