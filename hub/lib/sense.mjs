@@ -24,6 +24,13 @@
  * sensor last raised is also published as sense.<node>.json in the hub, one small file per node
  * like presence.<node>.json, so a board on any node can show it.
  *
+ * Escalations are appended, one line each (<epoch>\t<head>\t<text>), to the file a monitor reads:
+ * HUBD_SENSE_ESCALATIONS when set, else escalations.log in the state directory. The default is
+ * deliberately NOT a shared path: a second sensor run beside an old one (a parallel comparison)
+ * must not double every escalation the monitor sees. Pointing it at the monitor's file is the
+ * switch-over, and it is one variable, set per node — the path differs between operating systems,
+ * so it cannot live in the mesh-synced sense.json.
+ *
  * Thresholds and the patterns this code must not carry (what counts as private in a public repo,
  * which journal lines are only "still waiting") are data: <hub>/sense.json.
  */
@@ -33,7 +40,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, roleRegistry, runPresence,
-  runReport, atomicWrite, taskTitle, parseVerdict, shareMode,
+  runReport, atomicWrite, withLock, taskTitle, parseVerdict, shareMode,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
 
@@ -53,6 +60,10 @@ export const SENSE_DEFAULTS = {
   quietJournal: [],     // regexes: a worker's journal line matching one is "still waiting", not a report
   private: [],          // regexes: text that must not appear in a branch bound for a public repo
 };
+/* Statuses a task is still open in. The hub itself writes open|done, but task events are data and
+ * carry what their writers used (todo, in_progress...): a worker's in-progress task is still its
+ * open work, and leaving it out made an idle report say "nothing open" about a busy worker. */
+export const OPEN_STATUSES = new Set(['open', 'doing', 'in_progress', 'active']);
 const BUILD_RE = /(^|\/)(build|out|obj|target|node_modules)\/|\.(o|a|so|dylib|dSYM|pyc)$/;
 
 export function senseConfig() {
@@ -60,10 +71,16 @@ export function senseConfig() {
   try { o = JSON.parse(fs.readFileSync(path.join(HUB, 'sense.json'), 'utf8')) || {}; } catch {}
   const c = { ...SENSE_DEFAULTS };
   for (const k of Object.keys(SENSE_DEFAULTS)) if (o[k] != null) c[k] = o[k];
-  const res = (list) => (Array.isArray(list) ? list : []).map(s => { try { return new RegExp(s, 'i'); } catch { return null; } }).filter(Boolean);
-  c.quietRe = res(c.quietJournal);
-  c.privateRe = res(c.private);
+  c.quietRe = regexList(c.quietJournal);
+  c.privateRe = regexList(c.private);
   return c;
+}
+const regexList = (list) => (Array.isArray(list) ? list : list ? [list] : []).map(s => { try { return new RegExp(s, 'i'); } catch { return null; } }).filter(Boolean);
+
+/** The private patterns for one head: the hub-wide list in sense.json plus the head's own
+ *  (`private` attribute on its role card — a project's names are that project's data). */
+export function privatePatterns(conf, cfg = senseConfig()) {
+  return [...(cfg.privateRe || []), ...regexList(conf && conf.private)];
 }
 
 export function senseDir() {
@@ -78,8 +95,9 @@ export function senseDir() {
 const statePath = (head) => path.join(senseDir(), `head.${slugify(head)}.json`);
 export function loadSenseState(head) { try { return JSON.parse(fs.readFileSync(statePath(head), 'utf8')) || {}; } catch { return {}; } }
 function saveSenseState(head, st) { atomicWrite(statePath(head), st); }
+export function escalationsPath() { return process.env.HUBD_SENSE_ESCALATIONS || path.join(senseDir(), 'escalations.log'); }
 function escalate(head, text, nowS) {
-  const f = path.join(senseDir(), 'escalations.log');
+  const f = escalationsPath();
   try { fs.appendFileSync(f, `${Math.floor(nowS)}\t${head}\t${String(text).replace(/\s+/g, ' ')}\n`); shareMode(f); } catch {}
 }
 
@@ -114,7 +132,7 @@ export function senseConf(head) {
   const at = h.attrs || {};
   return {
     head: h.role, project: at.hubproject || h.project || '', repo: at.repo || '', base: at.base || 'main',
-    review: at.review || '', plan: at.plan || '',
+    review: at.review || '', plan: at.plan || '', private: at.private || '',
     workers: h.workers.filter(w => w.status !== 'off').map(w => w.role),
     idleMin: Object.fromEntries(h.workers.filter(w => w.idleMin != null).map(w => [w.role, w.idleMin])),
     cwd: Object.fromEntries(h.workers.filter(w => w.attrs && w.attrs.cwd).map(w => [w.role, w.attrs.cwd])),
@@ -162,7 +180,7 @@ export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, check
       ev.push([key, crit, `${text} (reminder: standing for ${Math.floor((nowS - p.first) / 60)} min)`]);
     }
   };
-  const openOf = (w) => tasks.filter(t => t.assignee === w && t.status === 'open').map(t => String(t.id)).sort();
+  const openOf = (w) => tasks.filter(t => t.assignee === w && OPEN_STATUSES.has(t.status)).map(t => String(t.id)).sort();
 
   /* Idle time is counted on the sensor's clock, not on the loop's counter: the loop's empty count
    * restarts with every restart of the loop, and a worker once sat idle 55 minutes through three
@@ -283,13 +301,16 @@ export function checkBranch(conf, branch, { fetch = true, cfg = senseConfig() } 
   const buildf = files.filter(f => BUILD_RE.test(f[2])).map(f => f[2]);
   if (binf.length) lines.push(`binary files: ${binf.length} (${binf.slice(0, 5).join(', ')})`);
   if (buildf.length) bad.push(`build products in the diff: ${buildf.slice(0, 5).join(', ')}`);
-  if (cfg.privateRe.length) {
+  /* No patterns is a failure, not a pass. "Nothing private" was printed for a check that had
+   * nothing to check with, and a branch bound for a public repo went through on it. */
+  const priv = privatePatterns(conf, cfg);
+  if (priv.length) {
     const msgs = git(['log', '--format=%B', `${bb}..${b}`], rv).out;
     const added = git(['diff', `${bb}...${b}`], rv, 300000).out.split('\n').filter(l => l.startsWith('+')).join('\n');
-    const hits = (msgs + '\n' + added).split('\n').filter(l => cfg.privateRe.some(re => re.test(l)));
+    const hits = (msgs + '\n' + added).split('\n').filter(l => priv.some(re => re.test(l)));
     if (hits.length) bad.push(`PRIVATE content in commits/diff (${hits.length} lines): ` + hits.slice(0, 3).map(h => h.slice(0, 100)).join(' | '));
     else lines.push('OK nothing private (messages and added lines)');
-  } else lines.push('private check: no patterns declared (hub sense.json -> private)');
+  } else bad.push('no private patterns declared, so nothing can be told apart from public text: declare them (hub sense.json -> private, or the head\'s `private` attribute) before accepting into a public repo');
   for (const x of bad) lines.push('FAIL ' + x);
   lines.push('RESULT: ' + (bad.length ? 'NOT acceptable — return it to the worker: verdict reject with the remarks'
     : 'formally acceptable — decide on the content: verdict accept|reject'));
@@ -328,19 +349,26 @@ function queuedFrom(head) {
 
 /** Publish what this node's sensor last raised, for boards on every node. Rewritten only when the
  *  content changed, so an idle sensor does not turn into a commit per mesh tick. */
+/*  One file per node holds every head of that node, and each head's sensor runs as its own
+ *  process: read, change one key, write back — two heads finishing together lost one of the two
+ *  updates. Held under a lock; a lock that cannot be had costs one board refresh, never the pass. */
 function publish(head, ev, st, esc) {
   const f = path.join(HUB, `sense.${JOURNAL_NODE}.json`);
-  let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')) || {}; } catch {}
-  const heads = o.heads || {};
-  const prevHead = heads[head] || {};
-  const cur = {
-    pending: Object.keys(st.pending || {}).sort(),
-    last: ev.length ? { ts: now(), events: ev.map(([key, crit, text]) => ({ key, crit, text: text.slice(0, 300) })) } : (prevHead.last || null),
-    escalations: [...(prevHead.escalations || []), ...esc.map(t => ({ ts: now(), text: t.slice(0, 300) }))].slice(-10),
-  };
-  if (JSON.stringify(prevHead) === JSON.stringify(cur)) return;
-  heads[head] = cur;
-  try { atomicWrite(f, { node: JOURNAL_NODE, written: now(), heads }); } catch {}
+  try {
+    withLock(f, () => {
+      let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')) || {}; } catch {}
+      const heads = o.heads || {};
+      const prevHead = heads[head] || {};
+      const cur = {
+        pending: Object.keys(st.pending || {}).sort(),
+        last: ev.length ? { ts: now(), events: ev.map(([key, crit, text]) => ({ key, crit, text: text.slice(0, 300) })) } : (prevHead.last || null),
+        escalations: [...(prevHead.escalations || []), ...esc.map(t => ({ ts: now(), text: t.slice(0, 300) }))].slice(-10),
+      };
+      if (JSON.stringify(prevHead) === JSON.stringify(cur)) return;
+      heads[head] = cur;
+      atomicWrite(f, { node: JOURNAL_NODE, written: now(), heads });
+    });
+  } catch {}
 }
 
 /** Every node's published sensor state, merged by head (the board reads this). */
@@ -368,7 +396,10 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
   const branches = conf.repo ? remoteBranches(conf.repo) : null;
   let fetched = false;
   const checker = (br) => { const r = checkBranch(conf, br, { fetch: !fetched, cfg }); fetched = true; return r; };
+  // what the pass may move and a held-back wake has to put back: the journal marks AND the
+  // fingerprints of the mark's minute — restoring only the marks replayed that minute's reports
   const jmark = { ...(st.journal || {}) };
+  const jhmark = st.journal_h ? JSON.parse(JSON.stringify(st.journal_h)) : null;
   const ents = journalWindow(24 * 30);
   const decided = new Set();
   for (const e of ents) {
@@ -386,6 +417,7 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
       else if (p) p.last -= cfg.repeatS;
     }
     st.journal = jmark;
+    if (jhmark) st.journal_h = jhmark; else delete st.journal_h;
     ev = [];
   }
   saveSenseState(conf.head, st);

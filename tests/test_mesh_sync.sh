@@ -133,6 +133,30 @@ HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out10" 2>&1; rc=$?
 ok "$([ $rc -eq 4 ] && echo 1 || echo 0)" "archive: a moved copy whose bytes changed is still a deletion and refused (got $rc)"
 rm -f "$TMP/a/queues/archive/dead2.n.queue.md"; git -C "$TMP/a" checkout -q -- . 2>/dev/null
 
+# ── hub gc on two nodes: A archives its own shard while B appends to its own ──
+# A shard has one writer, the node in its name. gc once archived other nodes' shards too, and the
+# owner node, appending meanwhile, was left with a modify/delete conflict and a stopped sync. So gc
+# moves only this node's shards, and the two nodes' changes never touch one file.
+CLI="node $PWD/hub/cli.mjs"
+mkhub "$TMP/origin4"; git -C "$TMP/origin4" config receive.denyCurrentBranch ignore
+mkdir -p "$TMP/origin4/queues"
+printf '\n## 2026-01-01 00:00 · from x\nold order to w on na\n' > "$TMP/origin4/queues/w.na.queue.md"
+printf '\n## 2026-01-01 00:00 · from x\nold order to w on nb\n' > "$TMP/origin4/queues/w.nb.queue.md"
+git -C "$TMP/origin4" add -A && git -C "$TMP/origin4" -c user.name=t -c user.email=t@t commit -q -m queues
+git clone -q "$TMP/origin4" "$TMP/na"; git clone -q "$TMP/origin4" "$TMP/nb"
+HUBD_DIR="$TMP/na" HUBD_TEAM_DIR="$TMP/na" HUBD_NODE=na $CLI resource set live --type role --attr rank=worker --attr project=p --by t >/dev/null 2>&1
+# nb is a live node: it publishes its presence snapshot, as every heartbeating node does
+printf '{"node":"nb","written":"%s","agents":[]}\n' "$(date -u '+%Y-%m-%d %H:%M')" > "$TMP/nb/presence.nb.json"
+HUBD_DIR="$TMP/na" sh "$SCRIPT" >/dev/null 2>&1; HUBD_DIR="$TMP/nb" sh "$SCRIPT" >/dev/null 2>&1; HUBD_DIR="$TMP/na" sh "$SCRIPT" >/dev/null 2>&1
+HUBD_DIR="$TMP/na" HUBD_TEAM_DIR="$TMP/na" HUBD_NODE=na $CLI gc --apply --by t >"$TMP/out11" 2>&1
+ok "$([ -f "$TMP/na/queues/archive/w.na.queue.md" ] && [ -f "$TMP/na/queues/w.nb.queue.md" ] && echo 1 || echo 0)" "gc two nodes: A archives its own shard and leaves B's where it is"
+printf '\n## 2026-09-30 12:00 · from x\nnew order to w on nb\n' >> "$TMP/nb/queues/w.nb.queue.md"
+HUBD_DIR="$TMP/nb" sh "$SCRIPT" >"$TMP/out12" 2>&1; rcb=$?
+HUBD_DIR="$TMP/na" sh "$SCRIPT" >"$TMP/out13" 2>&1; rca=$?
+HUBD_DIR="$TMP/nb" sh "$SCRIPT" >"$TMP/out14" 2>&1; rcb2=$?
+ok "$([ $rcb -eq 0 ] && [ $rca -eq 0 ] && [ $rcb2 -eq 0 ] && echo 1 || echo 0)" "gc two nodes: both sync cleanly across the archive and the append (got B $rcb, A $rca, B $rcb2)"
+ok "$(grep -q 'new order to w on nb' "$TMP/na/queues/w.nb.queue.md" && [ ! -e "$TMP/nb/queues/w.na.queue.md" ] && [ -f "$TMP/nb/queues/archive/w.na.queue.md" ] && echo 1 || echo 0)" "gc two nodes: A has B's append, B has A's archive"
+
 # ── a shared hub stays group-writable after a pull ────────────────────────────
 # The fleet case: this script runs as root, the roles run as another user in the group. Anything
 # a pull creates is the puller's, and a role then reads everything and writes nothing.

@@ -4,6 +4,44 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.30 — 2026-09-30
+
+Fixes from the acceptance review of 0.9.28–0.9.29.
+
+- **The board escapes quotes.** Its `esc()` escaped `<`, `>` and `&` only, and a heartbeat status
+  (free text any loop writes) went into a `title="..."` attribute: a status with a quote in it
+  opened an event handler in the owner's browser. Both quotes are escaped now, and every value the
+  page renders goes through it. A role alive without state fields says how long ago it was seen;
+  "+ other projects" shows every project with open work next to the tracks (`/api/board?all=1`);
+  the board reads a journal window (30 days, or `--days` if longer) instead of the whole journal on
+  every refresh.
+- **`hub gc` is a dry run without `--apply`, all of it.** The old half of the command removed stale
+  locks, cache backups, `.tmp` files, idle readers and session records on every run and printed
+  them ahead of the listing, so `hub gc --json` was not JSON. That litter is now one more class,
+  listed and removed only by `hub gc --apply --by <you>`.
+- **A node archives only queue files it may move.** Its own shards, and shards with no writer left
+  (a node with no presence snapshot and no mesh commit for 30 days; a file with no node in its
+  name) — never another live node's shard, whose writer was left with a modify/delete conflict and
+  a stopped sync, and never an empty file. `hub gc` and `hub queue gc` list what they left and why.
+  Whether a role is alive now counts every node's published presence, not only this node's.
+- **The hub's `.gitignore` is completed, not only created.** `hub init` wrote the node-local lines
+  only into a new file, so an older hub never got `.mesh-freeze`: a commit by hand carried a freeze
+  to a peer. Every hub run now appends the lines an existing `.gitignore` lacks, `hub freeze`
+  warns when its marker is tracked anyway, and `hub doctor` reports node-local files git tracks.
+- **`hub sense`:** a wake held back by the hourly budget restores the minute's fingerprints along
+  with the journal marks (the held-back report used to count as seen and never reached the head);
+  with no private pattern declared a branch fails the checklist instead of passing it; a head may
+  carry its own patterns as its `private` attribute; escalations go to `HUBD_SENSE_ESCALATIONS`
+  when set (a parallel run keeps its own file by default); a task `in_progress`, `doing` or
+  `active` counts as open work; the published `sense.<node>.json` is written under a lock, so two
+  heads finishing together no longer lose one update.
+- **`hub` that cannot load exits 3 for `hub sense`.** A module that fails to load is thrown before
+  any of the CLI runs, and Node exits 1 — which a loop reads as "no events". The installed `hub` is
+  now a small wrapper that catches it, prints it, and exits 3 for `hub sense` (other commands keep 1).
+- **`hub lint` / `hub audit`:** a head that accepts branches with no private patterns declared; one
+  role alive on two nodes at once (each node has its own cursors, so both carry out every order) —
+  in the audit too, with a stable key.
+
 ## 0.9.29 — 2026-09-30
 
 - **`hub sense` does not re-raise a branch the journal already judged.** Its own state was the only

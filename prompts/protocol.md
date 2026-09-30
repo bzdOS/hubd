@@ -304,8 +304,10 @@ A role is a resource card of type `role`. The registry is whatever such cards ex
 `rank` is `head` (coordinates a track), `worker`, or `fleet` (a coordinator above the heads);
 `head` links a worker to its head; `status: off` marks a role switched off. A **track** is a
 project with a head. What reads the registry: `hub board` (the tracks), `hub sense` (a head's
-workers and repo), `hub lint` (open work on a name that is no role), `hub gc` (queues of names
-that are no live role). With no role cards, each of them says it judged nothing by name.
+workers and repo), `hub lint` (open work on a name that is no role; a head with no private
+patterns; one role alive on two nodes — two readers of one queue, each carrying out every order),
+`hub gc` (queues of names that are no live role). With no role cards, each of them says it judged
+nothing by name.
 
 ## Queues — addressed work
 
@@ -359,8 +361,14 @@ because the commit would delete that history from every peer, and the node stops
 file is back. The one deletion it accepts is a move into `queues/archive/` (or `_archive/<path>`)
 with the bytes intact. `hub gc` lists what has piled up, by class — queues of a name that is no
 live role, dead waiter markers, stale presence of non-roles, environment notices whose cause is
-gone, and open tasks on such names (listed only: reassigning them is the project head's call) — and
-`hub gc --apply --by <you>` archives it in one commit.
+gone, this node's own litter (stale locks, cache backups, idle readers), and open tasks on such
+names (listed only: reassigning them is the project head's call). Without `--apply` it touches
+nothing; `hub gc --apply --by <you>` archives it in one commit. A node moves only its own shards
+(`<role>.<its node>.queue.md`) and the ones with no writer left — a node that no longer writes to
+the mesh, a file with no node in its name — never another live node's (its writer would be left
+with a conflict) and never an empty file; `hub gc` lists those as left where they are, with why.
+Every hub run completes the hub's `.gitignore` with the node-local lines it lacks (`.mesh-freeze`,
+`.qstate/`, `presence/`...), and `hub doctor` warns about any that git tracks anyway.
 
 ### Work mode — your queue as your tasks
 Orders and tasks are two stores, and work falls between them: an order read by a turn that did
@@ -440,12 +448,16 @@ running goes to the fleet, not to the head), new reports in the journal (not the
 also sent to the head's queue), and task branches in the head's `repo`, each run through a
 checklist in its `review` clone. Exit 0 with text = wake the head with this text; 1 = nothing new;
 above 1 = the sensor failed. Non-critical wakes are budgeted per hour; an event standing an hour is
-escalated. `hub sense <head> check <branch>` is the checklist; `hub sense <head> verdict <branch>
-accept|reject "<text>"` writes the decision to the journal (first line `ACCEPT <full sha>` /
-`REJECT <full sha>`) and sends the order to the worker who handed the branch in. Thresholds, the
-private patterns a public branch must not carry, and the journal lines that only mean "still
-waiting" live in `<hub>/sense.json`. What each sensor last raised is published as
-`sense.<node>.json`, and `hub board` shows it on the track.
+escalated — appended to `HUBD_SENSE_ESCALATIONS` when that names the file a monitor reads, else to
+`escalations.log` in the sensor's state directory. `hub sense <head> check <branch>` is the
+checklist; `hub sense <head> verdict <branch> accept|reject "<text>"` writes the decision to the
+journal (first line `ACCEPT <full sha>` / `REJECT <full sha>`) and sends the order to the worker who
+handed the branch in. Thresholds, the private patterns a public branch must not carry, and the
+journal lines that only mean "still waiting" live in `<hub>/sense.json`; a head may add its own
+patterns as its `private` attribute. With no private pattern declared every branch FAILS the
+checklist (nothing was checked), and `hub lint` names the head. What each sensor last raised is
+published as `sense.<node>.json`, and `hub board` shows it on the track. A `hub` that cannot even
+load exits 3 for `hub sense`, never 1.
 
 ### The board — every track on one screen
 `hub board` (and the Tracks view of `hub serve`) is the owner's screen: per track, each role's state,
