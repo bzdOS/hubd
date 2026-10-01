@@ -1,6 +1,7 @@
 /* doctor.mjs — `hub doctor`: every check a human runs against a hub, with its reason printed.
  *
- * Read-only apart from what any hub run does (ensureProtocol, the .gitignore lines). Each block
+ * Read-only: it runs as a read-only command (cli.mjs), so it reports what it finds and writes
+ * nothing, not even what a writing command would repair in passing. Each block
  * prints what it found and counts a warning only for what is wrong in THIS hub now; the exit code
  * is the warning count, so a shell or CI step can gate on it.
  *
@@ -12,7 +13,7 @@ import path from 'node:path';
 import {
   HUB, HUB_VIA, PROJ, RESOURCES, VERSION, now, parseTs, sh, projectAliases, loadTasks, loadClaims,
   activeClaims, journalFiles, taskEventFiles, journalNodeOf, taskEventNodeOf, writerVersions,
-  cmpVersion, envChecks, runPresence, runGraph, gitignoreAddedThisRun, trackedNodeLocal, readFreeze,
+  cmpVersion, envChecks, runPresence, runGraph, unignoredNodeLocal, gitignoreMissing, trackedNodeLocal, readFreeze,
   rulesFilePath, readJson,
 } from './core.mjs';
 import { conflictedFiles } from './conflicts.mjs';
@@ -175,8 +176,8 @@ export function meshStatus() {
  *
  * Only real participants are judged — a node that has never committed here is an absorbed log or a
  * legacy name, not a machine that went quiet — and only while the mesh itself is moving, so a
- * weekend when nobody worked does not light up every row. Case-insensitive, because mesh-sync takes
- * the raw hostname ("Pine") and the file names take the normalised one ("pine"). */
+ * weekend when nobody worked does not light up every row. Case-insensitive, because mesh-sync took
+ * the raw hostname ("Pine") before it normalised it, and those commits are still in the history. */
 export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
   if (!fs.existsSync(path.join(HUB, '.git'))) return [];
   const last = new Map();                       // node (lowercased) -> newest commit ISO
@@ -451,12 +452,19 @@ export function runDoctor() {
     console.log('  hub unfreeze' + (stale ? '   — longer than any operation should take; if the work is done, unfreeze' : ''));
   }
 
-  // Node-local files: the lines this run added to .gitignore, and the ones git tracks anyway (an
-  // ignore line does not untrack a file, so those still travel).
+  // Node-local files: the ones nothing ignores on this node, the lines only this node's exclude file
+  // has, and the ones git tracks anyway (an ignore line does not untrack a file, so those still travel).
   {
-    const added = gitignoreAddedThisRun(), tracked = trackedNodeLocal();
-    if (added.length || tracked.length) console.log('');
-    if (added.length) console.log('gitignore: added ' + added.join(' ') + ' — node-local, must not travel by mesh-sync');
+    const loose = unignoredNodeLocal(), missing = gitignoreMissing(), tracked = trackedNodeLocal();
+    if (loose.length || missing.length || tracked.length) console.log('');
+    if (loose.length) {
+      warnings++;
+      console.log('gitignore: NOT IGNORED here  WARNING — ' + loose.join(' ') + ' — a git add -A (mesh-sync runs one) would commit them');
+      console.log('  the next writing hub command adds them to .git/info/exclude: this node only, never synced');
+    } else if (missing.length) {
+      console.log('gitignore: ' + missing.join(' ') + ' ignored by .git/info/exclude only — `hub init ' + HUB + '` adds them to .gitignore');
+      console.log('  for every node; that is a tracked change, so make it on one node, not on all of them at once');
+    }
     if (tracked.length) {
       warnings++;
       console.log('gitignore: TRACKED anyway  WARNING — ' + tracked.join(' ') + ' travel to every peer on each sync');
@@ -717,7 +725,7 @@ export function runDoctor() {
     }
   }
 
-  // protocol: HUBD.md is (re)materialised by ensureProtocol() on every hub run; surface its version
+  // protocol: HUBD.md is (re)materialised by ensureProtocol() on every writing hub run; surface its version
   {
     const pv = (() => { try { return (fs.readFileSync(path.join(HUB, 'HUBD.md'), 'utf8').match(/hubd-protocol v([0-9][0-9A-Za-z.\-]*)/) || [])[1]; } catch { return null; } })();
     console.log('');

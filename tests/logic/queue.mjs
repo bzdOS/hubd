@@ -1,7 +1,7 @@
 // queue.mjs — queues: depth, buttons, ghosts, task refs, the ledger, spellings, a role's work, two readers, acks, the CLI
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done } from './_h.mjs';
 
 // ── queue-depth peek: non-consuming, mesh-safe ──
@@ -24,7 +24,7 @@ fs.rmSync(qRoot1, { recursive: true, force: true });
 
 // ── queueSummaryForBrief: cross-references presence, drops idle/unknown roles ──
 const qRoot2 = mktmp();
-core.setHubBase(qRoot2);
+core.setHubBase(qRoot2); core.ensureHubDirs();
 fs.mkdirSync(path.join(qRoot2, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(qRoot2, 'queues', 'busyrole.node1.queue.md'), '\n## 2026-02-02 09:00 · from orchestrator\nsomething\n');
 fs.writeFileSync(path.join(qRoot2, 'queues', 'idlerole.node1.queue.md'), '');   // exists, nothing pending, no presence -> dropped
@@ -36,7 +36,7 @@ fs.rmSync(qRoot2, { recursive: true, force: true });
 
 // ── buttons: owner-roles.json + queue-depth isButton/ageDays + buttonsSummary ──
 const btnRoot1 = mktmp();
-core.setHubBase(btnRoot1);
+core.setHubBase(btnRoot1); core.ensureHubDirs();
 ok(core.ownerRoles().length === 0, 'ownerRoles: empty by default (no owner-roles.json)');
 fs.writeFileSync(path.join(btnRoot1, 'owner-roles.json'), JSON.stringify(['alice', 42, '', 'boss']));
 ok(JSON.stringify(core.ownerRoles()) === JSON.stringify(['alice', 'boss']), `ownerRoles: reads the file, drops non-string/empty entries (got ${JSON.stringify(core.ownerRoles())})`);
@@ -107,7 +107,7 @@ fs.rmSync(btnRoot1, { recursive: true, force: true });
  * The spec was aimed at the owner queue. Measured, that queue was empty; 31 of 143 open tasks
  * belonged to the owner, oldest 80 days, four past deadline. Different surface, same rot. */
 const owRoot = mktmp();
-core.setHubBase(owRoot);
+core.setHubBase(owRoot); core.ensureHubDirs();
 fs.writeFileSync(path.join(owRoot, 'owner-roles.json'), JSON.stringify(['boss']));
 const owToday = '2026-06-10';
 const owTasks = [
@@ -132,7 +132,7 @@ fs.rmSync(owRoot, { recursive: true, force: true });
 
 /* ── LR: the two card checks, and the review that carries them ── */
 const lrRoot = mktmp();
-core.setHubBase(lrRoot);
+core.setHubBase(lrRoot); core.ensureHubDirs();
 fs.writeFileSync(path.join(lrRoot, 'projects', 'titleonly.md'), '# titleonly v1\n');
 fs.writeFileSync(path.join(lrRoot, 'projects', 'nodigest.md'),
   '# nodigest\n\n## Next step\nsomething real\n\n## Gates\nby 2026-01-01\n');
@@ -191,7 +191,7 @@ fs.writeFileSync(path.join(QG, 'queues', 'boss.n1.queue.md'), oldMsg);
 fs.mkdirSync(path.join(QG, '.qstate', '__watchall__'), { recursive: true });
 fs.writeFileSync(path.join(QG, '.qstate', '__watchall__', 'tapped.n1.queue.md.offset'), '5');
 fs.writeFileSync(path.join(QG, 'queues', 'tapped.n1.queue.md'), oldMsg);
-core.setHubBase(QG);   // ownerRoles() reads HUB
+core.setHubBase(QG); core.ensureHubDirs();   // ownerRoles() reads HUB
 const inv = queueLib.queueInventory({ root: QG, days: 30 });
 const byFile = Object.fromEntries(inv.map(x => [x.file, x]));
 ok(byFile['ghost.n1.queue.md'].ghost === true, 'queue gc: a never-consumed old queue is a ghost');
@@ -331,6 +331,25 @@ ok(/still writes to the mesh/.test(core.shardHold('n1', 2, liveSet)) && core.sha
   core.shardHold('gone', 2, liveSet) === null && core.shardHold(null, 2, liveSet) === null && /no message/.test(core.shardHold('cedar', 0, liveSet)) &&
   core.shardHold('n1', 2, null) === null,
   'shardHold: a live node\'s shard is held; this node\'s (any case), a gone node\'s, a node-less one move; an empty one never');
+/* A node is live by its own files, whatever name its commits carry: mesh-sync commits under the
+ * hostname unless HUBD_NODE is set where it runs. Node pine syncs as "pine-box", has no presence
+ * snapshot, and wrote its journal today; node gone wrote its last line two months ago. */
+{
+  const prevHub = core.HUB, LM = mktmp();
+  execSync('git init -q', { cwd: LM });
+  core.setHubBase(LM); core.ensureHubDirs(); fs.mkdirSync(path.join(LM, 'queues'));
+  const line = (ts) => JSON.stringify({ ts, project: 'p', agent: 'a', kind: 'note', text: 'x' }) + '\n';
+  fs.writeFileSync(path.join(LM, 'journal.pine.jsonl'), line('2026-01-01 10:00') + line(core.now()));
+  fs.writeFileSync(path.join(LM, 'journal.gone.jsonl'), line('2026-01-01 10:00'));
+  fs.writeFileSync(path.join(LM, 'queues', 'ghost.pine.queue.md'), '## 2026-01-01 10:00 · from x\n\nold\n');
+  fs.writeFileSync(path.join(LM, 'queues', 'recent.fir.queue.md'), `## ${core.now()} · from x\n\nnew\n`);
+  execSync('git add -A && git -c user.name=pine-box -c user.email=m@m commit -q -m seed', { cwd: LM });
+  const lm = core.liveMeshNodes({ root: LM, days: 30 });
+  ok(lm.has('pine') && lm.has('fir') && !lm.has('gone'),
+    `liveMeshNodes: a node whose journal or a queue shard of its name has a recent stamp is live, one whose newest line is old is not (${[...lm].sort()})`);
+  ok(/still writes to the mesh/.test(core.shardHold('pine', 1, lm)), 'liveMeshNodes: so the idle shard of a live node under another commit name is held');
+  core.setHubBase(prevHub);
+}
 const gcRun = queueLib.runQueueGc({ root: QG, days: 30, apply: true });
 ok(gcRun.moved.sort().join() === 'ghost.cedar.queue.md,ghost.n1.queue.md,tapped.n1.queue.md' && !fs.existsSync(path.join(QG, 'queues', 'ghost.cedar.queue.md')) &&
   fs.existsSync(path.join(QG, 'queues', 'hollow.cedar.queue.md')),
@@ -345,7 +364,7 @@ ok(queueLib.queueSummaryForBrief({ root: QG }).find(r => r.role === 'live').neve
 // ── a queue message can say which task it is about ──
 const QT = mktmp();
 fs.mkdirSync(path.join(QT, 'queues'), { recursive: true });
-core.setHubBase(QT);
+core.setHubBase(QT); core.ensureHubDirs();
 queueLib.queueSend('worker', 'HOLD: waiting on the owner', { from: 'dev-t', root: QT, task: 'pine-3', node: 'n1' });
 queueLib.queueSend('worker', 'unrelated', { from: 'dev-t', root: QT, node: 'n1' });
 const qtText = fs.readFileSync(path.join(QT, 'queues', 'worker.n1.queue.md'), 'utf8');
@@ -367,7 +386,7 @@ if (process.getuid && process.getuid() !== 0) {
   const QS = mktmp();
   fs.mkdirSync(path.join(QS, 'queues'), { recursive: true });
   fs.mkdirSync(path.join(QS, '.qstate'), { recursive: true });
-  core.setHubBase(QS);
+  core.setHubBase(QS); core.ensureHubDirs();
   queueLib.queueSend('stuck', 'order one', { from: 'orch', root: QS, node: 'n1' });
   ok((await queueLib.queueWait('stuck', { timeout: 0, root: QS })).changed, 'stall: setup — the first order is delivered normally');
   queueLib.queueSend('stuck', 'order two, sent while the cursor is read-only', { from: 'orch', root: QS, node: 'n1' });
@@ -400,7 +419,7 @@ if (process.getuid && process.getuid() !== 0) {
 const QL = mktmp();
 fs.mkdirSync(path.join(QL, 'queues'), { recursive: true });
 fs.mkdirSync(path.join(QL, '.qstate'), { recursive: true });
-core.setHubBase(QL);
+core.setHubBase(QL); core.ensureHubDirs();
 queueLib.queueSend('w', 'one', { from: 'dev-t', root: QL, node: 'hostA' });
 // multi-byte on purpose (— is 3 bytes, · is 2): a cursor counts BYTES, so slicing the file as
 // a JS string instead of a Buffer would miscount delivered/pending on any non-ASCII message.
@@ -472,7 +491,7 @@ ok(qcW.length === 1,
 
 // ── a role's queue as a view on its tasks ──
 const WK = mktmp();
-core.setHubBase(WK);
+core.setHubBase(WK); core.ensureHubDirs();
 {
   fs.mkdirSync(path.join(WK, 'queues'), { recursive: true });
   const a1 = core.runTaskAdd({ project: 'p', text: 'first job\nwith a brief', assignee: 'w1', importance: 'high', by: 'dev-t' }).task.id;
@@ -514,11 +533,11 @@ core.setHubBase(WK);
   const cli = run(`queue work w1 --json`, { HUBD_DIR: WK, HUBD_TEAM_DIR: WK, HUBD_NODE: 'n1' });
   ok(cli.code === 0 && JSON.parse(cli.out).offered.includes(a1), 'work: hub queue work reads the view without waiting');
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── two readers of one work queue, across nodes ──
 const RD = mktmp();
-core.setHubBase(RD);
+core.setHubBase(RD); core.ensureHubDirs();
 {
   core.runResourceSet({ slug: 'rw', type: 'role', attrs: { rank: 'worker', project: 'p' }, by: 'dev-t' });
   core.runHeartbeat({ agent: 'rw', role: 'rw' });
@@ -533,7 +552,7 @@ core.setHubBase(RD);
   fs.writeFileSync(path.join(RD, 'subscriber-roles.json'), '["rw"]');
   ok(!core.queueReaderConflicts().length, 'readers: a broadcast role has many readers by design');
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── acks: an acked block leaves the unacked list, and id 1 is not id 12 ──
 const AK = mktmp();

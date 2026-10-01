@@ -373,8 +373,9 @@ export class QueueStalled extends Error {
 export function cursorStalls(stateDir, files) {
   const out = [];
   try {
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.accessSync(stateDir, fs.constants.W_OK);
+    // A state dir not there yet is judged by its parent: the first read that needs it creates it,
+    // and this check must not (hub doctor and a dry hub queue gc call it, and they write nothing).
+    fs.accessSync(fs.existsSync(stateDir) ? stateDir : path.dirname(stateDir), fs.constants.W_OK);
   } catch (e) { return [{ file: stateDir, code: e.code || 'EACCES' }]; }
   for (const f of files) {
     const offFile = path.join(stateDir, `${f}.offset`);

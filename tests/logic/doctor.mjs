@@ -47,7 +47,7 @@ fs.rmSync(T4, { recursive: true, force: true });
  * a 200-line window and called two June-era lines at the head of a 58-line log "happening NOW",
  * because the whole file fitted inside the window. */
 const ML = mktmp();
-core.setHubBase(ML);
+core.setHubBase(ML); core.ensureHubDirs();
 const mlGood = (n) => Array.from({ length: n }, (_, i) =>
   JSON.stringify({ ts: '2026-08-0' + (1 + (i % 9)) + '10:00', project: 'p', agent: 'dev-t', kind: 'note', text: 'ok' + i })).join('\n');
 // Torn line at the HEAD, 30 good entries after it: the writer plainly recovered.
@@ -80,7 +80,7 @@ fs.rmSync(ML, { recursive: true, force: true });
  * a time from hub_report, with nothing to rotate it. */
 {
   const CL = mktmp();
-  core.setHubBase(CL);
+  core.setHubBase(CL); core.ensureHubDirs();
   // ACCEPTANCE (from the task): a 70 KB digest must be refused.
   let thrown = null;
   try { core.runCardSet({ project: 'big', digest: 'x'.repeat(70000), by: 'dev-t' }); } catch (e) { thrown = e.message; }
@@ -152,7 +152,7 @@ fs.rmSync(ML, { recursive: true, force: true });
   commitAs('Pine', 'journal.pine.jsonl', iso(30));     // raw hostname vs normalised file name
   commitAs('fir', 'journal.fir.jsonl', iso(0.2));
   fs.writeFileSync(path.join(MN, 'journal.pine-agent.jsonl'), '{}\n');   // absorbed: never a committer
-  core.setHubBase(MN);
+  core.setHubBase(MN); core.ensureHubDirs();
   const quiet = doc.meshNodes({ staleHours: 6 });
   ok(quiet.length === 1 && quiet[0].node === 'pine' && quiet[0].ageHours >= 29,
     `mesh peers: the node that stopped pushing is named, matched across hostname case (got ${JSON.stringify(quiet)})`);
@@ -167,7 +167,7 @@ fs.rmSync(ML, { recursive: true, force: true });
   fs.writeFileSync(path.join(MN2, 'journal.pine.jsonl'), '{}\n');
   git2('add -A');
   git2('-c user.name=Pine -c user.email=x@x commit -q -m sync', { GIT_COMMITTER_DATE: iso(200), GIT_AUTHOR_DATE: iso(200) });
-  core.setHubBase(MN2);
+  core.setHubBase(MN2); core.ensureHubDirs();
   ok(doc.meshNodes({ staleHours: 6 }).length === 0,
     'mesh peers: a mesh where NOBODY has committed lately is a quiet week, not a stuck node');
   for (const d of [MN, MN2]) fs.rmSync(d, { recursive: true, force: true });
@@ -181,7 +181,7 @@ fs.rmSync(ML, { recursive: true, force: true });
   const FL = mktmp();
   fs.mkdirSync(path.join(FL, 'queues'), { recursive: true });
   fs.writeFileSync(path.join(FL, 'subscriber-roles.json'), JSON.stringify(['head']));
-  core.setHubBase(FL);
+  core.setHubBase(FL); core.ensureHubDirs();
   queueLib.queueSend('head', 'one', { from: 'orch', root: FL, node: 'n1' });
   queueLib.queueSend('head', 'two', { from: 'orch', root: FL, node: 'n1' });
   await queueLib.queueWait('head', { timeout: 0, root: FL, subscriber: 'reader-a' });    // reads both
@@ -208,33 +208,48 @@ if (process.getuid && process.getuid() !== 0) {
   for (const d of [SH, path.join(SH, 'queues'), path.join(SH, '.qstate')]) fs.chmodSync(d, 0o770);
   fs.chmodSync(PV, 0o700); fs.chmodSync(path.join(PV, 'queues'), 0o700);
   const groupRW = (f) => (fs.statSync(f).mode & 0o060) === 0o060;
-  core.setHubBase(SH);
+  core.setHubBase(SH); core.ensureHubDirs();
   queueLib.queueSend('w', 'an order', { from: 'orch', root: SH, node: 'n1' });
   await queueLib.queueWait('w', { timeout: 0, root: SH });
   core.journalAppend({ ts: core.now(), project: 'p', agent: 'dev-t', kind: 'note', text: 'x' });
   ok(groupRW(path.join(SH, 'queues', 'w.n1.queue.md')), 'shared hub: a queue file is group-writable');
   ok(groupRW(path.join(SH, '.qstate', 'w.n1.queue.md.offset')), 'shared hub: so is the cursor — the file the stall was about');
   ok(groupRW(core.JOURNAL), 'shared hub: so is the journal this node appends to');
-  core.setHubBase(PV);
+  core.setHubBase(PV); core.ensureHubDirs();
   queueLib.queueSend('w', 'an order', { from: 'orch', root: PV, node: 'n1' });
   ok(!groupRW(path.join(PV, 'queues', 'w.n1.queue.md')), 'private hub: modes are left exactly as the umask made them');
   for (const d of [SH, PV]) fs.rmSync(d, { recursive: true, force: true });
 }
 
-// ── node-local files stay node-local: the hub's .gitignore is completed, not only created ──
+// ── node-local files stay node-local, through .git/info/exclude: it never travels, so no two nodes
+// append different lines to a tracked file; the shared .gitignore is completed by `hub init` only ──
 const GI = mktmp();
 {
+  const gEnv = { HUBD_DIR: GI, HUBD_TEAM_DIR: GI };
   fs.writeFileSync(path.join(GI, '.gitignore'), 'node_modules/\n');
-  const fr = run('freeze "testing the ignore lines" --by dev-t', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  execSync('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed', { cwd: GI, stdio: 'pipe' });
+  const exclude = path.join(GI, '.git', 'info', 'exclude');
+  const d0 = run('doctor', gEnv);
+  ok(/NOT IGNORED here {2}WARNING — .*\.mesh-freeze/.test(d0.out), 'doctor: a node-local file nothing ignores here is a warning');
+  const fr = run('freeze "testing the ignore lines" --by dev-t', gEnv);
+  const ex = fs.readFileSync(exclude, 'utf8');
+  ok(fr.code === 0 && /^\.mesh-freeze$/m.test(ex) && /^\.qstate\/$/m.test(ex) && /^presence\/$/m.test(ex) && /^\.checkins\.json$/m.test(ex),
+    'gitignore: freeze puts the node-local lines in .git/info/exclude (presence/ with its slash, .checkins.json)');
+  ok(fs.readFileSync(path.join(GI, '.gitignore'), 'utf8') === 'node_modules/\n', 'gitignore: and leaves the tracked .gitignore byte for byte as it was');
+  run('unfreeze', gEnv);
+  const d1 = run('doctor', gEnv);
+  ok(!/NOT IGNORED/.test(d1.out) && /ignored by \.git\/info\/exclude only — `hub init /.test(d1.out),
+    'doctor: lines only the exclude file has are a note pointing at hub init, not a warning');
+  run('init ' + GI, gEnv);
   const gi = fs.readFileSync(path.join(GI, '.gitignore'), 'utf8');
-  ok(fr.code === 0 && /^\.mesh-freeze$/m.test(gi) && /^\.qstate\/$/m.test(gi) && /^node_modules\/$/m.test(gi), 'gitignore: an existing .gitignore gets the node-local lines it lacked, its own kept');
-  run('unfreeze', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
-  execSync('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed && echo "{}" > .mesh-freeze && git add -f .mesh-freeze && git -c user.name=t -c user.email=t@t commit -q -m oops && rm .mesh-freeze', { cwd: GI, stdio: 'pipe' });
-  const doc = run('doctor', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  ok(/^node_modules\/$/m.test(gi) && /^\.mesh-freeze$/m.test(gi) && /^\.qstate\/$/m.test(gi), 'gitignore: hub init completes the shared .gitignore, its own lines kept');
+  ok(!/exclude only/.test(run('doctor', gEnv).out), 'doctor: and then has nothing to say about it');
+  execSync('echo "{}" > .mesh-freeze && git add -f .mesh-freeze && git -c user.name=t -c user.email=t@t commit -q -m oops && rm .mesh-freeze', { cwd: GI, stdio: 'pipe' });
+  const doc = run('doctor', gEnv);
   ok(/TRACKED anyway {2}WARNING — \.mesh-freeze/.test(doc.out), 'doctor: a node-local file git tracks anyway is a warning, with how to untrack it');
-  const fr2 = run('freeze "again" --by dev-t', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  const fr2 = run('freeze "again" --by dev-t', gEnv);
   ok(/WARNING: \.mesh-freeze is TRACKED/.test(fr2.out), 'freeze: says so when its marker would travel with a hand-made commit');
-  run('unfreeze', { HUBD_DIR: GI, HUBD_TEAM_DIR: GI });
+  run('unfreeze', gEnv);
 }
 
 // ── doctor on a fresh team is ok; a stale lock and a cursor past the end are warnings ──

@@ -367,8 +367,11 @@ nothing; `hub gc --apply --by <you>` archives it in one commit. A node moves onl
 (`<role>.<its node>.queue.md`) and the ones with no writer left — a node that no longer writes to
 the mesh, a file with no node in its name — never another live node's (its writer would be left
 with a conflict) and never an empty file; `hub gc` lists those as left where they are, with why.
-Every hub run completes the hub's `.gitignore` with the node-local lines it lacks (`.mesh-freeze`,
-`.qstate/`, `presence/`...), and `hub doctor` warns about any that git tracks anyway.
+Node-local files (`.mesh-freeze`, `.qstate/`, `presence/`, locks, the task cache...) are ignored
+through `.git/info/exclude`, which every writing command completes and which never travels; the
+tracked `.gitignore` is completed only by `hub init`, once, on one node. A command that only reads
+(`hub status`, `hub doctor`, a dry `hub gc`) writes nothing at all. `hub doctor` warns about a
+node-local file nothing ignores, or one git tracks anyway.
 
 ### Work mode — your queue as your tasks
 Orders and tasks are two stores, and work falls between them: an order read by a turn that did

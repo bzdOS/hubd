@@ -84,7 +84,12 @@ if [ -f "$DIR/.mesh-freeze" ]; then
 fi
 [ -d .git ] || { echo "mesh-sync: $DIR is not a git repo" >&2; exit 1; }
 
-NODE="$(hostname 2>/dev/null | cut -d. -f1)"; [ -n "$NODE" ] || NODE=node
+# The name this node's commits carry: HUBD_NODE when set, else the hostname, normalised exactly as
+# hubd normalises it for journal.<node>.jsonl, so a peer reading the history and one reading the
+# file names mean the same node. A raw hostname ("Pine") and a HUBD_NODE that differs from it both
+# used to put one node under two names.
+NODE="$(printf '%s' "${HUBD_NODE:-$(hostname 2>/dev/null)}" | cut -d. -f1 | tr '[:upper:]' '[:lower:]' \
+  | sed -e 's/[^a-z0-9_-][^a-z0-9_-]*/-/g' -e 's/^-*//' -e 's/-*$//' | cut -c1-40)"; [ -n "$NODE" ] || NODE=node
 BR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; [ -n "$BR" ] || BR=main
 STAMP="$(date -u '+%Y-%m-%d %H:%M')"
 

@@ -64,7 +64,7 @@ fs.rmSync(T0, { recursive: true, force: true });
 // canonical task regardless of its own numbering history. HUBD_NODE is fixed to
 // 'cedar' for every file here (_h.mjs sets it before the engine loads).
 const originRoot = mktmp();
-core.setHubBase(originRoot);
+core.setHubBase(originRoot); core.ensureHubDirs();
 const originTs1 = '2026-01-01 10:00', originTs2 = '2026-01-01 10:01';
 fs.writeFileSync(path.join(originRoot, 'tasks.peer.events.jsonl'),
   JSON.stringify({ ts: originTs1, node: 'peer', ev: 'add', id: 7, t: { id: 7, project: 'x', text: 'peer task', status: 'open' } }) + '\n');
@@ -84,7 +84,7 @@ fs.rmSync(originRoot, { recursive: true, force: true });
 // (root-cause fix; #191's origin-keying stays as a symptom-patch for legacy
 // bare-numeric ids, which are left completely alone here.)
 const idRoot1 = mktmp();
-core.setHubBase(idRoot1);
+core.setHubBase(idRoot1); core.ensureHubDirs();
 fs.writeFileSync(path.join(idRoot1, 'tasks.pine.events.jsonl'),
   JSON.stringify({ ts: '2026-01-01 09:00', node: 'pine', ev: 'add', id: 'pine-1', t: { id: 'pine-1', project: 'x', text: 'pine task A', status: 'open' } }) + '\n' +
   JSON.stringify({ ts: '2026-01-01 09:01', node: 'pine', ev: 'add', id: 'pine-2', t: { id: 'pine-2', project: 'x', text: 'pine task B', status: 'open' } }) + '\n');
@@ -118,7 +118,7 @@ fs.rmSync(idRoot1, { recursive: true, force: true });
 // ── errors must name what the caller got wrong ────────────────────────────────
 // Each of these fired against the real hub and told the caller nothing actionable.
 const TE = mktmp();
-core.setHubBase(TE);
+core.setHubBase(TE); core.ensureHubDirs();
 const threw = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
 
 const mSyncNone = threw(() => core.runSync({ agent: 't' }));
@@ -147,7 +147,7 @@ ok(!/default 170/.test(idxSrc), 'queue wait: schema no longer advertises 170s');
 // property and runTaskUpdate applied only status/text/deadline/cat/assignee, so the
 // call returned ok and changed nothing.
 const TI = mktmp();
-core.setHubBase(TI);
+core.setHubBase(TI); core.ensureHubDirs();
 const tImp = core.runTaskAdd({ project: 'p', text: 'reprioritise me', importance: 'normal', by: 't' });
 ok(tImp.task.importance === 'normal', 'task add: importance recorded');
 const upImp = core.runTaskUpdate({ id: tImp.task.id, importance: 'high', by: 't' });
@@ -158,7 +158,7 @@ fs.rmSync(TI, { recursive: true, force: true });
 
 // ── closing a closed task is a no-op, not a second close ──
 const ID = mktmp();
-core.setHubBase(ID);
+core.setHubBase(ID); core.ensureHubDirs();
 const idT = core.runTaskAdd({ project: 'p', text: 'close me twice', by: 'dev-t' }).task;
 const close1 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'dev-t' });
 const close2 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'other-t' });
@@ -219,7 +219,7 @@ ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a s
 
 // ── one task by id, and a miss that points somewhere ──
 const GT = mktmp();
-core.setHubBase(GT);
+core.setHubBase(GT); core.ensureHubDirs();
 const gtA = core.runTaskAdd({ project: 'p', text: 'the dependency', by: 'dev-t' }).task;
 const gtB = core.runTaskAdd({ project: 'p', text: 'the dependent', depends_on: [gtA.id], by: 'dev-t' }).task;
 const got = core.runTaskGet({ id: gtB.id });
@@ -247,7 +247,7 @@ ok(!core.runTaskUpdate({ id: rhTask2.id, status: 'done', by: 'dev-t' }).resource
 
 // ── a renamed project stops holding two separate backlogs ──
 const AL = mktmp();
-core.setHubBase(AL);
+core.setHubBase(AL); core.ensureHubDirs();
 core.runTaskAdd({ project: 'acme', text: 'written under the old slug', by: 'dev-t' });
 fs.writeFileSync(path.join(AL, 'project-aliases.json'), '{"acme": "acme-io"}');
 const alNew = core.runTaskAdd({ project: 'acme', text: 'written after the alias', by: 'dev-t' }).task;
@@ -265,7 +265,7 @@ ok(core.canonProject('a') === 'b' || core.canonProject('a') === 'a', 'alias: a c
 
 // ── one next thing, and the day split by who can act ──
 const NX = mktmp();
-core.setHubBase(NX);
+core.setHubBase(NX); core.ensureHubDirs();
 fs.writeFileSync(path.join(NX, 'owner-roles.json'), '["alice"]');
 const nxDep = core.runTaskAdd({ project: 'p', text: 'the prep', by: 'dev-t' }).task;
 const nxBlocked = core.runTaskAdd({ project: 'p', text: 'loud but blocked', importance: 'high', depends_on: [nxDep.id], by: 'dev-t' }).task;
@@ -294,7 +294,7 @@ ok(ag.counts.agentReady + ag.counts.ownerButtons + ag.counts.blocked === nxAll,
 // invariant set/del rely on: in the live base 1034 of 1507 tasks were copies born this way, and
 // closing one of eleven siblings left the other ten unreachable forever.
 const RP = mktmp();
-core.setHubBase(RP);
+core.setHubBase(RP); core.ensureHubDirs();
 const dupAdd = JSON.stringify({ ts: '2026-07-07 09:20', node: 'pine', ev: 'add', id: 7,
   t: { id: 7, project: 'p', text: 'replayed', status: 'open' } });
 fs.writeFileSync(path.join(RP, 'tasks.aaa.events.jsonl'),   // takes id 7 first, from another node
@@ -338,14 +338,14 @@ ok(crossFold.find(t => t._origin.node === 'pine').text === 'cross-node origin wr
 ok(crossFold.find(t => t.id === 7).text === 'legacy-write',
   'fold: and it leaves the task merely holding that number alone');
 fs.rmSync(RP, { recursive: true, force: true });
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── the journal says WHAT changed on a task, not merely that something did ──
 // "~ task #N → edited" made the most useful event in a coordination log (somebody took this
 // task) indistinguishable from a typo fix in its text. Found while filming the kanban: the live
 // activity line for an assignment read "edited".
 const JW = mktmp();
-core.setHubBase(JW);
+core.setHubBase(JW); core.ensureHubDirs();
 const jwT = core.runTaskAdd({ project: 'p', text: 'the work', by: 'dev-t' }).task;
 core.runTaskUpdate({ id: jwT.id, assignee: 'dev-atlas', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, importance: 'high', deadline: '2026-12-01', by: 'lead-t' });
@@ -371,7 +371,7 @@ ok(!jwLines.some(l => /→ done/.test(l)),
   'journal: and the close is recorded once, not as both a done entry and an echo line');
 ok(!jwLines.some(l => /→ edited$/.test(l)), 'journal: nothing falls back to the useless word');
 fs.rmSync(JW, { recursive: true, force: true });
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── a cache folded by a buggy fold must not outlive the fix ───────────────────
 /* tasks.json is rebuilt when it is older than the newest event file, which can only ever notice
@@ -380,7 +380,7 @@ core.setHubBase(T0);
  * and keeps being served as fact. On the hub 0.9.2 was found on, `hub doctor` still reported
  * "977 open" after the phantom-task fix shipped — the corrected fold said 154. */
 const FV = mktmp();
-core.setHubBase(FV);
+core.setHubBase(FV); core.ensureHubDirs();
 const fvEvents = path.join(FV, 'tasks.pine.events.jsonl');
 fs.writeFileSync(fvEvents, JSON.stringify({ ts: '2026-08-03 09:00', node: 'pine', ev: 'add', id: 'pine-1',
   t: { id: 'pine-1', project: 'p', text: 'real task', status: 'open' } }) + '\n');

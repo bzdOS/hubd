@@ -21,7 +21,7 @@ fs.rmSync(T1, { recursive: true, force: true });
 
 // ── hub gc: list by class, archive by moving, one commit mesh-sync accepts ──
 const HG = mktmp();
-core.setHubBase(HG);
+core.setHubBase(HG); core.ensureHubDirs();
 {
   const gc = await import(path.join(REPO, 'hub/lib/gc.mjs'));
   const sh0 = (c, cwd) => execSync(c, { cwd, stdio: 'pipe' }).toString();
@@ -79,6 +79,6 @@ core.setHubBase(HG);
   rc = 0; try { execSync(`sh ${REPO}/scripts/mesh-sync.sh`, { env: { ...process.env, HUBD_DIR: HG }, stdio: 'pipe' }); } catch (e) { rc = e.status; }
   ok(rc === 4, `gc: while an rm of a queue is still refused (got ${rc})`);
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

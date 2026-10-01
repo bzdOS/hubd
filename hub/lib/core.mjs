@@ -76,12 +76,25 @@ export function setHubBase(dir) {
   TASKS = path.join(HUB, 'tasks.json');
   CLAIMS = path.join(HUB, 'claims.json');
   TASK_EVENTS = path.join(HUB, `tasks.${JOURNAL_NODE}.events.jsonl`);
-  fs.mkdirSync(PROJ, { recursive: true });
-  fs.mkdirSync(HISTORY, { recursive: true });
-  fs.mkdirSync(RESOURCES, { recursive: true });
-  fs.mkdirSync(PRESENCE, { recursive: true });
 }
 setHubBase(resolveHub());
+
+/* The hub's directories, made by whatever is about to write (ensureProtocol, the MCP server per
+ * tenant) — never by pointing at a base. setHubBase() used to create all four, so a CLI that only
+ * read — `hub gc --json`, `hub status` — left presence/ projects/ resources/ behind in a hub it had
+ * merely looked at. A reader copes with a directory that is not there; atomicWrite and the lock
+ * make the parent of what they write, so a writer that skipped this still lands. */
+export function ensureHubDirs() {
+  for (const d of [PROJ, HISTORY, RESOURCES, PRESENCE]) fs.mkdirSync(d, { recursive: true });
+}
+
+/* A CLI command that only reads turns this on before it runs (cli.mjs, the read-only table). The
+ * engine then skips the writes it would otherwise make in passing while reading: the task cache
+ * rebuilt by loadTasks(), the environment baseline. Both are derived files the next writing
+ * command makes again, so a read loses nothing by not making them. */
+let READ_ONLY = false;
+export function setReadOnly(on) { READ_ONLY = !!on; }
+export const isReadOnly = () => READ_ONLY;
 
 export const now = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 // Parse a stored "YYYY-MM-DD HH:MM" timestamp as UTC (the format now() writes).
@@ -141,12 +154,15 @@ function sleepMs(ms) {
 function acquireLock(file) {
   const lock = file + '.lock';
   const deadline = Date.now() + 2000;
+  let madeDir = false;
   while (Date.now() < deadline) {
     try {
       const fd = fs.openSync(lock, 'wx');
       fs.closeSync(fd);
       return lock;
     } catch (e) {
+      // the directory is made by the first write into it, not by pointing at the hub (ensureHubDirs)
+      if (e.code === 'ENOENT' && !madeDir) { madeDir = true; fs.mkdirSync(path.dirname(lock), { recursive: true }); continue; }
       if (e.code !== 'EEXIST') throw e;
       // Check for stale lock: if mtime > 30s old, treat as abandoned and steal it.
       try {
@@ -216,6 +232,7 @@ export function readJson(file, fallback = null) {
 
 export function atomicWrite(file, data) {
   const tmp = file + '.tmp.' + process.pid;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   try {
     fs.writeFileSync(tmp, typeof data === 'string' ? data : JSON.stringify(data, null, 1));
     fs.renameSync(tmp, file);
@@ -712,7 +729,7 @@ function newestEventMtime() {
 
 export function rebuildTaskCache() {
   const db = foldTasks();
-  atomicWrite(TASKS, { ...db, foldVersion: VERSION });
+  if (!READ_ONLY) atomicWrite(TASKS, { ...db, foldVersion: VERSION });
   return db;
 }
 
@@ -771,7 +788,10 @@ export function journalFiles() {
  * holding. */
 export function journalAppendPrivate(entry) {
   const target = path.join(HUB, 'journal.life.jsonl');
-  ensureGitignored('journal.life.jsonl');
+  // Private lines: ignored here whatever the shared .gitignore says. Only a hub that is not its own
+  // repository (a folder inside some other checkout) gets the line in .gitignore, since that is the
+  // one ignore file such a repository reads from the hub.
+  if (!ensureLocalIgnores()) ensureGitignored('journal.life.jsonl');
   withLock(target, () => { fs.appendFileSync(target, JSON.stringify({ ...entry, private: true }) + '\n'); });
   return target;
 }
@@ -813,8 +833,22 @@ export function journalAppend(entry) {
   });
 }
 
-/** Every journal entry, each node's repeated lines dropped (see readLogEntries), in file order. */
-export function* journalEntries() { for (const { e } of readLogEntries(journalFiles(), journalNodeOf)) yield e; }
+/* A month archive is rotated out of the live log DURING its month (journalAppend names it by the
+ * month it was cut in), so nothing in it is newer than that month's end. A reader with a cutoff
+ * after that never needs to open it: the board asked for seven days every 30 seconds and read and
+ * parsed every archive since the hub began, then threw all but a week away. The live log and any
+ * file not named like an archive can hold anything, so they are always read. */
+function journalFileEndMs(base) {
+  const m = /^journal\..+-(\d{4})-(\d{2})(?:\.\d+)?\.jsonl$/.exec(base);
+  return m ? Date.UTC(+m[1], +m[2], 1) : Infinity;    // month m[2] is 1-based: as an index, the next month
+}
+/** Every journal entry, each node's repeated lines dropped (see readLogEntries), in file order.
+ *  With `sinceMs`, month archives that end before it are not read (see journalFileEndMs); the
+ *  caller still filters by entry, since the files that are read hold older lines too. */
+export function* journalEntries(sinceMs = -Infinity) {
+  const files = journalFiles().filter(f => journalFileEndMs(path.basename(f)) > sinceMs);
+  for (const { e } of readLogEntries(files, journalNodeOf)) yield e;
+}
 
 /* A card's last touch: the `- synced:` line hub sync writes or the `- set:` line card-set writes,
  * with its author when the line names one. */
@@ -910,7 +944,7 @@ export function sparklineData() {
  * instant and drop the entry written in that very minute. */
 export function journalSinceMs(cutoff) {
   const all = [];
-  for (const e of journalEntries()) {
+  for (const e of journalEntries(cutoff)) {
     if (parseTs(e.ts).getTime() >= cutoff) all.push(e);
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge per-host files by time
@@ -1040,12 +1074,18 @@ export function findProjectDuplicates() {
  * A lint appears in `findings` whether or not it is enforced; `enforced` says which ones the
  * instance opted into, so "we have a rule about that" and "the rule bites" stay distinguishable.
  */
-/** Whether the hub-wide private patterns (sense.json -> private) name at least one pattern. */
+/** The patterns of a `private` value (a regex string or a list of them) that compile, as the
+ *  sensor compiles them: an invalid one is dropped there, so it must not count as declared here. */
+export function validPatterns(p) {
+  return (Array.isArray(p) ? p : [p]).filter(x => {
+    if (typeof x !== 'string' || !x) return false;
+    try { new RegExp(x, 'i'); return true; } catch { return false; }
+  });
+}
+/** Whether the hub-wide private patterns (sense.json -> private) hold at least one that compiles. */
 export function privatePatternsDeclared() {
-  try {
-    const p = (JSON.parse(fs.readFileSync(path.join(HUB, 'sense.json'), 'utf8')) || {}).private;
-    return Array.isArray(p) ? p.some(x => typeof x === 'string' && x) : typeof p === 'string' && !!p;
-  } catch { return false; }
+  try { return validPatterns((JSON.parse(fs.readFileSync(path.join(HUB, 'sense.json'), 'utf8')) || {}).private).length > 0; }
+  catch { return false; }
 }
 
 /* Two readers of one work queue, seen two ways.
@@ -1202,10 +1242,10 @@ export function runLint(a = {}) {
   if (roster.size) {
     const global = privatePatternsDeclared();
     for (const h of [...roster.values()].filter(r => r.rank === 'head' && r.status !== 'off' && r.attrs && r.attrs.repo)) {
-      if (global || h.attrs.private) continue;
+      if (global || validPatterns(h.attrs.private).length) continue;
       if (restrict && !(h.project && restrict.includes(h.project))) continue;
       findings.push({ id: 'private-check-undeclared', severity: 'high', role: h.role, project: h.project || undefined,
-        what: `head ${h.role} accepts branches of ${h.attrs.repo}, and no private patterns are declared — the sensor fails every branch until they are`,
+        what: `head ${h.role} accepts branches of ${h.attrs.repo}, and no private pattern that compiles is declared (an invalid regex is dropped) — the sensor fails every branch until one is`,
         fix: `declare them as data: "private": ["<regex>", ...] in the hub's sense.json (every head), or hub resource set ${h.role} --attr private='<regex>' --by <you> (this head)` });
     }
   }
@@ -1830,7 +1870,7 @@ export function ownerRoles() {
  * all of them at once. Same class as tasks.json and HUBD.md. */
 const envStateFile = () => path.join(HUB, '.env-state.json');
 function readEnvState() { return readJson(envStateFile(), {}); }
-function writeEnvState(obj) { try { atomicWrite(envStateFile(), JSON.stringify(obj, null, 1)); } catch {} }
+function writeEnvState(obj) { if (READ_ONLY) return; try { atomicWrite(envStateFile(), JSON.stringify(obj, null, 1)); } catch {} }
 /** The recorded environment observations, {kind: {values, at}} — read-only (hub gc prunes the stale ones). */
 export function envObservations() { return readEnvState().observations || {}; }
 
@@ -1865,7 +1905,7 @@ function shippedProtocol() {
  * agent should re-read: {from, titles} or null.
  *
  * The diff is against the last baseline stored for THIS NODE, not against the file
- * on disk. ensureProtocol runs on every CLI invocation, so the first `hub` call after
+ * on disk. ensureProtocol runs on every writing CLI invocation, so the first such call after
  * an upgrade already rewrote HUBD.md — a session starting a minute later would see no
  * difference at all. Storing the baseline also means deleting HUBD.md loses nothing.
  *
@@ -2032,14 +2072,23 @@ export function staleEnvSessions({ days = 7, apply = false } = {}) {
 }
 
 /* Everything in a hub that belongs to ONE node and must never travel by mesh-sync (which runs a
- * plain `git add -A`). One list: `hub init` writes it into a new .gitignore, and every hub run
- * completes an existing one with the lines it lacks.
+ * plain `git add -A`). One list, written to two places:
  *
- * "Completes" is the half that was missing. init used to write these lines only when it created
- * the file, so a hub made before a line existed never got it — and `.mesh-freeze` was such a line:
- * a manual `git add -A` in a frozen hub committed the marker, the next sync carried it to a peer,
- * and the peer froze too. A frozen node does not pull, so it could not receive the fix either. */
-export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/'];
+ *   .gitignore         — `hub init` creates it with these lines, or completes an existing one with
+ *                        the lines it lacks. Explicitly, and only there: the file is TRACKED.
+ *   .git/info/exclude  — completed by every writing command (ensureProtocol), by `hub freeze` and
+ *                        by the life braid. Untracked, so it never travels and never conflicts.
+ *
+ * The exclude file is the half that keeps a node safe. init used to write .gitignore only when it
+ * created it, so a hub made before a line existed never got it — and `.mesh-freeze` was such a
+ * line: a manual `git add -A` in a frozen hub committed the marker, the next sync carried it to a
+ * peer, and the peer froze too. The repair then went too far the other way: every hub run appended
+ * the lines .gitignore lacked, which is a change to a tracked file on a read — and on a mixed
+ * rollout two nodes appended different lines to the same end of the file, a content conflict that
+ * stops both syncs. Locks, tmp files and the task cache are here because `git add -A` would
+ * otherwise commit a live lock with everything else. */
+export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/',
+  'journal.life.jsonl', 'tasks.json', 'claims.json', '*.lock', '*.tmp.*'];
 
 /* `hub freeze`: the node-local marker scripts/mesh-sync.sh checks before every run. */
 export const freezeFile = () => path.join(HUB, '.mesh-freeze');
@@ -2048,17 +2097,47 @@ export function readFreeze() {
   if (!fs.existsSync(freezeFile())) return null;
   return readJson(freezeFile(), {});
 }
-const gitignoreAdded = [];
 function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
   let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
-  const esc = escRe(entry);
-  if (new RegExp('^' + esc + '$', 'm').test(g)) return false;
-  try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); gitignoreAdded.push(entry); return true; } catch { return false; }
+  if (new RegExp('^' + escRe(entry) + '$', 'm').test(g)) return false;
+  try { fs.appendFileSync(gi, (g && !g.endsWith('\n') ? '\n' : '') + entry + '\n'); return true; } catch { return false; }
 }
-export function ensureHubGitignore() { return HUB_GITIGNORE.filter(ensureGitignored); }
-/** The lines this process appended to the hub's .gitignore (hub doctor says so). */
-export function gitignoreAddedThisRun() { return [...new Set(gitignoreAdded)]; }
+/** The exclude file of the hub's OWN repository: null when the hub is not one (no .git directory
+ *  in it — a plain folder, or a folder inside another checkout, whose exclude is not the hub's). */
+function localExcludeFile() {
+  try { return fs.statSync(path.join(HUB, '.git')).isDirectory() ? path.join(HUB, '.git', 'info', 'exclude') : null; } catch { return null; }
+}
+const fileLines = (file) => { try { return fs.readFileSync(file, 'utf8').split('\n').map(l => l.trim()); } catch { return []; } };
+/** Add the node-local lines .git/info/exclude lacks. Returns the lines added ([] when none were
+ *  missing), or null when the hub is not its own repository and there is nothing to add them to. */
+export function ensureLocalIgnores() {
+  const ex = localExcludeFile();
+  if (!ex) return null;
+  const have = fileLines(ex);
+  const add = HUB_GITIGNORE.filter(e => !have.includes(e));
+  if (!add.length) return [];
+  let cur = ''; try { cur = fs.readFileSync(ex, 'utf8'); } catch {}
+  try {
+    fs.mkdirSync(path.dirname(ex), { recursive: true });
+    fs.appendFileSync(ex, (cur && !cur.endsWith('\n') ? '\n' : '') + add.join('\n') + '\n');
+  } catch { return []; }
+  return add;
+}
+/** Node-local lines that neither the shared .gitignore nor this node's exclude file has — what a
+ *  plain `git add -A` here would commit. Read-only; [] when the hub is not its own repository. */
+export function unignoredNodeLocal() {
+  const ex = localExcludeFile();
+  if (!ex) return [];
+  const have = [...fileLines(path.join(HUB, '.gitignore')), ...fileLines(ex)];
+  return HUB_GITIGNORE.filter(e => !have.includes(e));
+}
+/** Node-local lines the shared .gitignore lacks — `hub init` completes it, on purpose, once. */
+export function gitignoreMissing() {
+  if (!localExcludeFile()) return [];
+  const have = fileLines(path.join(HUB, '.gitignore'));
+  return HUB_GITIGNORE.filter(e => !have.includes(e));
+}
 /** Node-local paths that git TRACKS anyway — ignoring a file does not untrack it, so these travel
  *  whatever .gitignore says. */
 export function trackedNodeLocal() {
@@ -2066,30 +2145,16 @@ export function trackedNodeLocal() {
   return HUB_GITIGNORE.filter(e => sh(`git ls-files -- "${e.replace(/\/$/, '')}"`, HUB).trim());
 }
 
+/* What a writing command does to a hub before it runs: its directories, the node-local ignore
+ * lines in .git/info/exclude (HUB_GITIGNORE says why there and not .gitignore), and HUBD.md when
+ * the installed version changed. Read-only commands never call it (cli.mjs). It used to also unlink
+ * every .tmp.* older than a minute, which made `hub gc` list none: the dry run deleted them before
+ * looking. Stale tmp files are gc's litter class now, removed with --apply like the rest. */
 export function ensureProtocol(force) {
   try {
     fs.mkdirSync(HUB, { recursive: true });
-    ensureHubGitignore();   // HUBD.md, presence/, .sense/ (a head sensor's own state), the freeze marker...
-    /* The whatsnew checkpoints. The comment on runWhatsNew has claimed since it was written that
-     * this file is gitignored and never mesh-synced — and on the hub it was written against it was
-     * TRACKED, so every node's "what did I miss" checkpoint travelled to every other node and
-     * overwrote it. Plain JSON with no merge rule: adding a fourth node is what made the collision
-     * worth fixing rather than merely wrong. Losing a checkpoint costs one over-long whatsnew
-     * window per agent, which is the cheapest possible failure here. */
-    ensureGitignored('.checkins.json');
-    // Cleanup stale .tmp.<pid> files from crashed atomicWrite calls.
-    // Only touches files older than 60 seconds, so a currently-running
-    // atomicWrite on another process is never caught in the crossfire.
-    try {
-      const now = Date.now();
-      for (const f of fs.readdirSync(HUB)) {
-        if (!f.includes('.tmp.')) continue;
-        try {
-          const st = fs.statSync(path.join(HUB, f));
-          if (now - st.mtimeMs > 60000) fs.unlinkSync(path.join(HUB, f));
-        } catch {}
-      }
-    } catch {}
+    ensureHubDirs();
+    ensureLocalIgnores();
   } catch {}
   const body = shippedProtocol();
   if (body == null) return { ok: false };
@@ -2802,7 +2867,7 @@ export function runStatus(a = {}) {
   const staleDays = a.staleDays ?? 7;
   const lastJournal = lastJournalByProject();
   const db = loadTasks();
-  const files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md') && !RESERVED_CARDS.has(f.replace(/\.md$/, '')));
+  let files = []; try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md') && !RESERVED_CARDS.has(f.replace(/\.md$/, ''))); } catch {}
   const projects = files.map(f => {
     const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
     const digest = (digestOf(c) || '').slice(0, 300);
@@ -2847,7 +2912,8 @@ export function runSearch(a) {
   const q = String(a.query || '').toLowerCase();
   if (!q) throw new Error('empty query');
   const hits = [];
-  for (const f of fs.readdirSync(PROJ).filter(f => f.endsWith('.md'))) {
+  let cards = []; try { cards = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch {}
+  for (const f of cards) {
     const c = fs.readFileSync(path.join(PROJ, f), 'utf8');
     c.split('\n').forEach((line, i) => {
       if (line.toLowerCase().includes(q)) hits.push({ where: f + ':' + (i + 1), line: line.trim().slice(0, 200) });
@@ -4095,7 +4161,39 @@ export function presenceSnapshots() {
  * once make the same change, which merges cleanly. An empty file is never moved: it is what a
  * waiting loop creates for itself and the likeliest to be written again. */
 export const nodeKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-/** The nodes that still write to the mesh, or null when the hub is not a git mesh at all. */
+/** The newest 'YYYY-MM-DD HH:MM' that `re` (global, stamp in group 1) finds in the tail of `file`,
+ *  in ms; null when there is none. The content, not the mtime: a git checkout or pull stamps every
+ *  file it writes with the time of the pull, which would make a year-old file look written today. */
+export function newestStampMs(file, re, size) {
+  try {
+    if (size == null) size = fs.statSync(file).size;
+    if (!size) return null;
+    const fd = fs.openSync(file, 'r');
+    try {
+      // the tail first; the whole file only when one entry is longer than the tail
+      for (const n of [Math.min(size, 65536), Math.min(size, 16 * 1048576)]) {
+        const buf = Buffer.alloc(n);
+        fs.readSync(fd, buf, 0, n, size - n);
+        let best = null;
+        for (const m of buf.toString('utf8').matchAll(re)) {
+          const ms = parseTs(m[1]).getTime();
+          if (Number.isFinite(ms) && (best == null || ms > best)) best = ms;
+        }
+        if (best != null || n === size) return best;
+      }
+      return null;
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
+}
+/** A queue message's header line: `## <stamp> · from <sender>`. */
+export const QUEUE_BLOCK_RE = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from /gm;
+const LOG_STAMP_RE = /"ts":"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/g;
+/** The nodes that still write to the mesh, or null when the hub is not a git mesh at all.
+ *  A node counts by its presence snapshot, by the name its sync commits carry, and by its own
+ *  files: the newest stamp in its journal, its task log or a queue shard of its name. The files
+ *  are the part that does not depend on a name matching: mesh-sync commits under the hostname
+ *  unless HUBD_NODE is set where it runs, so a node whose HUBD_NODE differs and whose presence
+ *  snapshot had gone stale read as gone, and its shards were the ones gc offered to move. */
 export function liveMeshNodes({ root = HUB, days = 30 } = {}) {
   const repo = [root, HUB].find(d => d && fs.existsSync(path.join(d, '.git')));
   if (!repo) return null;
@@ -4103,6 +4201,16 @@ export function liveMeshNodes({ root = HUB, days = 30 } = {}) {
   const since = Date.now() - days * 86400000;
   for (const sn of presenceSnapshots()) { const ms = sn.written ? parseTs(sn.written).getTime() : NaN; if (ms >= since) live.add(nodeKey(sn.node)); }
   for (const n of sh(`git log --since="${Math.max(1, Math.floor(days))} days ago" --format=%cn`, repo).split('\n')) if (n.trim()) live.add(nodeKey(n.trim()));
+  const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
+  const recent = (f, re) => (newestStampMs(f, re) ?? -Infinity) >= since;
+  for (const f of ls(HUB)) {
+    const node = /^journal\..+\.jsonl$/.test(f) ? journalNodeOf(f) : /^tasks\..+\.events\.jsonl$/.test(f) ? taskEventNodeOf(f) : '';
+    if (node && !live.has(nodeKey(node)) && recent(path.join(HUB, f), LOG_STAMP_RE)) live.add(nodeKey(node));
+  }
+  for (const f of ls(path.join(root, 'queues'))) {
+    const m = /^[^.]+\.([^.]+)\.queue\.md$/.exec(f);
+    if (m && !live.has(nodeKey(m[1])) && recent(path.join(root, 'queues', f), QUEUE_BLOCK_RE)) live.add(nodeKey(m[1]));
+  }
   return live;
 }
 /** Why THIS node may not move a queue file (null: it may). `live` from liveMeshNodes. */
