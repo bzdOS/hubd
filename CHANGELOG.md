@@ -4,6 +4,36 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.31 — 2026-10-01
+
+Fixes from the acceptance review of 0.9.30.
+
+- **A command that only reads writes nothing.** Every `hub` run refreshed the protocol first, and
+  that wrote `HUBD.md`, created the hub's folders, appended lines to the tracked `.gitignore` and
+  removed every `.tmp` file older than a minute, so a dry `hub gc --json` deleted the very stale
+  file it was meant to list. Reading commands (`status`, `brief`, `board`, `doctor`, `task list`,
+  a dry `gc`, ...) now leave the hub byte for byte as they found it, task cache included; the
+  hub's folders are created by the first write. A test snapshots a hub around each of them.
+- **No command appends to the tracked `.gitignore` any more.** In a mesh that file is a commit, and
+  two nodes on different versions appending different lines to its end stopped each other's sync
+  on a conflict. The node-local lines (now also `*.lock`, `*.tmp.*`, `tasks.json`, `claims.json`)
+  go into `.git/info/exclude`, which never travels, on every writing command; `hub init` completes
+  the shared `.gitignore`, once, on one node. `hub doctor` warns about a node-local file nothing
+  ignores, and notes lines only the exclude file has.
+- **A node is live by its own files.** Which nodes still write to the mesh decides whose queue
+  files gc may move, and it was read from presence snapshots and commit names, while mesh-sync
+  commits under the hostname: a node whose `HUBD_NODE` differed and whose snapshot was stale read
+  as gone. The newest stamp in its journal, its task log or a queue file of its name counts now,
+  and `mesh-sync.sh` commits under `HUBD_NODE` when set, normalised as the file names are.
+- **The board's journal window skips old month archives.** It read and parsed every journal file
+  since the hub began and filtered to its window afterwards; a month archive that ended before the
+  window is no longer opened.
+- **`hub sense`:** an escalation that cannot be written is reported on stderr and in the turn text
+  instead of being dropped, and a missing `HUBD_SENSE_ESCALATIONS` directory is created; a private
+  pattern that is not a valid regex no longer counts as declared for `hub lint`.
+- **Harvest:** every project card ends with a Communication section, what has gone out and what
+  is still queued.
+
 ## 0.9.30 — 2026-09-30
 
 Fixes from the acceptance review of 0.9.28–0.9.29.

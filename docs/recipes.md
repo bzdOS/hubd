@@ -216,7 +216,9 @@ per-host files (`journal.<node>.jsonl`, `tasks.<node>.events.jsonl`,
 A `hub queue send` on the desktop is delivered to a waiter on the laptop on the
 next sync; task ids are node-scoped (`pine-3`), so offline adds can never
 collide. Runtime state (`tasks.json`, `HUBD.md`, `.qstate/`, `presence/`,
-`.env-state.json`) is gitignored automatically — each node keeps its own.
+`.env-state.json`, locks) is ignored automatically through `.git/info/exclude`,
+which never travels — each node keeps its own. `hub init` writes the same lines
+into a new hub's `.gitignore`.
 
 **One warning about `.gitattributes`.** Single writer per file means pulls
 *normally* never conflict — but when one does (a restored backup, a rotated

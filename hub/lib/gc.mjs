@@ -37,34 +37,12 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   HUB, PRESENCE, JOURNAL_NODE, now, parseTs, slugify, loadTasks, roleRegistry, ownerRoles, loadPresence, presenceSnapshots, requireAuthor,
-  liveMeshNodes, shardHold, presenceAlive, nodeKey, readJson, staleEnvSessions,
+  liveMeshNodes, shardHold, presenceAlive, nodeKey, readJson, staleEnvSessions, newestStampMs, QUEUE_BLOCK_RE,
   envObservations, clearEnvObservation, journalAppend,
 } from './core.mjs';
 import { resolveQueueRoot, subscriberRoles, pidAlive, subscriberNamespaces, archiveStaleSubscribers, listShards, archiveQueueFile } from './queue.mjs';
 
 const DAY = 86400000;
-
-function newestBlockMs(file, size) {
-  if (!size) return null;
-  try {
-    const fd = fs.openSync(file, 'r');
-    try {
-      // the tail first; the whole file only when one message is longer than the tail
-      for (const n of [Math.min(size, 65536), Math.min(size, 16 * 1048576)]) {
-        const buf = Buffer.alloc(n);
-        fs.readSync(fd, buf, 0, n, size - n);
-        let best = null;
-        for (const m of buf.toString('utf8').matchAll(/^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from /gm)) {
-          const ms = parseTs(m[1]).getTime();
-          if (Number.isFinite(ms) && (best == null || ms > best)) best = ms;
-        }
-        if (best != null || n === size) return best;
-      }
-      return null;
-    } finally { fs.closeSync(fd); }
-  } catch { return null; }
-}
-
 
 /** This node's own litter (see the header). Read-only. */
 export function localLitter({ root } = {}) {
@@ -117,7 +95,7 @@ export function hubGcPlan({ root, days = 14 } = {}) {
       let stt; try { stt = fs.statSync(path.join(qdir, f)); } catch { continue; }
       // The newest block header, not the file's mtime: a git checkout or pull stamps every file it
       // writes with the time of the pull, which would make a year-old queue look written today.
-      const last = newestBlockMs(path.join(qdir, f), stt.size);
+      const last = newestStampMs(path.join(qdir, f), QUEUE_BLOCK_RE, stt.size);
       const idleDays = Math.floor((nowMs - (last ?? stt.mtimeMs)) / DAY);
       if (idleDays < days) continue;
       const reg = roles.get(slugify(role));

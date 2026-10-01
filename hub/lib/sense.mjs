@@ -95,9 +95,19 @@ const statePath = (head) => path.join(senseDir(), `head.${slugify(head)}.json`);
 export function loadSenseState(head) { return readJson(statePath(head), {}); }
 function saveSenseState(head, st) { atomicWrite(statePath(head), st); }
 export function escalationsPath() { return process.env.HUBD_SENSE_ESCALATIONS || path.join(senseDir(), 'escalations.log'); }
+/* An escalation that cannot be written is said so on stderr and in the pass's text, not dropped:
+ * HUBD_SENSE_ESCALATIONS naming a directory that did not exist lost every one without a word,
+ * while the turn text told the head they were "already escalated". The directory is created. */
 function escalate(head, text, nowS) {
   const f = escalationsPath();
-  try { fs.appendFileSync(f, `${Math.floor(nowS)}\t${head}\t${String(text).replace(/\s+/g, ' ')}\n`); shareMode(f); } catch {}
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, `${Math.floor(nowS)}\t${head}\t${String(text).replace(/\s+/g, ' ')}\n`); shareMode(f);
+    return true;
+  } catch (e) {
+    process.stderr.write(`sense: escalation NOT written to ${f} (${e.code || e.message}): ${text}\n`);
+    return false;
+  }
 }
 
 const git = (args, cwd, timeout = 120000) => {
@@ -406,7 +416,7 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
     if (v && v.sha.length === 40) { decided.add(`@${v.sha}`); if (v.branch) decided.add(`${v.branch}@${v.sha}`); }
   }
   let { ev, esc } = collectEvents(conf, st, nowS, pres, loadTasks().tasks, ents.filter(e => epoch(e.ts) >= nowS - 72 * 3600), branches, checker, queuedFrom(conf.head), cfg, decided);
-  for (const e of esc) escalate(conf.head, e, nowS);
+  const unwritten = esc.filter(e => !escalate(conf.head, e, nowS));
   const crit = ev.some(([, c]) => c);
   if (ev.length && !budgetOk(st, nowS, crit, cfg)) {
     // held back: take the new marks off so it comes on the next pass; reminders come next pass too
@@ -421,17 +431,19 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
   }
   saveSenseState(conf.head, st);
   publish(conf.head, ev, st, esc);
-  if (!ev.length) return { code: 1, text: '', events: [], escalations: esc };
+  if (!ev.length) return { code: 1, text: '', events: [], escalations: esc, unwritten };
   const lines = [`SUPERVISION EVENTS (${new Date(nowS * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC) — the sensor has already taken the measurements, do not re-measure. Handle EACH one and end the turn.`];
   ev.forEach(([, c, t], i) => lines.push('', `${i + 1}. ${c ? '[CRITICAL] ' : ''}${t}`));
-  if (esc.length) lines.push('', 'Already escalated to the fleet: ' + esc.join('; '));
+  const sent = esc.filter(e => !unwritten.includes(e));
+  if (sent.length) lines.push('', 'Already escalated to the fleet: ' + sent.join('; '));
+  if (unwritten.length) lines.push('', `NOT escalated — ${escalationsPath()} could not be written; tell the fleet yourself: ` + unwritten.join('; '));
   lines.push('', 'Tools (the sensor does the acceptance checks, you decide):',
     `  hub sense ${conf.head} check task/<slug>`,
     `  hub sense ${conf.head} verdict task/<slug> accept "<what is accepted>"   — into the hub + an order to the worker to merge into ${conf.base}`,
     `  hub sense ${conf.head} verdict task/<slug> reject "<what to fix>"       — remarks to the worker`,
     'An order to a worker: hub_queue_send (one task, 30-90 min, the acceptance command, branch task/<slug>).',
     'End of the turn: the project card (hub_card_set: waiting on / next step / dead ends, do not repeat / accepted) — your memory between sessions.');
-  return { code: 0, text: lines.join('\n'), events: ev.map(([key, crit, text]) => ({ key, crit, text })), escalations: esc };
+  return { code: 0, text: lines.join('\n'), events: ev.map(([key, crit, text]) => ({ key, crit, text })), escalations: esc, unwritten };
 }
 
 export function runSenseVerdict(head, branch, v, text) {

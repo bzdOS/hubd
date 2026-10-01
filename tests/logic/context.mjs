@@ -6,7 +6,7 @@ import { REPO, ok, mktmp, cli, core, usageLib, recallLib, done } from './_h.mjs'
 
 // ── protocol: ensureProtocol materialises HUBD.md (versioned, gitignored, per-node) ──
 const TP = mktmp();
-core.setHubBase(TP);
+core.setHubBase(TP); core.ensureHubDirs();
 const e1 = core.ensureProtocol();
 ok(e1.wrote === true && e1.version === core.VERSION, 'ensureProtocol: writes HUBD.md stamped with the installed version');
 const hubmd = fs.readFileSync(path.join(TP, 'HUBD.md'), 'utf8');
@@ -14,7 +14,7 @@ ok(new RegExp('hubd-protocol v' + core.VERSION.replace(/\./g, '\\.')).test(hubmd
 ok(/hub claim/.test(hubmd) && /hub report/.test(hubmd) && /play-by-play/.test(hubmd), 'protocol: HUBD.md teaches claim-vs-report');
 ok(core.ensureProtocol().wrote === false, 'ensureProtocol: idempotent when current (no rewrite)');
 ok(core.ensureProtocol(true).wrote === true, 'ensureProtocol: force rewrites');
-ok(/^HUBD\.md$/m.test(fs.readFileSync(path.join(TP, '.gitignore'), 'utf8')), 'protocol: HUBD.md is gitignored (per-node, not mesh-synced)');
+ok(core.HUB_GITIGNORE.includes('HUBD.md'), 'protocol: HUBD.md is a node-local line (ignored per node, not mesh-synced)');
 fs.rmSync(TP, { recursive: true, force: true });
 
 // ── harvest: package-shipped prompt via core + MCP (not fetched from the repo) ──
@@ -38,7 +38,7 @@ ok(/Harvest this dialog/.test(mcpOut), 'MCP: prompts/get returns the harvest pro
 // ONLY if that exact card already exists; else null with a hint. Never crosses
 // above the nearest .git root while looking for a marker.
 const ctxRoot1 = mktmp();
-core.setHubBase(ctxRoot1);
+core.setHubBase(ctxRoot1); core.ensureHubDirs();
 const ctxOuterDir = path.join(ctxRoot1, 'outer');
 const ctxRepoDir = path.join(ctxOuterDir, 'repo');
 const ctxNestedDir = path.join(ctxRepoDir, 'src', 'deep');
@@ -52,7 +52,7 @@ ok(ctxA.via === 'marker' && ctxA.guessed === false && ctxA.root === ctxRepoDir, 
 fs.rmSync(ctxRoot1, { recursive: true, force: true });
 
 const ctxRoot1b = mktmp();
-core.setHubBase(ctxRoot1b);
+core.setHubBase(ctxRoot1b); core.ensureHubDirs();
 const ctxOuterDir2 = path.join(ctxRoot1b, 'outer2');
 const ctxRepoDirB = path.join(ctxOuterDir2, 'repoB');
 fs.mkdirSync(ctxRepoDirB, { recursive: true });
@@ -63,7 +63,7 @@ ok(ctxB.project === null && ctxB.via === 'none', `context marker: never searches
 fs.rmSync(ctxRoot1b, { recursive: true, force: true });
 
 const ctxRoot2 = mktmp();
-core.setHubBase(ctxRoot2);
+core.setHubBase(ctxRoot2); core.ensureHubDirs();
 const ctxSyncedDir = path.join(ctxRoot2, 'somefolder');
 fs.mkdirSync(ctxSyncedDir, { recursive: true });
 core.runSync({ path: ctxSyncedDir, name: 'Custom Name', digest: 'd1', agent: 'test' });   // slug custom-name != folder name
@@ -77,7 +77,7 @@ ok(ctxD.project === 'custom-name', `context path-match: also resolves from a sub
 fs.rmSync(ctxRoot2, { recursive: true, force: true });
 
 const ctxRoot3 = mktmp();
-core.setHubBase(ctxRoot3);
+core.setHubBase(ctxRoot3); core.ensureHubDirs();
 core.runCardSet({ project: 'myapp', digest: 'kickoff', by: 'test' });   // harvested card, no recorded path
 const ctxGuessDir = path.join(ctxRoot3, 'work', 'myapp');
 fs.mkdirSync(ctxGuessDir, { recursive: true });
@@ -86,7 +86,7 @@ ok(ctxE.project === 'myapp' && ctxE.via === 'guess' && ctxE.guessed === true, `c
 fs.rmSync(ctxRoot3, { recursive: true, force: true });
 
 const ctxRoot4 = mktmp();
-core.setHubBase(ctxRoot4);
+core.setHubBase(ctxRoot4); core.ensureHubDirs();
 const ctxUnknownDir = path.join(ctxRoot4, 'totally-unknown-folder-xyz');
 fs.mkdirSync(ctxUnknownDir, { recursive: true });
 const ctxF = core.resolveContext(ctxUnknownDir);
@@ -95,7 +95,7 @@ ok(typeof ctxF.hint === 'string' && ctxF.hint.length > 0, 'context no-match: hin
 fs.rmSync(ctxRoot4, { recursive: true, force: true });
 
 const ctxRoot5 = mktmp();
-core.setHubBase(ctxRoot5);
+core.setHubBase(ctxRoot5); core.ensureHubDirs();
 const ctxFullDir = path.join(ctxRoot5, 'proj5');
 fs.mkdirSync(ctxFullDir, { recursive: true });
 fs.writeFileSync(path.join(ctxFullDir, '.hubd'), 'proj5\n');
@@ -214,7 +214,7 @@ fs.rmSync(ctxRoot5, { recursive: true, force: true });
 // ── hub_search: the engine returns every hit; only the server's plan trims, and it says so ──
 {
   const TS = mktmp();
-  core.setHubBase(TS);
+  core.setHubBase(TS); core.ensureHubDirs();
   const lines = Array.from({ length: 106 }, (_, i) => `- needle-82 line ${i}`).join('\n');
   fs.mkdirSync(path.join(TS, 'projects'), { recursive: true });
   fs.writeFileSync(path.join(TS, 'projects', 'hay.md'), `# hay\n\n## Facts\n\n${lines}\n`);
@@ -229,7 +229,7 @@ fs.rmSync(ctxRoot5, { recursive: true, force: true });
 
 // ── recall: ranked, and honest about age ──
 const RC = mktmp();
-core.setHubBase(RC);
+core.setHubBase(RC); core.ensureHubDirs();
 const old = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 16).replace('T', ' ');
 fs.writeFileSync(path.join(RC, 'projects', 'p.md'),
   `# p\n\n- slug: p\n- set: ${old} by dev-t\n\n## Digest\n\nthe widget pipeline runs nightly\n\n## Decisions\n\n- ${old}: chose the widget queue over polling\n\n## Metrics\n\n- ${old}: widget throughput 40/s\n`);
@@ -323,7 +323,7 @@ ok(recallLib.runRecall({ query: 'overlap', project: 'psy,other' }).total === 2, 
 
 // ── usage: measured and supplied never mix ──
 const US = mktmp();
-core.setHubBase(US);
+core.setHubBase(US); core.ensureHubDirs();
 let usErr = ''; try { usageLib.runUsageAdd({ agent: 'dev-t', project: 'p' }); } catch (e) { usErr = e.message; }
 ok(/nothing to record/.test(usErr),
   'usage: an entry with no numbers is refused — an absent value must not become a recorded zero');
@@ -342,7 +342,7 @@ ok(usageLib.runUsage({ days: 7, project: 'q' }).supplied.calls === 1, 'usage: fi
 
 // ── scope layers: the operator, the private braid, the rules ──
 const SL = mktmp();
-core.setHubBase(SL);
+core.setHubBase(SL); core.ensureHubDirs();
 const opMissing = core.runOperatorGet();
 ok(opMissing.exists === false && /hub_card_set/.test(opMissing.hint) && /Boundaries/.test(opMissing.scaffold),
   'operator: absent card returns how to make one, not an error');

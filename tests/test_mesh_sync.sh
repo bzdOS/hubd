@@ -34,6 +34,11 @@ printf '{"ts":"2026-09-01 11:00","kind":"note","text":"from a"}\n' >> "$TMP/a/jo
 HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out0" 2>&1; rc=$?
 ok "$([ $rc -eq 0 ] && echo 1 || echo 0)" "ok: a clean sync exits 0 (got $rc)"
 ok "$(grep -q 'mesh-sync: ok' "$TMP/out0" && echo 1 || echo 0)" "ok: and says so"
+# the commit carries HUBD_NODE, normalised as the file names are, so history and files name one node
+printf '{"ts":"2026-09-01 11:01","kind":"note","text":"named"}\n' >> "$TMP/a/journal.a.jsonl"
+HUBD_NODE='Pine_Box 2.local' HUBD_DIR="$TMP/a" sh "$SCRIPT" >/dev/null 2>&1
+cn="$(git -C "$TMP/a" log -1 --format=%cn)"
+ok "$([ "$cn" = 'pine_box-2' ] && echo 1 || echo 0)" "node name: commits under HUBD_NODE, normalised like journal.<node>.jsonl (got $cn)"
 
 # ── exit 2: a genuine content clash on a non-union file ───────────────────────
 git clone -q "$TMP/origin" "$TMP/b"

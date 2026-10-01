@@ -54,7 +54,7 @@ fs.rmSync(QR, { recursive: true, force: true });
 // phantom backlog that only grows, and a fanout OWNER role would show "buttons
 // waiting" forever. The brief must report the role as fanout, not a wrong number.
 const FB = mktmp();
-core.setHubBase(FB);
+core.setHubBase(FB); core.ensureHubDirs();
 fs.mkdirSync(path.join(FB, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(FB, 'subscriber-roles.json'), JSON.stringify(['announce']));
 fs.writeFileSync(path.join(FB, 'owner-roles.json'), JSON.stringify(['announce']));
@@ -105,7 +105,7 @@ fs.rmSync(PK, { recursive: true, force: true });
 // DONE with an id that matches nothing used to vanish silently — the task stayed open
 // and nothing said so (the protocol's DONE rule warns exactly about batch-copied ids).
 const DM = mktmp();
-core.setHubBase(DM);
+core.setHubBase(DM); core.ensureHubDirs();
 const dmT = core.runTaskAdd({ project: 'p', text: 'real work', by: 'test' });
 const dmR = core.runReport({ project: 'p', by: 'test', text: `DONE: ${dmT.task.id}, nope-99` });
 ok(dmR.done.length === 1 && String(dmR.done[0]) === String(dmT.task.id),
@@ -119,7 +119,7 @@ fs.rmSync(DM, { recursive: true, force: true });
 // A card made by hub_card_set has `- set:`, not `- synced:` — it used to show '?' in
 // status and could never go stale in the brief, however long abandoned.
 const SC = mktmp();
-core.setHubBase(SC);
+core.setHubBase(SC); core.ensureHubDirs();
 core.runCardSet({ project: 'harvested', digest: 'captured from a dialog', by: 'test' });
 const scRow = core.runStatus().projects.find(p => p.project === 'harvested');
 ok(scRow && /^\d{4}-/.test(scRow.synced), `status: a card-set card shows its set time, not '?' (got ${scRow && scRow.synced})`);
@@ -153,7 +153,7 @@ resetSessionId();
 // names the function being performed and several functions share one trajectory, so
 // keying on it made a relabelled caller lose its checkpoint and re-read everything.
 const WN = mktmp();
-core.setHubBase(WN);
+core.setHubBase(WN); core.ensureHubDirs();
 core.journalAppend({ ts: core.now(), project: 'p', agent: 'dev', kind: 'note', text: 'first entry' });
 const wn1 = core.runWhatsNew({ agent: 'dev', session: 'sess-x' });
 ok(wn1.firstCheckin === true, 'whatsnew: first call for a session has no checkpoint');
@@ -190,7 +190,7 @@ fs.rmSync(GC, { recursive: true, force: true });
 
 // ── a broadcast reader keeps its place across a respawn ──
 const SUBQ = mktmp();
-core.setHubBase(SUBQ);
+core.setHubBase(SUBQ); core.ensureHubDirs();
 {
   const qlib = await import(path.join(REPO, 'hub/lib/queue.mjs'));
   const sess = await import(path.join(REPO, 'hub/lib/session.mjs'));
@@ -250,6 +250,6 @@ core.setHubBase(SUBQ);
   if (saved.u !== undefined) process.env.HUBD_SUBSCRIBER = saved.u;
   sess.resetSessionId();
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

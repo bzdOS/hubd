@@ -6,7 +6,7 @@ import { REPO, ok, mktmp, T0, core, cardsLib, done } from './_h.mjs';
 
 // ── rules: a check, or an admitted wish ──
 const RL = mktmp();
-core.setHubBase(RL);
+core.setHubBase(RL); core.ensureHubDirs();
 fs.writeFileSync(path.join(RL, 'projects', 'shop.md'),
   '# shop\n\n- slug: shop\n- set: 2026-08-09 10:00 by dev-t\n\nMODE: active — selling\n\n## Digest\n\nx\n\n## Gates\n\n- 100 paying users, or stop\n');
 fs.writeFileSync(path.join(RL, 'projects', 'craft.md'),
@@ -52,7 +52,7 @@ ok(core.runReport({ project: 'shop', by: 'dev-t', text: 'prose again' }).note ==
 
 // ── audit: declarations vs behaviour, filed as incidents that quote the owner ──
 const AUD = mktmp();
-core.setHubBase(AUD);
+core.setHubBase(AUD); core.ensureHubDirs();
 fs.writeFileSync(path.join(AUD, 'rules.json'), JSON.stringify({
   money: ['shop'],
   laws: { 'gate-expired': { text: 'An expired gate means background until a DECIDE sets a new date', since: '2026-07-04' } },
@@ -81,7 +81,7 @@ ok(au.apply === false && core.runTaskList({ status: 'all' }).count === 0, 'audit
 // ── audit (7)+(8): the end-of-session dump, and commits with no journal ──
 {
   const TE = mktmp();
-  core.setHubBase(TE);
+  core.setHubBase(TE); core.ensureHubDirs();
   const at = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString().slice(0, 16).replace('T', ' ');
   const line = (agent, kind, text, minAgo) => JSON.stringify({ ts: at(minAgo), project: 'psy', agent, kind, text }) + '\n';
   // "dumper": one bookkeeping line an hour ago, then three structured lines in the last minute.
@@ -109,7 +109,7 @@ ok(au.apply === false && core.runTaskList({ status: 'all' }).count === 0, 'audit
   ok(!core.runAudit({ days: 7 }).findings.some(f => f.id === 'work-without-journal'), 'audit: one journal entry for the project clears it');
   ok(!core.runAudit({ days: 7, git: false }).notes.some(n => /work-without-journal/.test(n)), 'audit: git:false skips the checkout scan entirely');
   fs.rmSync(TE, { recursive: true, force: true });
-  core.setHubBase(AUD);
+  core.setHubBase(AUD); core.ensureHubDirs();
 }
 const applied = core.runAudit({ days: 3650, apply: true, by: 'auditor-t' });
 ok(applied.filed.length === applied.findings.length && applied.filed.length >= 2,
@@ -137,7 +137,7 @@ ok(core.runAudit({ days: 3650 }).notes.some(n => /buttons not checked/.test(n)),
 
 // ── audit pass 2026-09-23: each of these was a live defect ──
 const AUP = mktmp();
-core.setHubBase(AUP);
+core.setHubBase(AUP); core.ensureHubDirs();
 {
   // capOutput: a string cut is reported in characters. The hint read "undefined shown".
   const c = core.capOutput({ card: 'x'.repeat(20000) }, [['card', 12000]]);
@@ -194,11 +194,11 @@ core.setHubBase(AUP);
     `whereami: the inventory script runs without a shell — no $(...) expansion (${JSON.stringify(w.localInventory).slice(0, 80)})`);
   fs.rmSync(WI, { recursive: true, force: true });
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── audit tails: the author rule everywhere, the lock steal, the secret store behind a symlink ──
 const TL = mktmp();
-core.setHubBase(TL);
+core.setHubBase(TL); core.ensureHubDirs();
 {
   let e1 = null; try { core.runClaim({ project: 'p', area: 'x', agent: 'claude' }); } catch (e) { e1 = e.message; }
   ok(/names a model/.test(e1 || ''), 'author: a claim holder is held to the author rule');
@@ -225,6 +225,6 @@ core.setHubBase(TL);
   if (prev === undefined) delete process.env.HUBD_SECRETS_DIR; else process.env.HUBD_SECRETS_DIR = prev;
   fs.rmSync(path.dirname(link), { recursive: true, force: true });
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

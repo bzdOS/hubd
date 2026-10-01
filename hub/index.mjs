@@ -8,7 +8,7 @@ import path from 'node:path';
 import {
   VERSION, tenantKey, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
   runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
-  setHubBase, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
+  setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
   envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting,
 } from './lib/core.mjs';
@@ -711,6 +711,7 @@ async function serveHttp(port) {
       // keeps hub_queue_wait off this transport), so setHubBase(tenant) here is never
       // at risk of being repointed mid-flight by a concurrent request's own setHubBase.
       setHubBase(tenant);
+      ensureHubDirs();   // a tenant's workspace exists from its first request, as it always has
       if (Array.isArray(parsed)) {
         const results = await Promise.all(parsed.map((m) => handleMessage(m, 'http')));
         return sendJson(res, 200, results.filter(Boolean));

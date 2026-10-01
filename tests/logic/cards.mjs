@@ -8,7 +8,7 @@ import { ok, mktmp, run, cli, T0, core, doc, conflictsLib, cardsLib, done } from
 // regression: the writer used to keep only "## Facts" and silently drop any other
 // hand section (roadmap/gates/decisions) — card data loss on every rewrite.
 const TC = mktmp();
-core.setHubBase(TC);            // creates projects/ + projects/history/
+core.setHubBase(TC); core.ensureHubDirs();            // creates projects/ + projects/history/
 fs.writeFileSync(path.join(TC, 'projects', 'demo.md'),
   '---\nslug: demo\nowner_kind: mixed\n---\n# demo\n\n- slug: demo\n\n' +
   '## Digest\n\nold digest\n\n' +
@@ -60,7 +60,7 @@ fs.rmSync(TC, { recursive: true, force: true });
 
 // ── core: a NEW card is scaffolded from the card template; HUB/card-template.md overrides ──
 const TN = mktmp();
-core.setHubBase(TN);
+core.setHubBase(TN); core.ensureHubDirs();
 core.runCardSet({ project: 'fresh', digest: 'kickoff', by: 'test' });
 const nc = core.readCard('fresh');
 ok(/kickoff/.test(nc), 'new card: digest set');
@@ -77,7 +77,7 @@ fs.rmSync(TN, { recursive: true, force: true });
 
 // ── core: sync of a NEW project scaffolds the template + auto "open tasks" in Facts (auto) ──
 const TG = mktmp();
-core.setHubBase(TG);
+core.setHubBase(TG); core.ensureHubDirs();
 const proj = path.join(TG, 'proj');
 fs.mkdirSync(proj, { recursive: true });
 core.runSync({ path: proj, name: 'proj', digest: 'first', agent: 'test' });
@@ -88,7 +88,7 @@ fs.rmSync(TG, { recursive: true, force: true });
 
 // ── resources: card with structured attrs + typed edges, the graph, and task↔resource ──
 const TR = mktmp();
-core.setHubBase(TR);
+core.setHubBase(TR); core.ensureHubDirs();
 core.runResourceSet({ slug: 'vm1', type: 'host', address: '10.0.0.1', status: 'live', by: 'test' });
 core.runResourceSet({ slug: 'vm1', edges: { runs_on: ['hubd'] }, by: 'test' });   // 2nd set: add edge, keep attrs
 const rcard = core.readResource('vm1');
@@ -111,7 +111,7 @@ fs.rmSync(TR, { recursive: true, force: true });
 
 // ── structured report: prefix batch → card sections + task events + note ──
 const TRP = mktmp();
-core.setHubBase(TRP);
+core.setHubBase(TRP); core.ensureHubDirs();
 const seed = core.runTaskAdd({ project: 'proj', text: 'old task', by: 'test' }).task.id;
 const batch = [
   'DECIDE: ship docs in release | npm README drifted',
@@ -174,7 +174,7 @@ fs.rmSync(TRP, { recursive: true, force: true });
 
 // ── sections.json: ONE i18n source drives BOTH the scaffold AND report routing (0.2.0) ──
 const TRO = mktmp();
-core.setHubBase(TRO);
+core.setHubBase(TRO); core.ensureHubDirs();
 fs.writeFileSync(path.join(TRO, 'sections.json'), JSON.stringify({ decisions: 'Verdicts', next: { heading: 'Up next', hint: 'do this' } }));
 core.runCardSet({ project: 'p2', digest: 'kick', by: 'test' });            // new card → scaffolded from sections.json
 const p2 = core.readCard('p2');
@@ -187,7 +187,7 @@ fs.rmSync(TRO, { recursive: true, force: true });
 
 // ── report-sections.json still honoured as a deprecated alias ──
 const TRA = mktmp();
-core.setHubBase(TRA);
+core.setHubBase(TRA); core.ensureHubDirs();
 fs.writeFileSync(path.join(TRA, 'report-sections.json'), JSON.stringify({ communication: 'Outbound' }));
 core.runReport({ project: 'p3', by: 'test', text: 'COMM: shipped X' });
 ok(/## Outbound[\s\S]*shipped X/.test(core.readCard('p3')), 'report-sections.json: deprecated alias still routes');
@@ -199,7 +199,7 @@ fs.rmSync(TRA, { recursive: true, force: true });
 // reported "since last sync: 10 commit(s)". sinceLastSync now separates
 // "answered, and the answer is 0" from "no baseline to answer against".
 const GD = mktmp();
-core.setHubBase(mktmp());   // runSync below writes a card; give it a live hub base
+core.setHubBase(mktmp()); core.ensureHubDirs();   // runSync below writes a card; give it a live hub base
 // Commit dates are pinned and a minute apart: the baseline is a 1-second-resolution
 // timestamp, so same-second commits would be indistinguishable from the baseline.
 const gitc = (args, date) => execSync(`git -c user.email=t@t -c user.name=t -c commit.gpgsign=false ${args}`,
@@ -269,7 +269,7 @@ fs.rmSync(GD, { recursive: true, force: true });
 // baseline runSync compares against (so every sync "changed" the digest and archived the
 // entire card into history).
 const DG = mktmp();
-core.setHubBase(DG);
+core.setHubBase(DG); core.ensureHubDirs();
 fs.writeFileSync(path.join(DG, 'projects', 'loc.md'),
   '# loc\n\n- slug: loc\n- set: 2026-07-01 10:00 by dev-t\n\n## Digest\n\nthe one-line digest\n\n## Next step\n\n- do the thing\n\n## Gates\n\n- kill if X\n');
 ok(core.digestOf(fs.readFileSync(path.join(DG, 'projects', 'loc.md'), 'utf8')) === 'the one-line digest',
@@ -295,7 +295,7 @@ ok(core.runBrief().staleDigests.some(s => s.project === 'busy'), 'staleness: bri
 
 // ── writing one section of a card, without touching the rest ──
 const SEC = mktmp();
-core.setHubBase(SEC);
+core.setHubBase(SEC); core.ensureHubDirs();
 core.runCardSet({ project: 'demo', digest: 'the digest', by: 'dev-t' });
 const secGates = core.runSectionAdd({ project: 'demo', section: 'gates', text: 'kill if no paying user by 2026-09-01', provenance: 'owner call', by: 'dev-t' });
 core.runSectionAdd({ project: 'demo', section: 'metrics', text: '42 signups', by: 'dev-t' });
@@ -325,7 +325,7 @@ ok(/section required/.test(secErr) && /gates/.test(secErr), 'section add: a miss
  * readCard returns them, hub_context hands them to an agent, and the agent reads two contradictory
  * versions of the project as though both were true. */
 const CC = mktmp();
-core.setHubBase(CC);
+core.setHubBase(CC); core.ensureHubDirs();
 const ccCard = path.join(CC, 'projects', 'demo.md');
 fs.mkdirSync(path.dirname(ccCard), { recursive: true });
 const ccText = ['# demo', '', '## Digest', '<<<<<<< HEAD', 'our digest', '=======', 'their digest',
@@ -375,7 +375,7 @@ ok(/still conflicted in "Digest"/.test(ccCli.out),
 
 // ── one card, two sections that mean the same thing ──
 const MS2 = mktmp();
-core.setHubBase(MS2);
+core.setHubBase(MS2); core.ensureHubDirs();
 {
   // A hub localised AFTER its cards were written: "Up next" / "Known things" configured, while the
   // card still carries the English defaults. The writers used to start a second section beside them.
@@ -421,11 +421,11 @@ core.setHubBase(MS2);
   const cliM = run('cards merge-sections', { HUBD_DIR: MS2, HUBD_TEAM_DIR: MS2 });
   ok(cliM.code === 0 && /hand: facts: ## Facts \+ ## Known things/.test(cliM.out) && /dry run/.test(cliM.out), 'merge CLI: dry run prints the plan');
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── cards merge: the dry run says whether the alias exists, not always yes ──
 const MG = mktmp();
-core.setHubBase(MG);
+core.setHubBase(MG); core.ensureHubDirs();
 {
   core.runCardSet({ project: 'mg-a', digest: 'dup', by: 'dev-t' });
   core.runCardSet({ project: 'mg-b', digest: 'canon', by: 'dev-t' });
@@ -433,7 +433,7 @@ core.setHubBase(MG);
   fs.writeFileSync(path.join(MG, 'project-aliases.json'), JSON.stringify({ 'mg-a': 'mg-b' }));
   ok(cardsLib.runCardsMerge({ from: 'mg-a', into: 'mg-b' }).aliasExisted === true, 'cards merge: and with one, says that');
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── the card cap from the CLI: the flags reach the refusals the engine tests above hold ──
 {

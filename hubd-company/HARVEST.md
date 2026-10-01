@@ -24,6 +24,9 @@ meaning, not transcript.
      A years-old background idea is NOT a deadline item — mark it "do not push"
      and never invent urgency for it.
    - links: [[other-slug]] for every project this one relates to.
+   - communication: what has gone OUT (channel · what · date) and what's still
+     queued. A project isn't finished until it's been communicated — every card
+     ends with a Communication section (shipped vs queued).
 
 2. TASKS — one per line:
    [project] action · cat (technical | communicative | decision | chore)
