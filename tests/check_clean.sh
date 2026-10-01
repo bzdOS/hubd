@@ -28,15 +28,46 @@ export MSG_FILE
 python3 - <<'PY' || exit 1
 import subprocess, sys, re, os
 
-# ASCII denylist (case-insensitive). Latin transliterations of private terms.
-ASCII_DENY = [r"redacted", r"redacted", r"redacted", r"redacted", r"redacted",
-              r"redacted", r"redacted"]
-deny_re = re.compile("|".join(ASCII_DENY), re.IGNORECASE)
 # Cyrillic (U+0400-04FF) or CJK (U+4E00-9FFF): no Russian/Chinese in a public repo.
 nonlatin_re = re.compile("[%s-%s%s-%s]" % (chr(0x0400), chr(0x04FF), chr(0x4E00), chr(0x9FFF)))
 
+# Private terms, and the machine, role and path names of the fleet this is developed on. Kept as
+# hashes: a list of the words would publish exactly what it is here to keep out. A word is found
+# inside any run of letters and digits (a handle, an e-mail, a longer name); a hyphenated name, a
+# path or a file name is matched whole. To add one, print its hash:
+#   python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].lower().encode()).hexdigest()[:16])" WORD
+# and put it under its length in DENY_IN_WORDS, or in DENY_WHOLE.
+import hashlib
+from functools import lru_cache
+DENY_IN_WORDS = {
+    4: {'a969e98b3fb984d2', 'c3ea52707db9769e'},
+    5: {'ab99a5eb2155faf5'},
+    6: {'0c5eea7641f12bc4', '27b2bfe93c31bec0', '3196a7e487413f1f', '44f86611d4de6daf', '750bd39768d2b52a', 'fe67265f89d5214c'},
+    7: {'26b47209413e5776'},
+    8: {'e629845ad96eb5f1'},
+    9: {'fa3c5bcb2ee5eddb'},
+}
+DENY_WHOLE = {'06db35b7b9a30cd8', '5123c3006870ef8b', 'ae6c479d631d685b', 'b2d26135dccb88d1', 'd2c8e5f2a132ce0d', 'b872f890b2579d17', 'f7e060a45439112d'}
+word_re = re.compile(r"[a-z0-9]+")
+whole_res = [re.compile(r"[a-z0-9-]+"), re.compile(r"[a-z0-9./_-]+")]
+
+def sha(t):
+    return hashlib.sha256(t.encode()).hexdigest()[:16]
+
+@lru_cache(maxsize=None)
+def bad_word(w):
+    return any(sha(w[i:i + n]) in hs for n, hs in DENY_IN_WORDS.items() for i in range(len(w) - n + 1))
+
+@lru_cache(maxsize=None)
+def bad_whole(t):
+    return sha(t.rstrip(".")) in DENY_WHOLE
+
+def deny_hit(line):
+    low = line.lower()
+    return any(bad_word(w) for w in word_re.findall(low)) or any(bad_whole(t) for rx in whole_res for t in rx.findall(low))
+
 def hits(line):
-    return deny_re.search(line) or nonlatin_re.search(line)
+    return deny_hit(line) or nonlatin_re.search(line)
 
 fails = []
 
@@ -57,7 +88,8 @@ if msg_file:
         print("check_clean FAIL - %d leak(s) in the commit message:" % len(fails))
         for x in fails:
             print("  " + x)
-        print("  the public repo is English-only; the git log is as public as the files")
+        print("  the public repo is English-only and names no fleet machine, role or path;")
+        print("  the git log is as public as the files")
         sys.exit(1)
     print("check_clean PASS - commit message is clean.")
     sys.exit(0)
@@ -72,8 +104,8 @@ files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdo
 # exists to review. Any image added by hand needs a human to look at it.
 BINARY_EXT = (".gif", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".pdf", ".woff", ".woff2", ".zip", ".gz")
 for f in filter(None, files):
-    if f in ("tests/check_clean.sh", "glama.json"):
-        continue  # gate file + glama.json claim metadata legitimately name the maintainer handle
+    if f == "glama.json":
+        continue  # the Glama claim names the maintainer's GitHub handle, which is the point of it
     if f.lower().endswith(BINARY_EXT):
         continue
     try:
