@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { HUB, setHubBase, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
+import { HUB, setHubBase, ensureHubDirs, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
 import { runBoard } from './board.mjs';
 import { resolveQueueRoot } from './queue.mjs';
 
@@ -62,7 +62,7 @@ export function startServer(port) {
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
-        setHubBase(dir);
+        setHubBase(dir); ensureHubDirs();
       }
       if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(HTML); }
       if (url.pathname === '/api/kanban') return res.end(JSON.stringify(runKanban({})));

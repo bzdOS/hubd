@@ -6,7 +6,7 @@ import { REPO, ok, mktmp, freePort, T0, core, queueLib, done } from './_h.mjs';
 
 // ── the owner's board: tracks, what got done and why, what is next, what waits for the owner ──
 const BD = mktmp();
-core.setHubBase(BD);
+core.setHubBase(BD); core.ensureHubDirs();
 {
   const board = await import(path.join(REPO, 'hub/lib/board.mjs'));
   fs.mkdirSync(path.join(BD, 'queues'), { recursive: true });
@@ -66,11 +66,11 @@ core.setHubBase(BD);
   const k = core.runKanban({});
   ok([...k.queued, ...k.inProgress].every(x => x.title && x.title.length <= 80), 'board: the live kanban cards carry the same short title');
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── the board in the browser: nothing from the hub is markup ──
 const XS = mktmp();
-core.setHubBase(XS);
+core.setHubBase(XS); core.ensureHubDirs();
 {
   core.runResourceSet({ slug: 'h9', type: 'role', attrs: { rank: 'head', project: 'px' }, by: 'dev-t' });
   core.runResourceSet({ slug: 'w9', type: 'role', attrs: { rank: 'worker', project: 'px' }, edges: { head: ['h9'] }, by: 'dev-t' });
@@ -110,6 +110,28 @@ core.setHubBase(XS);
     ok(b.all === true && b.journalDays >= 30, 'serve: the board takes all=1 (every project) and reads a journal window, not the whole journal');
   } finally { srvB.kill(); }
 }
-core.setHubBase(T0);
+
+/* ── a journal window does not open the month archives that end before it ──
+ * Each archive below carries a probe line stamped today, which a real archive cannot hold (it was
+ * cut during its own month): the probe shows up exactly when the file was read. */
+{
+  const JW = mktmp();
+  core.setHubBase(JW); core.ensureHubDirs();
+  const line = (ts, text) => JSON.stringify({ ts, project: 'p', agent: 'a', kind: 'note', text }) + '\n';
+  const today = core.now(), ym = today.slice(0, 7);
+  const prev = new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 2, 1)).toISOString().slice(0, 7);
+  fs.writeFileSync(path.join(JW, 'journal.cedar-2025-01.jsonl'), line('2025-01-10 10:00', 'old') + line(today, 'probe-2025-01'));
+  fs.writeFileSync(path.join(JW, `journal.cedar-${prev}.2.jsonl`), line(`${prev}-10 10:00`, 'last month') + line(today, `probe-${prev}`));
+  fs.writeFileSync(path.join(JW, `journal.cedar-${ym}.jsonl`), line(today, 'this month'));
+  fs.writeFileSync(path.join(JW, 'journal.cedar.jsonl'), line(today, 'live'));
+  const texts = (ms) => core.journalSinceMs(ms).map(e => e.text).sort().join(',');
+  const startOfMonth = Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1);
+  ok(texts(startOfMonth) === 'live,this month',
+    `journal window: archives of months that ended before the cutoff are not read; this month's and the live log are (${texts(startOfMonth)})`);
+  ok(texts(startOfMonth - 1) === `live,probe-${prev},this month`,
+    `journal window: a cutoff inside last month reads last month's archive, numbered name included (${texts(startOfMonth - 1)})`);
+  ok(texts(-Infinity).split(',').length === 6 && [...core.journalEntries()].length === 6, 'journal window: with no cutoff every file is read, as before');
+}
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

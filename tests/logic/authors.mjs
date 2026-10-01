@@ -7,7 +7,7 @@ import { REPO, ok, mktmp, run, freePort, T0, core, queueLib, done } from './_h.m
 // ── presence: hub_heartbeat/hub_presence — TTL freshness like activeClaims ──
 
 const presRoot1 = mktmp();
-core.setHubBase(presRoot1);
+core.setHubBase(presRoot1); core.ensureHubDirs();
 const hb1 = core.runHeartbeat({ agent: 'agent-a', role: 'hubd', status: 'working', task_id: 42, cwd: '/tmp/x' });
 ok(hb1.ok === true && hb1.agent === 'agent-a', 'heartbeat: writes a presence record');
 ok(fs.existsSync(core.presencePath('agent-a')), 'heartbeat: presence/<agent>.json exists');
@@ -32,23 +32,28 @@ try { core.runHeartbeat({}); } catch { hbThrew = true; }
 ok(hbThrew, 'heartbeat: throws without agent');
 fs.rmSync(presRoot1, { recursive: true, force: true });
 
-// ensureProtocol: presence/ gitignored EVEN when HUBD.md is already current (not just on write)
+// ensureProtocol: presence/ ignored EVEN when HUBD.md is already current (not just on write) —
+// in .git/info/exclude, which never travels; the tracked .gitignore is hub init's alone
 const presRoot2 = mktmp();
-core.setHubBase(presRoot2);
+execSync('git init -q', { cwd: presRoot2, stdio: 'pipe' });
+fs.writeFileSync(path.join(presRoot2, '.gitignore'), 'node_modules/\n');
+core.setHubBase(presRoot2); core.ensureHubDirs();
+const presEx = path.join(presRoot2, '.git', 'info', 'exclude');
 core.ensureProtocol();
-ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: presence/ gitignored on first run');
-fs.writeFileSync(path.join(presRoot2, '.gitignore'), '');   // simulate an older .gitignore missing the entry
+ok(/^presence\/$/m.test(fs.readFileSync(presEx, 'utf8')), 'ensureProtocol: presence/ ignored on first run');
+ok(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8') === 'node_modules/\n', 'ensureProtocol: the tracked .gitignore is left byte for byte as it was');
+fs.writeFileSync(presEx, '');                               // simulate an exclude file from before the entry existed
 const eAgain = core.ensureProtocol();                       // same version -> would NOT rewrite HUBD.md
 ok(eAgain.wrote === false, 'ensureProtocol: still idempotent on HUBD.md (no unnecessary rewrite)');
-ok(/^presence\/$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')), 'ensureProtocol: re-adds presence/ to .gitignore even when HUBD.md was already current — mesh-sync\'s git-add-A would otherwise churn on every heartbeat');
+ok(/^presence\/$/m.test(fs.readFileSync(presEx, 'utf8')), 'ensureProtocol: re-adds presence/ even when HUBD.md was already current — mesh-sync\'s git-add-A would otherwise churn on every heartbeat');
 /* The whatsnew checkpoints are per-node too, and runWhatsNew's comment had claimed for releases
  * that this file was gitignored while a real hub had it TRACKED — every node's checkpoint
  * travelling to every other and overwriting it, in plain JSON with no merge rule. */
-ok(/^\.checkins\.json$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')),
-  'ensureProtocol: .checkins.json is gitignored — a per-agent checkpoint is this node\'s, not the mesh\'s');
+ok(/^\.checkins\.json$/m.test(fs.readFileSync(presEx, 'utf8')),
+  'ensureProtocol: .checkins.json is ignored — a per-agent checkpoint is this node\'s, not the mesh\'s');
 /* The entry carries a trailing slash on purpose: gitignore matches the DIRECTORY only, so the
  * per-node snapshot beside it travels. Get this wrong and the fix below silently does nothing. */
-ok(!/^presence(\.\*)?$/m.test(fs.readFileSync(path.join(presRoot2, '.gitignore'), 'utf8')),
+ok(!/^presence(\.\*)?$/m.test(fs.readFileSync(presEx, 'utf8')),
   'ensureProtocol: ignores the presence DIRECTORY, not the presence.<node>.json beside it');
 fs.rmSync(presRoot2, { recursive: true, force: true });
 
@@ -58,7 +63,7 @@ fs.rmSync(presRoot2, { recursive: true, force: true });
  * orchestrators on another, so the orchestrator was reading a different machine's registry as the
  * fleet's. It escalated "worker is dead" four times across 92 hours while the worker worked. */
 const psRoot = mktmp();
-core.setHubBase(psRoot);
+core.setHubBase(psRoot); core.ensureHubDirs();
 core.runHeartbeat({ agent: 'local-worker', role: 'hubd', ttlMin: 15 });
 const psSnap = core.presenceSnapshotPath();
 ok(fs.existsSync(psSnap) && path.basename(psSnap) === 'presence.' + core.JOURNAL_NODE + '.json',
@@ -154,7 +159,7 @@ fs.rmSync(psRoot, { recursive: true, force: true });
 // field was optional on exactly the tools that produced 173 'unknown' entries out of
 // 1193, while the tools that already require it have 6 clean names out of 6.
 const AU = mktmp();
-core.setHubBase(AU);
+core.setHubBase(AU); core.ensureHubDirs();
 const throwsA = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
 
 const noAuthor = throwsA(() => core.runTaskAdd({ project: 'p', text: 'x' }));
@@ -250,7 +255,7 @@ fs.rmSync(FL, { recursive: true, force: true });
 // ── environment checks: an upgrade can need something OUTSIDE the code ─────────
 // Nothing used to say so, so an agent found out by having a call rejected, or never.
 const EV = mktmp();
-core.setHubBase(EV);
+core.setHubBase(EV); core.ensureHubDirs();
 const prevFloorEnv = process.env.HUBD_AGENT;
 
 // Sections, not "the file changed": an upgrade names what moved so the agent can
@@ -436,7 +441,7 @@ fs.rmSync(HT, { recursive: true, force: true });
 
 if (prevFloorEnv === undefined) delete process.env.HUBD_AGENT; else process.env.HUBD_AGENT = prevFloorEnv;
 fs.rmSync(EV, { recursive: true, force: true });
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── the one human in the fleet exists in presence too ──
 // Agents heartbeat because the protocol tells them to; nobody tells the owner anything, so a
@@ -446,7 +451,7 @@ core.setHubBase(T0);
 const OP = mktmp();
 fs.mkdirSync(path.join(OP, 'queues'), { recursive: true });
 fs.writeFileSync(path.join(OP, 'owner-roles.json'), '["boss"]');
-core.setHubBase(OP);
+core.setHubBase(OP); core.ensureHubDirs();
 core.runReport({ project: 'p', by: 'dev-t', text: 'FACT: an agent wrote this' });
 ok(core.runPresence().agents.length === 0, 'owner presence: an agent write records nothing new');
 core.runReport({ project: 'p', by: 'boss', text: 'FACT: a card-only write, which never touches the journal' });
@@ -460,14 +465,14 @@ ok(core.runPresence().agents.find(a => a.agent === 'boss'),
 ok(core.runPresence().agents[0].ttlMin > 15,
   'owner presence: a person who answered an hour ago is still around in a way a polling loop is not');
 fs.rmSync(OP, { recursive: true, force: true });
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 // ── a heartbeat says which hub it was written into ──
 // Two roles on one machine writing to two hubs was invisible for a day twice:
 // everything kept working, into a directory nobody else read.
 {
   const HB = mktmp();
-  core.setHubBase(HB);
+  core.setHubBase(HB); core.ensureHubDirs();
   core.runHeartbeat({ agent: 'role-a', role: 'w', status: 'working' });
   const recPath = fs.readdirSync(path.join(HB, 'presence')).map(f => path.join(HB, 'presence', f))[0];
   const rec = JSON.parse(fs.readFileSync(recPath, 'utf8'));
@@ -498,7 +503,7 @@ core.setHubBase(T0);
 
 // ── roles as cards, and a heartbeat a supervisor reads without parsing ──
 const RG = mktmp();
-core.setHubBase(RG);
+core.setHubBase(RG); core.ensureHubDirs();
 {
   core.runResourceSet({ slug: 'api-head', type: 'role', attrs: { rank: 'head', project: 'api', repo: '/x/canon.git', base: 'main' }, by: 'dev-t' });
   core.runResourceSet({ slug: 'api-dev', type: 'role', attrs: { rank: 'worker', project: 'api', idle_min: '40' }, edges: { head: ['api-head'] }, by: 'dev-t' });
@@ -541,7 +546,7 @@ core.setHubBase(RG);
   core.runTaskAdd({ project: 'api', text: 'for the owner', assignee: 'boss', by: 'dev-t' });
   const lf = core.runLint({}).findings.filter(f => f.id === 'assignee-outside-roster');
   ok(lf.length === 1 && /ghost-role/.test(lf[0].what) && lf[0].tasks.length === 1, 'lint: an open task on a name the registry does not know is a finding; roles and owners are not');
-  const RG2 = mktmp(); core.setHubBase(RG2);
+  const RG2 = mktmp(); core.setHubBase(RG2); core.ensureHubDirs();
   core.runTaskAdd({ project: 'api', text: 'x', assignee: 'anyone', by: 'dev-t' });
   const l2 = core.runLint({});
   ok(!l2.findings.some(f => f.id === 'assignee-outside-roster') && l2.notes.some(n => /no roles are declared/.test(n)),
@@ -552,6 +557,6 @@ core.setHubBase(RG);
   ok(!core.runLint({}).findings.some(f => f.id === 'two-readers-one-queue'), 'lint: and gone once one reader is left');
   fs.rmSync(RG2, { recursive: true, force: true });
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

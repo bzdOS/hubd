@@ -6,7 +6,7 @@ import { REPO, ok, mktmp, run, T0, core, done } from './_h.mjs';
 
 // ── a head's sensor: events from the hub, not from a loop's wording ──
 const SN = mktmp();
-core.setHubBase(SN);
+core.setHubBase(SN); core.ensureHubDirs();
 {
   const sense = await import(path.join(REPO, 'hub/lib/sense.mjs'));
   const cfg = { ...sense.SENSE_DEFAULTS, quietRe: [/^still waiting/i], privateRe: [] };
@@ -87,6 +87,9 @@ core.setHubBase(SN);
   const [okn, txtn] = sense.checkBranch(sense.senseConf('h1'), 'task/feat');
   ok(okn === false && /FAIL no private patterns declared/.test(txtn), 'sense: with no private patterns declared, a branch fails the checklist — nothing was checked, so nothing passes');
   ok(core.runLint().findings.some(f => f.id === 'private-check-undeclared' && f.role === 'h1'), 'lint: a head that accepts branches of a repo with no private patterns is a finding');
+  // a pattern that does not compile is dropped by the sensor, so it does not count as declared
+  fs.writeFileSync(path.join(SN, 'sense.json'), JSON.stringify({ private: ['secret-host-[0-9'] }));
+  ok(core.runLint().findings.some(f => f.id === 'private-check-undeclared' && f.role === 'h1'), 'lint: a private pattern that is not a valid regex is not a declared one');
   fs.writeFileSync(path.join(SN, 'sense.json'), JSON.stringify({ private: ['secret-host-[0-9]+'] }));
   ok(!core.runLint().findings.some(f => f.id === 'private-check-undeclared'), 'lint: and declaring them in sense.json clears it');
   const sc = sense.senseConf('h1');
@@ -152,8 +155,27 @@ core.setHubBase(SN);
   delete process.env.HUBD_SENSE_ESCALATIONS;
   ok(fs.existsSync(escLog) && /^\d+\th2\tworker w3 not running/m.test(fs.readFileSync(escLog, 'utf8')) && !fs.existsSync(path.join(sense.senseDir(), 'escalations.log')),
     'sense: escalations are appended to HUBD_SENSE_ESCALATIONS when set, in the line format a monitor reads, and nowhere else');
+  // a directory that does not exist yet is created; one that cannot be is said so, not dropped
+  const deadAgain = () => {
+    const st = JSON.parse(fs.readFileSync(sp, 'utf8'));
+    st.pending['dead:w3'] = { first: Date.now() / 1000 - 2000, last: Date.now() / 1000 - 2000, esc: 0 };
+    fs.writeFileSync(sp, JSON.stringify(st));
+  };
+  const newDirLog = path.join(SN, 'not-yet', 'escalations.log');
+  process.env.HUBD_SENSE_ESCALATIONS = newDirLog;
+  deadAgain();
+  const e1 = sense.runSenseEvents('h2');
+  ok(fs.existsSync(newDirLog) && /worker w3 not running/.test(fs.readFileSync(newDirLog, 'utf8')) && !e1.unwritten.length,
+    'sense: HUBD_SENSE_ESCALATIONS in a directory that did not exist — the directory is created and the escalation lands');
+  const blocker = path.join(SN, 'a-file'); fs.writeFileSync(blocker, '');
+  process.env.HUBD_SENSE_ESCALATIONS = path.join(blocker, 'escalations.log');
+  deadAgain();
+  const e2 = sense.runSenseEvents('h2');
+  delete process.env.HUBD_SENSE_ESCALATIONS;
+  ok(e2.unwritten.length && e2.unwritten.every(e => e2.escalations.includes(e)) && (!e2.text || /NOT escalated/.test(e2.text)),
+    'sense: an escalation that cannot be written is returned as unwritten (and the turn text says NOT escalated), never silently lost');
   fs.rmSync(G, { recursive: true, force: true });
 }
-core.setHubBase(T0);
+core.setHubBase(T0); core.ensureHubDirs();
 
 done();

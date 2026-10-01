@@ -14,8 +14,8 @@ import {
   runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
-  CONFLICT_RE, runHeartbeat, runPresence, ownerWaiting, runWhereAmI, HUB_GITIGNORE, ensureHubGitignore,
-  trackedNodeLocal, freezeFile, readFreeze,
+  CONFLICT_RE, runHeartbeat, runPresence, ownerWaiting, runWhereAmI, HUB_GITIGNORE, ensureLocalIgnores,
+  trackedNodeLocal, freezeFile, readFreeze, setReadOnly,
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
@@ -383,8 +383,8 @@ function command(names, when, run) {
 
 /* Until 0.9.4 there was no way to ask hubd its own version, and the omission had a price: the
  * global `hub` on the machine that develops hubd sat nine releases behind for weeks, and reading
- * `npm ls -g` was the only way to find out. Answered BEFORE ensureProtocol() (see the dispatch), so
- * asking a possibly-wrong install what it is never writes anything.
+ * `npm ls -g` was the only way to find out. A read-only command (see the dispatch), so asking a
+ * possibly-wrong install what it is never writes anything.
  *
  * The path is printed with the number because "which version" and "which copy" are one question:
  * a stale global install and a live source checkout are both called `hub`, and they answer
@@ -864,8 +864,9 @@ command(['freeze', 'unfreeze'], () => {
     console.log('Leaving that one in place — hub unfreeze when the work is done.');
     done(0);
   }
-  // The marker must stay on this node: ignored, and not tracked from an older mistake.
-  ensureHubGitignore();
+  // The marker must stay on this node: ignored (in .git/info/exclude, which never travels, so a
+  // .gitignore from before the line existed cannot let it out), and not tracked from an older mistake.
+  ensureLocalIgnores();
   const trackedMarker = trackedNodeLocal().includes('.mesh-freeze');
   fs.writeFileSync(freezeFile(), JSON.stringify({ by, why, since: now(), node: JOURNAL_NODE, pid: process.pid }, null, 1) + '\n', 'utf8');
   console.log('Frozen: mesh-sync on this node will skip every run until you unfreeze.');
@@ -1832,9 +1833,35 @@ function printHelp(only) {
   console.log(lines.join('\n'));
 }
 
-// Keep the agent-facing protocol (HUBD.md) current for this hub on every run — cheap when already
-// current (a stat + version compare); rewrites only after a hubd version change.
-if (!['version', '--version', '-v'].includes(cmd)) { try { ensureProtocol(); } catch {} }
+/* Commands that only read. They leave the hub byte-for-byte as they found it: no ensureProtocol(),
+ * and the engine's read-only switch on, so a read does not rebuild the task cache or record an
+ * environment baseline in passing either. A dry `hub gc` used to delete the stale tmp files it was
+ * there to list, and any command at all appended to the tracked .gitignore — a mesh commit made by
+ * `hub status`. tests/logic/readonly.mjs snapshots a hub around each of these. A command missing
+ * from here still works; it just runs as a writer. */
+function readOnlyRun() {
+  const sub = args[1], dry = !args.includes('--apply');
+  switch (cmd) {
+    case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
+    case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
+    case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
+    case 'operator': case 'lint': case 'sections': case 'harvest':
+      return true;
+    case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
+    case 'usage': return sub !== 'add';
+    case 'rules': return !args.includes('--append');
+    case 'resource': case 'res': return sub === 'list' || sub === 'get';
+    case 'task': return sub === 'list' || sub === 'get';
+    case 'claim': return sub === 'check';
+    case 'queue': return sub === 'status' || (sub === 'gc' && dry);
+  }
+  return args.includes('--help');
+}
+
+// A writing command keeps the agent-facing protocol (HUBD.md) current — cheap when already current
+// (a stat + version compare), rewritten only after a hubd version change.
+if (readOnlyRun()) setReadOnly(true);
+else { try { ensureProtocol(); } catch {} }
 
 if (!cmd || cmd === 'help' || cmd === '--help' || args.includes('--help')) {
   printHelp(cmd === 'help' ? args[1] : cmd === '--help' ? null : cmd);

@@ -274,8 +274,9 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **Instructions that stay current** — your team rules live in `AGENTS.md` (yours
   to write); hubd's own mechanics live in `HUBD.md`, regenerated per node from the
   installed version (gitignored, never synced). Update the code → the next `hub`
-  run (or `hub upgrade`) refreshes `HUBD.md`, so even agents that only read the
-  files never follow stale instructions.
+  command that writes (or `hub upgrade`) refreshes `HUBD.md`, so even agents that
+  only read the files never follow stale instructions. A command that only reads
+  writes nothing to the hub.
 
 ## Principles (violating these = not this product)
 

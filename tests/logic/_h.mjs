@@ -46,6 +46,7 @@ process.env.HUBD_DIR = T0;
 process.env.HUBD_NODE = 'cedar';
 const lib = (f) => import(path.join(REPO, 'hub/lib', f));
 export const core = await lib('core.mjs');
+core.ensureHubDirs();   // pointing at a base creates nothing; a test hub starts with its folders, as a written one has
 export const doc = await lib('doctor.mjs');
 export const queueLib = await lib('queue.mjs');
 export const conflictsLib = await lib('conflicts.mjs');

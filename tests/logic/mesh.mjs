@@ -11,7 +11,7 @@ import { ok, mktmp, run, core, doc, conflictsLib, absorbLib, done } from './_h.m
  * journal held 27459 lines for 1916 entries and one task log 5359 for 519, and `hub doctor`
  * reported the inflated figure as fact. */
 const DUP = mktmp();
-core.setHubBase(DUP);
+core.setHubBase(DUP); core.ensureHubDirs();
 const dline = (ts, text) => JSON.stringify({ ts, project: 'p', agent: 'dev-t', kind: 'note', text });
 const repeatedLine = dline('2026-08-01 10:00', 'said once');
 fs.writeFileSync(path.join(DUP, 'journal.pine.jsonl'),
@@ -75,7 +75,7 @@ ok(/duplicate line\(s\)/.test(docDup.out) && /merge=union/.test(docDup.out),
  * writer now, and it is the only place that can: presence/ is node-local and never mesh-synced,
  * so it can only ever describe the machine already asking. */
 const WV = mktmp();
-core.setHubBase(WV);
+core.setHubBase(WV); core.ensureHubDirs();
 core.journalAppend({ ts: '2026-09-01 10:00', project: 'p', agent: 'dev-t', kind: 'note', text: 'fresh write' });
 const wvLine = JSON.parse(fs.readFileSync(path.join(WV, 'journal.' + core.JOURNAL_NODE + '.jsonl'), 'utf8').trim());
 ok(wvLine.v === core.VERSION,
@@ -163,7 +163,7 @@ fs.rmSync(wvEmpty, { recursive: true, force: true });
  * looked. The divergence is read from git rather than from the log: the log says whatever the
  * script decided to say, and in that incident the script's own diagnosis named the wrong cause. */
 const MS = mktmp();
-core.setHubBase(MS);
+core.setHubBase(MS); core.ensureHubDirs();
 ok(doc.meshStatus() === null, 'meshStatus: a hub that is not a git repo reports nothing to sync');
 core.sh('git init -q -b main', MS);
 core.sh('git config user.email t@t && git config user.name t', MS);
@@ -175,7 +175,7 @@ ok(msNoRemote && msNoRemote.remote === null && msNoRemote.branch === 'main',
 
 const MSUP = mktmp();
 core.sh(`git clone -q "${MS}" "${MSUP}"`, MS);
-core.setHubBase(MSUP);
+core.setHubBase(MSUP); core.ensureHubDirs();
 core.sh('git config user.email t@t && git config user.name t', MSUP);
 ok(doc.meshStatus().behind === 0 && doc.meshStatus().ahead === 0,
   'meshStatus: a fresh clone is in sync, and reports 0/0 rather than staying silent');
@@ -209,7 +209,7 @@ core.sh('git fetch -q origin', MSUP);
 const coll = doc.caseCollisions();
 ok(coll.length === 1 && coll[0].paths.join(' ') === 'queues/r.Node.queue.md queues/r.node.queue.md',
   `caseCollisions: finds a pair that exists only in the remote's tree (got ${JSON.stringify(coll)})`);
-core.setHubBase(MS);
+core.setHubBase(MS); core.ensureHubDirs();
 ok(doc.caseCollisions().length === 1,
   'caseCollisions: and finds it from the index too, on the node that can hold both');
 const collDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
@@ -273,7 +273,7 @@ fs.rmSync(QRC, { recursive: true, force: true });
 // Real incident: roles wrote to a private ~/.hubd for a day; its pine-1..23
 // collided with the shared hub's own pine-1..23, naming different work.
 const AB = mktmp(); const ABSRC = mktmp();
-core.setHubBase(AB);
+core.setHubBase(AB); core.ensureHubDirs();
 fs.writeFileSync(path.join(AB, 'tasks.pine.events.jsonl'),
   JSON.stringify({ ts: '2026-08-01 10:00', node: 'pine', ev: 'add', id: 'pine-1', t: { id: 'pine-1', project: 'barechat', text: 'shared old work', status: 'open' } }) + '\n');
 fs.writeFileSync(path.join(AB, 'journal.pine.jsonl'), JSON.stringify({ ts: '2026-08-01 10:01', project: 'barechat', agent: 'x', kind: 'note', text: 'shared entry' }) + '\n');
