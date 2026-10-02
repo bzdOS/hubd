@@ -115,6 +115,12 @@ paste the matching block from [`prompts/`](prompts/) (Claude Code, Cursor,
 Codex/AGENTS.md, or an MCP chat) — it wires hubd in and points at `HUBD.md`,
 the always-current protocol.
 
+**Running roles in a loop?** [`prompts/meta/`](prompts/meta/) holds the rules a
+worker, a head and an orchestrator run by, as one template per kind of role with
+shared fragments; everything specific to a role comes in as a variable.
+`hub prompts render worker --vars vars.json --out rules.md` writes a role's rules,
+and `--check rules.md` exits 1 once that file no longer matches the render.
+
 **Running it for a team?** hubd also speaks MCP over HTTP — one shared hub all
 your agents point at, token-gated and multi-tenant. See
 [self-hosting](docs/self-hosting.md).

@@ -26,6 +26,7 @@ import { runBoard } from './lib/board.mjs';
 import { startServer } from './lib/serve.mjs';
 import { runDoctor } from './lib/doctor.mjs';
 import { runHubGc } from './lib/gc.mjs';
+import { renderPrompt, templateNames, lineDiff } from './lib/prompts.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
 import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, queueLedger } from './lib/queue.mjs';
@@ -106,6 +107,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
+  '--vars', '--out', '--check',
 );
 
 function getFlag(name) {
@@ -1424,6 +1426,46 @@ command('harvest', () => {
   done(0);
 });
 
+/* A role's rules from prompts/meta (lib/prompts.mjs). Exit 1 means only "--check found the file
+ * different from the render", so a loop can tell stale rules from a broken template or a missing
+ * variable, which exit 2 and write nothing. */
+command('prompts', () => {
+  const fail = (m) => { console.error('Error: ' + m); process.exit(2); };
+  const usage = 'hub prompts render <template> [--vars <json|file>] [--out <file> | --check <file>]';
+  if (args[1] !== 'render') fail(`${usage}\n  templates: ${templateNames().join(', ')}`);
+  let pos;
+  try { pos = positionals(2, { values: ['--vars', '--out', '--check'] }); } catch (e) { fail(e.message); }
+  if (pos.length !== 1) fail(`${usage}\n  templates: ${templateNames().join(', ')}`);
+  const flag = (n) => { const v = getFlag(n); if (v === true) fail(`${n} needs a value`); return v; };
+  const varsArg = flag('--vars'), out = flag('--out'), check = flag('--check');
+  if (out && check) fail('--out and --check are two different runs: pick one');
+  let vars = {};
+  if (varsArg) {
+    const inline = varsArg.trimStart().startsWith('{');
+    let src = varsArg;
+    if (!inline) { try { src = fs.readFileSync(varsArg, 'utf8'); } catch (e) { fail(`--vars ${varsArg}: ${e.code === 'ENOENT' ? 'no such file' : e.message}`); } }
+    try { vars = JSON.parse(src); } catch (e) { fail(`--vars${inline ? '' : ' ' + varsArg}: not JSON (${e.message})`); }
+  }
+  let text;
+  try { text = renderPrompt(pos[0], vars); } catch (e) { fail(e.message); }
+  if (check) {
+    let have = null;
+    try { have = fs.readFileSync(check, 'utf8'); } catch {}
+    if (have === text) { console.log(`${check}: matches the render of ${pos[0]}`); done(0); }
+    if (have === null) { console.error(`${check}: missing — the render of ${pos[0]} has ${text.split('\n').length} lines`); process.exit(1); }
+    console.error(`${check} differs from the render of ${pos[0]} (- only in the file, + only in the render):`);
+    console.error(lineDiff(have, text).join('\n'));
+    process.exit(1);
+  }
+  if (out) {
+    const tmp = `${out}.tmp.${process.pid}`;
+    try { fs.writeFileSync(tmp, text); fs.renameSync(tmp, out); } catch (e) { try { fs.unlinkSync(tmp); } catch {} fail(`--out ${out}: ${e.message}`); }
+    done(0);
+  }
+  writeAllSync(1, text);
+  done(0);
+});
+
 // Who is running this command. Was `--agent || $USER || 'cli'`, which recorded 41
 // 'cli' and 19 'root' entries — the shell user, not the function doing the work, and
 // agents shell out to this CLI too, so "it came from a terminal" never meant "a human
@@ -1793,6 +1835,7 @@ const HELP = [
   ['resource get <slug>', 'one resource + its in/out relationships'],
   ['graph [-p <proj>] [--type <t>]', 'typed relationship graph (runs_on/depends_on/deploys_to/...)'],
   ['harvest', 'print the Harvest Protocol prompt (also served as an MCP prompt)'],
+  ['prompts render <template> [--vars <json|file>] [--out <file> | --check <file>]', "a role's rules from prompts/meta; --check: exit 1 if the file differs"],
   ['claim <proj> <area> [-t min] [--note "<why>"] --agent <you>', 'soft lock'],
   ['claim --task <id> [-t min] --agent <you>', 'start a task: a claim on it while you work'],
   ['claim check <path> [-p <proj>] [--agent <you>]', 'who holds a claim over this path'],
@@ -1845,7 +1888,7 @@ function readOnlyRun() {
     case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
     case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
     case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
-    case 'operator': case 'lint': case 'sections': case 'harvest':
+    case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts':
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
     case 'usage': return sub !== 'add';
