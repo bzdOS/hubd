@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.32 — 2026-10-02
+
+- **Role rules from one template, not copies.** `prompts/meta/` ships three templates (`worker`,
+  `head`, `orchestrator`) and eight shared fragments: the turn, boundaries, preemption, privacy,
+  the report, the reflection every turn ends with, a head's dispatch cycle, and the orchestrator's
+  reflection over the heads. Everything specific to one role, its name, directory, track goal and
+  facts, the owner's decisions, comes in as a variable. Until now each role's rules lived as a
+  copy, and a rule fixed in one copy stayed wrong in the others.
+- **`hub prompts render <template> --vars <json|file> [--out F | --check F]`.** `{{> name}}`
+  includes `fragments/name.md`, at most 3 deep, and a cycle is an error naming the chain;
+  `{{name}}` is a variable from the template's `<!-- vars: ... -->` line. A missing or blank
+  variable is an error with its name, never an empty string: a blank in a role's rules drops a
+  fact the role cannot know it lost. A variable used but not declared, or declared and never used,
+  is an error with file and line. `--check` exits 1 with a line diff when the file differs from
+  the render, and every render error exits 2, so a loop can tell stale rules from a broken
+  template. The command only reads, like `harvest`. Format: `prompts/meta/README.md`.
+
 ## 0.9.31 — 2026-10-01
 
 Fixes from the acceptance review of 0.9.30.

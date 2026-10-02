@@ -33,3 +33,9 @@ Every rule there is stated with the incident that earned it.
 | worker | [fleet/worker.md](fleet/worker.md) |
 | orchestrator | [fleet/orchestrator.md](fleet/orchestrator.md) |
 | orchestrator (model choice) | [fleet/model-routing.md](fleet/model-routing.md) |
+
+[meta/](meta/) turns rules like these into the file each role runs by: one
+template per kind of role (worker, head, orchestrator), shared fragments, and
+the role's own facts as variables, rendered with `hub prompts render`. A rule
+fixed in a fragment reaches every role on its next render instead of living on
+in copies.
