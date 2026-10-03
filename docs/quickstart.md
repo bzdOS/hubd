@@ -191,6 +191,10 @@ hub queue send worker "HOLD: blocked on the owner's call" --from dev-alex --task
 hub queue status worker    # delivered vs pending, across every host's file at once
 ```
 
+The count is the same on every node: a role's reader publishes how far it got
+(`queues/read/`, mesh-synced), and `queue status` names the node that read each
+file.
+
 Experiments leave roles behind — a queue file is created by the first send and
 never removed, so old test roles keep showing pending work for a consumer that
 never existed. `hub brief` marks those `neverRead`, and `hub queue gc` cleans up:
