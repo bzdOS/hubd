@@ -109,8 +109,8 @@ printf '\n%d pass, %d fail (attribution)\n' "$P2" "$F2"
 [ "$F2" -eq 0 ] || exit 1
 
 # ── a send reports depth, and knows what that depth can mean on THIS node ──
-# The depth is measured against a node-local cursor, so a role consumed on another machine reads as
-# permanently unconsumed here. Warning about that would be wrong on most sends in a fleet.
+# A role whose reader left no read mark (a hubd from before them, on another machine) reads as
+# permanently unconsumed here. Warning about that as if nothing consumed it would be wrong.
 D4="$(mktemp -d)"
 REQS4=$(cat <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
@@ -129,7 +129,7 @@ chk4() { if [ "$2" -eq 0 ]; then P4=$((P4+1)); echo "PASS $1"; else F4=$((F4+1))
 printf '%s\n' "$OUT4" | grep -q '"id":5' && printf '%s\n' "$OUT4" | sed -n 's/.*"id":5.*/&/p' | grep -q 'IS consumed on this node'
 chk4 "send depth: a role consumed HERE gets the real warning" $?
 printf '%s\n' "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -q 'never consumed this role'
-chk4 "send depth: a role consumed elsewhere gets the node-local caveat, not an accusation" $?
+chk4 "send depth: a role read nowhere visible gets the caveat, not an accusation" $?
 printf '%s\n' "$OUT4" | sed -n 's/.*"id":7.*/&/p' | grep -qv 'nothing is consuming'
 chk4 "send depth: and is not told that nothing is consuming it" $?
 rm -rf "$D4"

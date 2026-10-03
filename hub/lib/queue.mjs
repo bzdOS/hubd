@@ -11,6 +11,9 @@
  *     queues/<role>.queue.md is still READ for back-compat, never written.)
  *   .qstate/<file>.offset — byte offset of the last-read position, PER source
  *     file. Local to the node (.qstate/ is gitignored).
+ *   queues/read/<role>.<node>.json — how far <role>'s reader on <node> got in
+ *     each source file. Written by that node only, and mesh-synced, so every
+ *     node counts what is read the same way (see "Read marks" below).
  *
  * Block format:
  *   \n## YYYY-MM-DD HH:MM · from <sender>\n<text>\n
@@ -25,7 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock,
+import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock, readJson, atomicWrite,
   loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
@@ -129,15 +132,19 @@ export function listShards(qdir) {
   return out;
 }
 
-/** Move one queue file into queues/archive/ (a numbered name when that one is taken), and its
- *  shared cursor into .qstate/_archive/. Moved, never deleted: the mesh guard accepts a removed
- *  queue file only when an identical blob sits in an archive. Returns the archived path. */
+/** Move one queue file into queues/archive/ (a numbered name when that one is taken), its ack log
+ *  beside it, and its shared cursor into .qstate/_archive/. Moved, never deleted: the mesh guard
+ *  accepts a removed queue file only when an identical blob sits in an archive. Returns the
+ *  archived path. */
 export function archiveQueueFile(root, file) {
   const adir = path.join(root, 'queues', 'archive');
   fs.mkdirSync(adir, { recursive: true });
   let dest = path.join(adir, file);
   for (let n = 2; fs.existsSync(dest); n++) dest = path.join(adir, file.replace(/\.queue\.md$/, `.${n}.queue.md`));
   fs.renameSync(path.join(root, 'queues', file), dest);
+  // The ack log goes with its queue: left behind, it would answer for the next file's id 1.
+  const acks = acksPath(path.join(root, 'queues', file));
+  if (fs.existsSync(acks) && !fs.existsSync(acksPath(dest))) fs.renameSync(acks, acksPath(dest));
   const cur = path.join(root, '.qstate', `${file}.offset`);
   if (fs.existsSync(cur)) {
     const cdir = path.join(root, '.qstate', '_archive');
@@ -281,6 +288,98 @@ const writeCursor = (offFile, off, mark) => {
 const BLOCK_HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from .*$/gm;
 const lastHeaderIn = (text) => { const m = text.match(BLOCK_HEAD); return m ? m[m.length - 1] : null; };
 
+/* ── Read marks: how far a role's reader got, visible from every node ──
+ *
+ * The cursor is node-local by design, and that made every count taken anywhere but on the reader's
+ * own node wrong. Measured on a live mesh: one role's queue, 71 messages; the node that wrote them
+ * said 44 pending, the node that reads them said 0, and a head on the first node spent its turns on
+ * a backlog that did not exist. The ack log could not settle it either: every reader, taps
+ * included, appended "delivered" for every block it was handed, so a queue handed out from its
+ * start seventeen times over left 361 lines for 61 ids.
+ *
+ * So the reader publishes its position. queues/read/<role>.<node>.json is written by the node that
+ * read and by no other, and travels with the mesh: one writer per file, so no merge can conflict.
+ * Per queue file it holds the header of the last block handed out, the byte offset after it, and
+ * when. The header is what is trusted: offsets agree across nodes only while nobody trims the file,
+ * and a trimmed or recreated file must not look read. Any node then counts a file as read up to the
+ * furthest of its own cursor and every node's mark.
+ *
+ * Only a role's own reader writes one — the shared cursor, or a subscriber of a broadcast role. A
+ * tap (queueWaitAll) watches the fleet and reads for nobody, so it writes no mark and no ack. */
+const READ_DIR = 'read';
+const markFile = (qdir, role, node) => path.join(qdir, READ_DIR, `${role}.${node}.json`);
+
+/** Publish that `reader` ({ role, sub }) has been handed file `f` up to byte `off`, block `mark`. */
+function recordRead(qdir, reader, f, off, mark) {
+  const p = markFile(qdir, reader.role, nodeName());
+  withLock(p, () => {
+    const m = readJson(p, {});
+    const slot = reader.sub ? ((m.subs ??= {})[reader.sub] ??= {}) : (m.files ??= {});
+    slot[f] = { mark, off, at: now() };
+    // A file archived since (by any node) leaves no position worth publishing.
+    for (const s of [m.files || {}, ...Object.values(m.subs || {})])
+      for (const k of Object.keys(s)) if (!fs.existsSync(path.join(qdir, k))) delete s[k];
+    atomicWrite(p, JSON.stringify(m, null, 1) + '\n');
+  });
+}
+
+/** Every node's read marks for `role`, as [{ node, files, subs }]. */
+function readMarks(qdir, role) {
+  let names = [];
+  try { names = fs.readdirSync(path.join(qdir, READ_DIR)); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    const m = /^([^.]+)\.([^.]+)\.json$/.exec(n);   // neither a role nor a node holds a dot
+    if (!m || m[1] !== role) continue;
+    const j = readJson(path.join(qdir, READ_DIR, n), null);
+    if (j && typeof j === 'object') out.push({ node: m[2], files: j.files || {}, subs: j.subs || {} });
+  }
+  return out;
+}
+
+/** The marks for file `f` — the shared reader's, or subscriber `sub`'s — as [{ node, entry }]. */
+const marksFor = (marks, f, sub = null) => marks
+  .map(m => ({ node: m.node, entry: sub ? (m.subs[sub] || {})[f] : m.files[f] }))
+  .filter(x => x.entry && x.entry.mark);
+
+/* The byte offset just past the block a mark names, or null when the file no longer holds it. The
+ * offset the mark carries is taken when the last header before it is the mark itself — one window
+ * read, not the whole file; otherwise the header is searched for, last occurrence first, the same
+ * way a shrunken file's cursor finds its watermark. `buf`, when the caller already holds the file. */
+function markOffset(full, size, entry, buf = null) {
+  const { mark, off } = entry;
+  if (Number.isInteger(off) && off > 0 && off <= size) {
+    const from = Math.max(0, off - 65536);
+    let win = ''; try { win = buf ? buf.subarray(from, off).toString('utf8') : readTail(full, from, off); } catch {}
+    if (lastHeaderIn(win) === mark) return off;
+  }
+  let text; try { text = buf ? buf.toString('utf8') : fs.readFileSync(full, 'utf8'); } catch { return null; }
+  for (let at = text.lastIndexOf(mark); at !== -1; at = at ? text.lastIndexOf(mark, at - 1) : -1) {
+    const end = at + mark.length;
+    if ((at && text[at - 1] !== '\n') || (end < text.length && text[end] !== '\n')) continue;   // not a whole line
+    const next = new RegExp(BLOCK_HEAD.source, 'gm');
+    next.lastIndex = end;
+    const n = next.exec(text);
+    // a block ends on the newline before the next header: where a reader's cursor stops
+    return Buffer.byteLength(n ? text.slice(0, n.index - 1) : text, 'utf8');
+  }
+  return null;
+}
+
+/* How far a file has been read: the furthest of this node's cursor `local` (null: none here) and
+ * the marks `entries`. `by` is the node whose mark is furthest, null when nothing beats the cursor
+ * here; `seen`, whether anything has read the file at all. */
+function readPosition(full, size, local, entries, buf = null) {
+  let off = local == null ? 0 : Math.min(Math.max(0, local), size), by = null, at = null, seen = local != null;
+  for (const { node, entry } of entries) {
+    const o = markOffset(full, size, entry, buf);
+    if (o == null) continue;
+    seen = true;
+    if (o > off) { off = o; by = node; at = entry.at || null; }
+  }
+  return { off, by, at, seen };
+}
+
 // Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <N>`
 const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
 
@@ -386,13 +485,16 @@ export function cursorStalls(stateDir, files) {
   return out;
 }
 
-function drainFile(qdir, stateDir, f) {
+/* `reader` is the role and subscriber this cursor reads for — null for a tap, which reads for
+ * nobody and so leaves no ack and no read mark behind. */
+function drainFile(qdir, stateDir, f, reader = null) {
   const offFile = path.join(stateDir, `${f}.offset`);
   const full = path.join(qdir, f);
   const sizeOf = () => { try { return fs.statSync(full).size; } catch { return 0; } };
   if (sizeOf() === readCursor(offFile).off) return null;   // nothing new — don't even lock
+  let text, read = null;
   try {
-    return withLock(offFile, () => {
+    text = withLock(offFile, () => {
       let { off, mark } = readCursor(offFile);
       const sz = sizeOf();   // both re-read under the lock
       if (sz < off) {        // the file shrank: resume after the watermark, and deliver from there now
@@ -402,14 +504,21 @@ function drainFile(qdir, stateDir, f) {
       }
       if (sz === off) return null;                    // a competitor drained it first
       const chunk = readTail(full, off, sz);
-      writeCursor(offFile, sz, lastHeaderIn(chunk) || mark);
-      // Record delivery ack for any blocks with ids in the chunk
-      try {
-        for (const m of (chunk || '').matchAll(BLOCK_ID_RE)) {
-          const id = parseInt(m[1], 10);
-          if (id) writeAck(acksPath(path.join(qdir, f)), id, 'delivered');
-        }
-      } catch {}
+      const last = lastHeaderIn(chunk) || mark;
+      writeCursor(offFile, sz, last);
+      if (reader) {
+        if (last) read = { off: sz, mark: last };
+        // One "delivered" per block: handing a block out again — a cursor reset, a second
+        // subscriber of a broadcast — does not deliver it again.
+        try {
+          const af = acksPath(full);
+          const have = new Set(readAcks(af).map(a => a.id));
+          for (const m of chunk.matchAll(BLOCK_ID_RE)) {
+            const id = parseInt(m[1], 10);
+            if (id && !have.has(id)) { writeAck(af, id, 'delivered'); have.add(id); }
+          }
+        } catch {}
+      }
       return chunk.trim() || null;
     });
   } catch (e) {
@@ -417,6 +526,10 @@ function drainFile(qdir, stateDir, f) {
     if (e && /hub busy/.test(String(e.message))) return null;
     throw new QueueStalled(offFile, e);
   }
+  // Outside the cursor's lock, and never fatal: the block is already handed out, and a mark that
+  // could not be written only leaves the other nodes' counts behind until the next read.
+  if (read) { try { recordRead(qdir, reader, f, read.off, read.mark); } catch {} }
+  return text;
 }
 
 /**
@@ -458,7 +571,10 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
 
   const ts = now();
   // Block identity: a monotonic counter per file, so the sender can ask "was block N delivered?"
-  // and the consumer can ack individual blocks. Resets when the file is archived/removed.
+  // and the consumer can ack individual blocks. It also counts past every id the file's ack log
+  // still holds: a file emptied or replaced by hand used to start again at 1, and its new id 1
+  // was then already "delivered" or "acked" by the old file's lines. Archiving moves the ack log
+  // with the file, so only an archived queue starts a new one at 1.
   let blockId = 1;
   try {
     const existing = fs.readFileSync(qfile, 'utf8');
@@ -468,6 +584,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
       blockId = Math.max(...nums) + 1;
     }
   } catch {}
+  for (const a of readAcks(acksPath(qfile))) if (Number.isInteger(a.id) && a.id >= blockId) blockId = a.id + 1;
   // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
   // prefix every existing reader (peekQueueDepth, doctor, the archive) keys on.
   const ref = (task ?? '') !== '' ? ` · task #${String(task).trim()}` : '';
@@ -667,7 +784,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
         let t = null;
         // One unreadable cursor must not hide the files that ARE deliverable — but it is
         // reported either way, never swallowed.
-        try { t = drainFile(qdir, stateDir, f); }
+        try { t = drainFile(qdir, stateDir, f, { role, sub: fanout ? subscriber : null }); }
         catch (e) { if (e && e.name === 'QueueStalled') { stalled.push(e); continue; } throw e; }
         if (t) parts.push(t);
       }
@@ -794,8 +911,8 @@ export async function queueWaitAll({ timeout = 540, root, subscriber } = {}) {
  * Non-consuming peek at how many messages are waiting in a role's queue — for
  * hub_brief/hub_presence to show "N queued for role X" without stealing from
  * the role's own hub_queue_wait consumer. Reads the SAME per-file byte offsets
- * queueWait uses (.qstate/<file>.offset) but never writes them back, so calling
- * this never advances anyone's read position.
+ * queueWait uses (.qstate/<file>.offset), and every node's read marks, but never
+ * writes either, so calling this never advances anyone's read position.
  *
  * @param {string} role
  * @param {{ root?: string }} options
@@ -808,11 +925,13 @@ export function peekQueueDepth(role, { root } = {}) {
   const fileRe = roleFileRe(role);
   let files;
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { pending: 0, oldestWaiting: null }; }
+  const marks = readMarks(qdir, role);
 
   let pending = 0, oldest = null;
   for (const f of files) {
-    const { off } = readCursor(path.join(stateDir, `${f}.offset`));
+    const offFile = path.join(stateDir, `${f}.offset`);
     let size = 0; try { size = fs.statSync(path.join(qdir, f)).size; } catch {}
+    const { off } = readPosition(path.join(qdir, f), size, fs.existsSync(offFile) ? readCursor(offFile).off : null, marksFor(marks, f));
     if (size <= off) continue;
     // A file this user cannot read is a stall for doctor to name, not a crash inside hub_brief.
     let tail;
@@ -983,7 +1102,7 @@ export function queueSummaryForBrief({ root } = {}) {
 
   // Which roles were ever consumed at all — the difference between "N waiting for someone who
   // is away" and "N waiting for someone who has never existed". Both used to print identically.
-  const everRead = new Set(shards.filter(s => queueCursorSeen(r, s.file)).map(s => s.role));
+  const everRead = new Set(shards.filter(s => fileEverRead(r, s.file)).map(s => s.role));
 
   return [...roles].sort().map(role => {
     // A declared broadcast role is consumed through PER-READER cursors
@@ -1007,8 +1126,9 @@ export function queueSummaryForBrief({ root } = {}) {
  * that never existed is not backlog, and a number that only ever grows teaches its reader to
  * ignore the number.
  *
- * "Never read" is the discriminator, not age. A cursor under .qstate means somebody really did
- * consume this file through hub_queue_wait. Two things deliberately do NOT count as reading:
+ * "Never read" is the discriminator, not age. A cursor under .qstate, or a read mark from any
+ * node, means somebody really did consume this file through hub_queue_wait. Two things
+ * deliberately do NOT count as reading:
  * a tap (.qstate/__watchall__/) — an orchestrator watching the fleet was never that role's
  * consumer — and a HUMAN owner role, whose queue is read as a file by a person, so a missing
  * cursor there is normal rather than evidence of a ghost.
@@ -1030,6 +1150,28 @@ export function queueCursorSeen(root, file) {
   if (fs.existsSync(path.join(st, `${file}.offset`))) return true;
   // subscriberDirs skips the tap root (a tap is not a consumer) and the archive.
   return subscriberDirs(st).some(d => fs.existsSync(path.join(st, d, `${file}.offset`)));
+}
+
+/** Has ANY node read this file as its role's reader: a cursor here, or a read mark from anywhere.
+ *  queueCursorSeen is the same question asked of this node alone. */
+export function fileEverRead(root, file) {
+  if (queueCursorSeen(root, file)) return true;
+  const sh = SHARD_RE.exec(file);
+  if (!sh) return false;
+  return readMarks(path.join(root, 'queues'), sh[1])
+    .some(m => (m.files[file] && m.files[file].mark) || Object.values(m.subs).some(s => s && s[file] && s[file].mark));
+}
+
+/** The nodes whose reader has a read mark for any of this role's files, newest first. */
+export function whereRead(role, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const latest = new Map();
+  for (const m of readMarks(path.join(r, 'queues'), role)) {
+    for (const e of [...Object.values(m.files), ...Object.values(m.subs).flatMap(s => Object.values(s || {}))]) {
+      if (e && e.mark && (!latest.has(m.node) || (e.at || '') > latest.get(m.node))) latest.set(m.node, e.at || '');
+    }
+  }
+  return [...latest].sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([node, at]) => ({ node, at: at || null }));
 }
 
 /**
@@ -1062,7 +1204,7 @@ export function queueInventory({ root, days = 30 } = {}) {
     // collectable, which is the wrong answer for the emptiest kind of ghost.
     const ageDays = Math.floor((nowMs - (newest ? parseTs(newest).getTime() : mtimeMs)) / 86400000);
     const lastSeen = presence.filter(p => p.role === role).map(p => p.last_seen).sort().pop() || null;
-    const read = queueCursorSeen(r, f);
+    const read = fileEverRead(r, f);
     const isOwner = owners.has(role);
     // A cursor this user cannot write stops delivery dead while every other number here looks
     // healthy — so it is measured where the numbers are read, not only where a wait would trip
@@ -1123,12 +1265,11 @@ export function outOfBandTrims({ root } = {}) {
  * "REPEATED ESCALATION" in prose, hours later. A send that cannot be delivered should not read
  * as a send that was.
  *
- * Scope, stated because it bounds the claim: BOTH inputs are node-local. Cursors live in
- * .qstate/ and presence/ in presence/, and neither is mesh-synced — by design, since three
- * machines have three sets of readers. So this answers "nothing here has taken these, and no
- * agent for the role is running here", never "these were not delivered anywhere". A consumer on
- * another node is invisible from this one, and the caller has to say so rather than let a reader
- * assume the stronger claim. */
+ * Scope, stated because it bounds the claim: "read" is mesh-wide (a cursor here or a read mark
+ * from any node), but presence is node-local. So this answers "no node has ever read these, and
+ * no agent for the role is running here". A reader on another node that runs a hubd from before
+ * read marks leaves none, and is still invisible from this one; the caller has to say so rather
+ * than let a reader assume the stronger claim. */
 export function strandedQueues({ root, days = 30 } = {}) {
   return queueInventory({ root, days })
     .filter(x => x.messages > 0 && !x.read && !x.lastSeen && !x.isOwner && !x.ghost)
@@ -1146,6 +1287,10 @@ export function strandedQueues({ root, days = 30 } = {}) {
  * belonged to which. Byte offsets are split on a Buffer, never on a JS string: a cursor counts
  * bytes, and slicing UTF-16 code units instead would miscount every non-ASCII message.
  *
+ * "Delivered" is read through readPosition: this node's cursor or any node's read mark, whichever
+ * got further. So the same mesh gives the same ledger on every node. `cursor` stays this node's
+ * own, for forensics; `readBy` names the node whose mark set the position (null: this node).
+ *
  * @param {{ root?: string, role?: string }} options
  */
 export function queueLedger({ root, role } = {}) {
@@ -1157,32 +1302,47 @@ export function queueLedger({ root, role } = {}) {
   const owners = new Set(ownerRoles());
   const HEAD = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from /gm;
   const countHeads = (s) => (s.match(HEAD) || []).length;
+  const localSubs = subscriberDirs(stateDir);
+  const marksByRole = new Map();
 
   const byRole = new Map();
   for (const { file: f, role: rl, node } of shards) {
     if (role && rl !== role) continue;
+    if (!marksByRole.has(rl)) marksByRole.set(rl, readMarks(qdir, rl));
+    const marks = marksByRole.get(rl);
+    const full = path.join(qdir, f);
     let buf = Buffer.alloc(0);
-    try { buf = fs.readFileSync(path.join(qdir, f)); } catch {}
+    try { buf = fs.readFileSync(full); } catch {}
     const offFile = path.join(stateDir, `${f}.offset`);
-    const cursor = fs.existsSync(offFile) ? readCursor(offFile).off : null;
-    const off = Math.min(Math.max(0, cursor || 0), buf.length);
+    const cursor = fs.existsSync(offFile) ? Math.min(Math.max(0, readCursor(offFile).off), buf.length) : null;
+    const pos = readPosition(full, buf.length, cursor, marksFor(marks, f), buf);
     const total = countHeads(buf.toString('utf8'));
-    const delivered = countHeads(buf.subarray(0, off).toString('utf8'));
+    const delivered = countHeads(buf.subarray(0, pos.off).toString('utf8'));
     // Per-subscriber cursors (broadcast roles): each reader has its own position, so there is
     // no single "delivered" for the role — report the readers instead of averaging them into a
-    // number that is true for nobody.
-    const readers = [];
-    for (const d of subscriberDirs(stateDir)) {
+    // number that is true for nobody. A reader is one with a cursor here or a mark from anywhere.
+    const subs = new Map();
+    for (const d of localSubs) {
       const c = path.join(stateDir, d, `${f}.offset`);
-      if (fs.existsSync(c)) readers.push({ subscriber: d, delivered: countHeads(buf.subarray(0, Math.min(readCursor(c).off, buf.length)).toString('utf8')) });
+      if (fs.existsSync(c)) subs.set(d, readCursor(c).off);
+    }
+    for (const m of marks) for (const s of Object.keys(m.subs)) if (m.subs[s] && m.subs[s][f] && !subs.has(s)) subs.set(s, null);
+    const readers = [];
+    for (const [s, local] of subs) {
+      const p = readPosition(full, buf.length, local, marksFor(marks, f, s), buf);
+      if (!p.seen) continue;
+      readers.push({ subscriber: s, delivered: countHeads(buf.subarray(0, p.off).toString('utf8')), on: p.by || (local != null ? 'here' : null) });
     }
     if (!byRole.has(rl)) byRole.set(rl, { role: rl, fanout: fanoutRoles.has(rl), isButton: owners.has(rl), total: 0, delivered: 0, pending: 0, files: [], readers: [] });
     const agg = byRole.get(rl);
     agg.total += total; agg.delivered += delivered; agg.pending += total - delivered;
-    agg.files.push({ file: f, node, total, delivered, pending: total - delivered, cursor: cursor == null ? null : off, bytes: buf.length });
+    agg.files.push({ file: f, node, total, delivered, pending: total - delivered, bytes: buf.length,
+      cursor, readTo: pos.seen ? pos.off : null, readBy: pos.by, readAt: pos.at });
     for (const rd of readers) {
       const found = agg.readers.find(x => x.subscriber === rd.subscriber);
-      if (found) found.delivered += rd.delivered; else agg.readers.push({ ...rd });
+      if (!found) { agg.readers.push({ subscriber: rd.subscriber, delivered: rd.delivered, on: rd.on ? [rd.on] : [] }); continue; }
+      found.delivered += rd.delivered;
+      if (rd.on && !found.on.includes(rd.on)) found.on.push(rd.on);
     }
   }
   /* A broadcast role has no shared cursor: every reader keeps its own, and nothing ever advances
@@ -1442,18 +1602,23 @@ export function queueSendChecked(role, text, { from, root, task } = {}) {
   // never said whether anything is reading, and a sender read it as "delivered" — while four roles
   // sat on a day of undelivered orders. A depth that keeps climbing is the sender's own evidence.
   const depth = (() => { try { return peekQueueDepthWithAcks(role, { root: r }); } catch { return null; } })();
-  /* The depth is measured against THIS node's cursor, and that is only evidence when this node is
-   * where the role is consumed. A role read on another machine keeps its cursor there — .qstate is
-   * node-local and never syncs — so a cross-node queue reads as permanently unconsumed from here.
-   * Saying "nothing is consuming" about those would be wrong on most sends in a fleet, and a
-   * warning that is usually wrong is one its reader learns to skip. So: consumed-here gets the
-   * real warning, never-consumed-here gets the caveat instead of an accusation. */
+  /* The depth counts this node's cursor and every node's read mark, so a role read on another
+   * machine is measured too — as of the last mesh sync. What it cannot see is a reader on a hubd
+   * from before read marks: its cursor never leaves its node, and its queue reads as unconsumed from
+   * here. Saying "nothing is consuming" about that would be wrong, and a warning that is often wrong
+   * is one its reader learns to skip. So: consumed here, or marked as read elsewhere, gets the real
+   * warning and says where; neither gets the caveat instead of an accusation. */
   const seenHere = (() => { try { return everConsumedHere(role, { root: r }); } catch { return false; } })();
+  const readOn = seenHere ? [] : (() => { try { return whereRead(role, { root: r }); } catch { return []; } })();
+  const head = depth ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver.` : '';
   const note = !depth || depth.pending <= 1 ? null
     : seenHere
-      ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver. This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
-      : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and cursors are node-local — so this is not a backlog, it is the only view this machine can have. Check on the node that runs the role.`;
+      ? `${head} This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
+      : readOn.length
+        ? `${head} This node has never consumed this role; it is read on ${readOn.map(x => x.node).join(', ')} (last read ${readOn[0].at || 'at an unknown time'}), counted here as of the last mesh sync. A depth that keeps climbing means that reader stopped: check it there.`
+        : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and no node has left a read mark for it — so either nobody reads it, or its reader runs a hubd from before read marks and its cursor never leaves that node. Check on the node that runs the role.`;
   return { file, ...(taskKnown === undefined ? {} : { task, taskKnown }),
     ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
+      ...(readOn.length ? { readOn: readOn.map(x => x.node) } : {}),
       unacked: depth.unacked || 0, ...(note ? { note } : {}) } : {}) };
 }

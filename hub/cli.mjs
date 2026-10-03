@@ -1717,13 +1717,16 @@ command('queue', () => {
       console.log(`${r.role}${tag}: ${r.total} message(s) — ` + (r.fanout
         ? 'delivered PER READER; a broadcast role has no shared position'
         : `${r.delivered} delivered, ${r.pending} pending`));
+      // Read positions are mesh-wide: this node's cursor or any node's read mark, whichever is further.
+      const readAt = (f) => f.readTo === null ? '   nobody has read this file — no cursor here, no read mark from any node'
+        : `   read to ${f.readTo}/${f.bytes}B ` + (f.readBy ? `on ${f.readBy}${f.readAt ? ' at ' + f.readAt : ''}` : 'here') +
+          (f.readBy && f.cursor !== null && f.cursor < f.readTo ? ` (this node's cursor: ${f.cursor}B)` : '');
       for (const f of r.files) {
         console.log(`    ${f.node || '(legacy, no node)'}: ${f.total} total` +
-          (r.fanout ? '' : `, ${f.delivered} delivered, ${f.pending} pending`) +
-          (f.cursor === null ? '   no cursor — nobody has ever consumed this file' : `   cursor ${f.cursor}/${f.bytes}B`));
+          (r.fanout ? '' : `, ${f.delivered} delivered, ${f.pending} pending` + readAt(f)));
       }
       for (const rd of r.readers)
-        console.log(`    reader ${rd.subscriber}: ${rd.delivered} delivered` +
+        console.log(`    reader ${rd.subscriber}${rd.on.length ? ' (on ' + rd.on.join(', ') + ')' : ''}: ${rd.delivered} delivered` +
           (rd.behind ? `, ${rd.behind} behind` : ''));
     }
     done(0);

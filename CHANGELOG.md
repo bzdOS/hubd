@@ -4,6 +4,25 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.33 — 2026-10-03
+
+- **Every node counts a queue the same way.** A cursor never leaves its node, so the node that
+  wrote a role's messages counted as pending what the node that read them had taken: on a live
+  mesh, 44 pending on one node and 0 on the other for one queue of 71. A role's reader now
+  publishes how far it got, `queues/read/<role>.<node>.json`: one writer per file, mesh-synced,
+  the header of the last block handed out plus its offset. `hub queue status`, the depth a send
+  reports, `hub brief`, `hub doctor`, and ghost and stranded queues all take the furthest of this
+  node's cursor and every node's mark, and `queue status` names the node and the time. The header
+  is trusted, not the offset: a file trimmed above the mark still reads as read to its end, and a
+  file recreated under the same name does not inherit it. Delivery is unchanged. A tap
+  (`hub_queue_wait_all`) writes no mark. Design: `docs/queue-invariant.md`, "Read marks".
+- **One "delivered" per block in the ack log.** Every reader, taps included, appended one for every
+  block it was handed, so a queue handed out from its start seventeen times left 361 lines for 61
+  ids. Now only a role's reader writes, and only for an id the log does not have yet.
+- **Block ids continue past the ack log.** A file emptied by hand restarted at id 1, and the old
+  log answered for the new id 1. `hub queue gc` and `hub gc` move a queue's ack log into the
+  archive with it, so the next file starts clean.
+
 ## 0.9.32 — 2026-10-02
 
 - **Role rules from one template, not copies.** `prompts/meta/` ships three templates (`worker`,

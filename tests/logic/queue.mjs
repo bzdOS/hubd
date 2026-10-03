@@ -221,23 +221,23 @@ ok(!strandedRoles.includes('ghost'),
   'strandedQueues: an old one belongs to queue gc, not here — the two lists never double-count');
 /* One number covered two unrelated situations. 2811 messages "nothing here has taken" reads as
  * 2811 dropped pieces of work; 2718 of them were in queues written to within the day, which a dead
- * role does not do — and cursors are node-local, so a queue fed here and drained on another node
- * looks from here exactly like one addressed to nobody. Split on the one local piece of evidence:
- * is anything still ARRIVING. */
+ * role does not do — and a reader on a hubd from before read marks leaves nothing in the mesh, so a
+ * queue fed here and drained on such a node looks from here exactly like one addressed to nobody.
+ * Split on the one local piece of evidence: is anything still ARRIVING. */
 fs.writeFileSync(path.join(QG, 'queues', 'wentquiet.n1.queue.md'),
   '\n## ' + new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 16).replace('T', ' ') + ' · from alice\nold work\n');
 const strandDoc = run('doctor', { HUBD_DIR: QG, HUBD_TEAM_DIR: QG });
 ok(/1 message\(s\) in 1 queue\(s\) nobody took, and nothing new has arrived in 7d {2}WARNING/.test(strandDoc.out),
   'doctor: a queue that has gone quiet with work still in it is the one that warns');
-ok(/1 message\(s\) in 1 queue\(s\) with no cursor HERE, still being written to/.test(strandDoc.out) &&
-   /NOT a backlog/.test(strandDoc.out),
+ok(/1 message\(s\) in 1 queue\(s\) no node has read, still being written to/.test(strandDoc.out) &&
+   /NOT a backlog yet/.test(strandDoc.out),
   'doctor: a queue still being fed is reported as unverifiable from here, not as dropped work');
-/* The claim has to be bounded. Cursors live in .qstate/ and presence in presence/, neither of
- * which is mesh-synced, so this node cannot see a consumer running on another one — and the
- * numbers really do diverge: 473 messages looked untaken from a laptop, 53 from the node whose
- * consumers actually hold the cursors. Printing the caveat is what keeps the line honest. */
-ok(/cursors and presence are node-local/.test(strandDoc.out),
-  'doctor: and says out loud that a consumer on another node is invisible from here');
+/* The claim has to be bounded. Presence is not mesh-synced, and a reader on a hubd from before read
+ * marks keeps its cursor on its own node — and the numbers really did diverge: 473 messages looked
+ * untaken from a laptop, 53 from the node whose consumers held the cursors. Printing the caveat is
+ * what keeps the line honest. */
+ok(/presence is node-local, and a reader on a hubd from before read marks/.test(strandDoc.out),
+  'doctor: and says out loud what a node still cannot see from here');
 ok(!/and \d+ more/.test(strandDoc.out.split('nobody took')[1].split('still being written to')[0]),
   'doctor: the quiet list is printed whole — it was the decidable tail that used to be truncated');
 fs.rmSync(path.join(QG, 'queues', 'nobodyhome.n1.queue.md'));
@@ -573,6 +573,95 @@ const AK = mktmp();
     'acks: id 1 is acked in the shard that holds id 1, not in one that holds id 12');
   let bad = null; try { queueLib.queueAck('ak', 'x1', { root: AK }); } catch (e) { bad = e.message; }
   ok(/positive integer/.test(bad || ''), 'acks: a block id that is not a number is refused, not searched for');
+}
+
+// ── read marks: every node counts what the role's reader read ──
+/* Measured on a live mesh: one role, 71 messages; the node that wrote them said 44 pending, the node
+ * that read them said 0. A cursor never leaves its node; a read mark does. Two roots stand in for
+ * two nodes, the reader runs as a process with the other node's name, and copying queues/ across is
+ * what the mesh does. Each test below fails if the mark, or the merge on read, is taken out. */
+{
+  const A = mktmp(), B = mktmp();
+  const sync = (from, to) => fs.cpSync(path.join(from, 'queues'), path.join(to, 'queues'), { recursive: true });
+  const asNode = (root, node) => ({ env: { HUBD_DIR: path.join(root, 'hub'), HUBD_TEAM_DIR: root, HUBD_QUEUE_DIR: root, HUBD_NODE: node }, cwd: root });
+  const F = 'rm.cedar.queue.md';
+  for (let i = 1; i <= 5; i++) queueLib.queueSend('rm', 'order ' + i, { from: 'dev-t', root: A, node: 'cedar' });
+  sync(A, B);
+  const w = cli(['queue', 'wait', 'rm', '--timeout', '0'], asNode(B, 'fir'));
+  ok(w.code === 0 && /order 5/.test(w.out), 'read marks: setup — the reader on the other node took all five');
+  ok(fs.existsSync(path.join(B, 'queues', 'read', 'rm.fir.json')), 'read marks: the reader publishes its position under its own node name');
+  sync(B, A);
+  const la = queueLib.queueLedger({ root: A, role: 'rm' }).roles[0], lb = queueLib.queueLedger({ root: B, role: 'rm' }).roles[0];
+  ok(la.delivered === 5 && la.pending === 0,
+    `read marks: the writing node no longer counts as pending what was read on another (got ${la.delivered} delivered, ${la.pending} pending)`);
+  ok(la.delivered === lb.delivered && la.pending === lb.pending, 'read marks: and both nodes count the same');
+  const fa = la.files.find(f => f.file === F);
+  ok(fa.readBy === 'fir' && fa.cursor === null, 'read marks: the ledger says which node read it, and that this one holds no cursor');
+  ok(queueLib.peekQueueDepth('rm', { root: A }).pending === 0, 'read marks: the depth a sender is shown agrees');
+  ok(/read to \d+\/\d+B on fir at /.test(cli(['queue', 'status', 'rm'], asNode(A, 'cedar')).out), 'read marks: queue status names the reading node');
+  ok(queueLib.queueInventory({ root: A }).find(x => x.file === F).read, 'read marks: a file read on another node is not a ghost or stranded here');
+
+  // a cursor left here by an earlier reader does not drag the count back: the furthest one wins
+  const text = fs.readFileSync(path.join(A, 'queues', F), 'utf8');
+  const afterTwo = Buffer.byteLength(text.slice(0, text.indexOf('\n## ', text.indexOf('order 2')) + 1));
+  fs.mkdirSync(path.join(A, '.qstate'), { recursive: true });
+  fs.writeFileSync(path.join(A, '.qstate', F + '.offset'), String(afterTwo));
+  const stale = queueLib.queueLedger({ root: A, role: 'rm' }).roles[0];
+  ok(stale.delivered === 5 && stale.files.find(f => f.file === F).cursor === afterTwo,
+    `read marks: a stale cursor here is kept for forensics and outranked (got ${stale.delivered} delivered)`);
+
+  // the header is what is trusted, not the offset: trimmed above the mark still reads to the end,
+  // recreated with other content does not look read at all
+  const C = mktmp(), D = mktmp();
+  sync(A, C); sync(A, D);
+  fs.writeFileSync(path.join(C, 'queues', F), text.slice(text.indexOf('\n## ', text.indexOf('order 3'))));
+  const tc = queueLib.queueLedger({ root: C, role: 'rm' }).roles[0];
+  ok(tc.total === 2 && tc.delivered === 2, `read marks: a file trimmed above the mark is still read to its end (got ${tc.delivered}/${tc.total})`);
+  fs.writeFileSync(path.join(D, 'queues', F), '\n## 2020-01-01 00:00 · from dev-t · id 1\nanother file now\n' + 'x'.repeat(text.length));
+  const td = queueLib.queueLedger({ root: D, role: 'rm' }).roles[0];
+  ok(td.delivered === 0 && td.pending === 1, 'read marks: a recreated file under the same name does not inherit the old mark');
+
+  // handing the file out again — a cursor lost on the reader node — writes no second "delivered"
+  fs.rmSync(path.join(B, '.qstate', F + '.offset'));
+  const again = cli(['queue', 'wait', 'rm', '--timeout', '0'], asNode(B, 'fir'));
+  const acks = fs.readFileSync(path.join(B, 'queues', 'rm.cedar.acks'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  ok(/order 1/.test(again.out) && acks.length === 5 && new Set(acks.map(a => a.id)).size === 5,
+    `acks: a block handed out twice is delivered once in the log (got ${acks.length} lines)`);
+  ok(queueLib.queueLedger({ root: B, role: 'rm' }).roles[0].delivered === 5, 'read marks: and the re-read leaves the position where it was');
+
+  // a tap watches the fleet and reads for nobody: no mark, no ack
+  const TP = mktmp();
+  queueLib.queueSend('tp', 'watched, not taken', { from: 'dev-t', root: TP, node: 'cedar' });
+  const tap = await queueLib.queueWaitAll({ root: TP, timeout: 0 });
+  ok(tap.changed && !fs.existsSync(path.join(TP, 'queues', 'read')) && !fs.existsSync(path.join(TP, 'queues', 'tp.cedar.acks')),
+    'read marks: a tap leaves no read mark and no ack');
+  ok(queueLib.peekQueueDepth('tp', { root: TP }).pending === 1, 'read marks: so what a tap saw is still pending for the role');
+
+  // a broadcast reader is counted per subscriber, from any node
+  const S = mktmp(), S2 = mktmp();
+  fs.writeFileSync(path.join(S, 'subscriber-roles.json'), '["bc"]');
+  fs.writeFileSync(path.join(S2, 'subscriber-roles.json'), '["bc"]');
+  queueLib.queueSend('bc', 'to everyone', { from: 'dev-t', root: S, node: 'cedar' });
+  await queueLib.queueWait('bc', { root: S, subscriber: 'p1', timeout: 0 });
+  sync(S, S2);
+  const rd = queueLib.queueLedger({ root: S2, role: 'bc' }).roles[0].readers.find(x => x.subscriber === 'p1');
+  ok(rd && rd.behind === 0 && rd.on.join() === 'cedar', `read marks: a subscriber read on another node shows as a reader there (${JSON.stringify(rd)})`);
+}
+
+// ── block ids continue past the ack log, and an archived file takes its log with it ──
+{
+  const I = mktmp();
+  for (let i = 1; i <= 3; i++) queueLib.queueSend('ic', 'order ' + i, { from: 'dev-t', root: I, node: 'n1' });
+  await queueLib.queueWait('ic', { root: I, timeout: 0 });
+  fs.writeFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), '');   // emptied by hand, as a purge does
+  queueLib.queueSend('ic', 'after the purge', { from: 'dev-t', root: I, node: 'n1' });
+  ok(/· id 4\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')),
+    'ids: a file emptied by hand continues at 4 — a second id 1 would be answered by the old log');
+  queueLib.archiveQueueFile(I, 'ic.n1.queue.md');
+  ok(fs.existsSync(path.join(I, 'queues', 'archive', 'ic.n1.acks')) && !fs.existsSync(path.join(I, 'queues', 'ic.n1.acks')),
+    'archive: the ack log moves with its queue file');
+  queueLib.queueSend('ic', 'a new file', { from: 'dev-t', root: I, node: 'n1' });
+  ok(/· id 1\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')), 'archive: and the next file starts over at id 1');
 }
 
 // ── the queue from the CLI: a roundtrip, what doctor sees of it, a second waiter, the sender rule ──

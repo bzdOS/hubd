@@ -152,6 +152,11 @@ is a folder you own. They are two separate things — and that is the whole poin
   idle queue, on both sides: the wait said nothing new, the send said sent. Four live roles held
   a day of orders that way. Now the wait fails with the file and the fix, `hub doctor` lists such
   cursors, and a send reports the depth now waiting so a climbing backlog is visible to the sender.
+- **A backlog that exists on one node only.** A cursor never leaves its node, so the node that
+  wrote a role's messages counted as pending what the node that read them had already taken: 44
+  pending on one, 0 on the other, for one queue. Since 0.9.33 a role's reader publishes how far it
+  got (`queues/read/<role>.<node>.json`, mesh-synced, one writer each), and every count — `hub queue
+  status`, a send's depth, `hub brief`, `hub doctor` — takes the furthest position any node reached.
 - **A card that grew into a log.** The digest is advertised as a few lines of current state, and
   nothing held it there: one hub reached three cards past 72 KB, and reading the largest was
   refused by the caller's context budget. hubd now refuses an over-long digest and a dated

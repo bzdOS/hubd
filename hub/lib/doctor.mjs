@@ -577,10 +577,11 @@ export function runDoctor() {
       }
       /* One number covered two unrelated situations and read as the alarming one. 2811 messages
        * "nothing here has taken" sounds like 2811 pieces of dropped work; 2700 of them were in
-       * queues somebody had written to WITHIN THE DAY, which a dead role does not do. Cursors and
-       * presence are node-local, so a queue being fed here and drained on Pine looks identical
-       * from this machine to one addressed to nobody — and the caveat that said so was one line
-       * under a list of six, after the scary total.
+       * queues somebody had written to WITHIN THE DAY, which a dead role does not do. Presence is
+       * node-local, and a reader on another node shows here only through its read mark — one on a
+       * hubd from before read marks leaves none — so a queue being fed here and drained on Pine
+       * could look identical from this machine to one addressed to nobody. The caveat that said so
+       * was one line under a list of six, after the scary total.
        *
        * So split on the only evidence available locally: is anything still ARRIVING. Still-fed
        * queues are reported as unverifiable-from-here, not as backlog. Gone-quiet ones are the
@@ -602,13 +603,13 @@ export function runDoctor() {
       }
       if (fed.length) {
         const msgs = fed.reduce((n, s) => n + s.messages, 0);
-        console.log('  ' + msgs + ' message(s) in ' + fed.length + ' queue(s) with no cursor HERE, still being written to');
+        console.log('  ' + msgs + ' message(s) in ' + fed.length + ' queue(s) no node has read, still being written to');
         for (const s of fed.slice(0, 4))
           console.log('    ' + s.role + (s.node ? ' (' + s.node + ')' : '') + ': ' + s.messages +
             ' msg, newest ' + (s.newest || 'n/a'));
         if (fed.length > 4) console.log('    ... and ' + (fed.length - 4) + ' more');
-        console.log('    NOT a backlog: cursors and presence are node-local, so a consumer on another machine');
-        console.log('    cannot be seen from here. Check on the node that runs the role before touching these.');
+        console.log('    NOT a backlog yet: presence is node-local, and a reader on a hubd from before read marks');
+        console.log('    leaves no mark in the mesh. Check on the node that runs the role before touching these.');
       }
       // Reader namespaces nobody has used in a week: dead sessions of a broadcast role, each one
       // listed as a reader "behind" in `hub queue status` forever. Housekeeping, not a fault — no

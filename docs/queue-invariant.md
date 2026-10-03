@@ -8,7 +8,9 @@ tempting fix that is rejected and why.
 
 `queues/<role>.<node>.queue.md` — one file per role per node, appended to only by
 that node, never rewritten. Cursors are **byte offsets** into that file, stored in
-`.qstate/<file>.offset`, node-local and never mesh-synced.
+`.qstate/<file>.offset`, node-local and never mesh-synced. How far a role's reader
+got is published separately, for every node to count with: see
+[Read marks](#read-marks--the-position-every-node-can-see) below.
 
 Both halves are load-bearing, and the module says so in its own header:
 
@@ -159,3 +161,45 @@ migration and a new class of state — in order to enable a merge strategy that
 should not be needed — is the wrong trade. Revisit if the invariant breaks again
 from a *different* cause: that would be evidence it cannot be held, and then Layer 3
 earns its cost.
+
+## Read marks — the position every node can see
+
+A cursor never leaves its node, so every count taken anywhere but on the reader's
+own node was wrong. Measured on a live mesh: one role, 71 messages; the node that
+wrote them said 44 pending, the node that read them said 0. The ack log could not
+settle it either: every reader, taps included, appended "delivered" for every block
+it was handed, and one queue handed out from its start seventeen times over left
+361 lines for 61 ids.
+
+So the reader publishes its position. `queues/read/<role>.<node>.json` is written
+by the node that read, and by no other, and travels with the mesh. One writer per
+file, as with the queue files themselves, so no merge can conflict:
+
+```json
+{ "files": { "worker.pine.queue.md": { "mark": "## 2026-10-02 07:32 · from head · id 61", "off": 30124, "at": "2026-10-02 07:32" } },
+  "subs":  { "<subscriber>": { "<file>": { "mark": "...", "off": 0, "at": "..." } } } }
+```
+
+- **Written** only by a role's own reader, after a delivery: the shared cursor
+  (`files`), or a subscriber of a broadcast role (`subs`). A tap
+  (`hub_queue_wait_all`) reads for nobody, so it writes no mark and no ack.
+- **Read** by every count: `hub queue status`, the depth a send reports, `hub
+  brief`, `hub doctor`, ghost and stranded queues. A file counts as read up to the
+  furthest of this node's cursor and every node's mark. `hub queue status` says
+  which node that was, and when.
+- **The header is trusted, not the offset.** Offsets agree across nodes only while
+  nobody trims the file. The offset is used when the last header before it is the
+  mark; otherwise the mark is looked for in the file (last occurrence first), the
+  same rule the watermark follows. Trimmed above the mark, the file still reads as
+  read to its end; recreated under the same name, it does not inherit the mark.
+- **Delivery is unchanged.** A reader still starts from its own cursor. The mark
+  changes what is counted, not what is handed out.
+
+Two smaller fixes travel with it. The ack log gets at most one "delivered" per id,
+however many times a block is handed out. And block ids continue past the highest
+id in the ack log, so a file emptied by hand does not start a second id 1 that the
+old log would answer for. Archiving a queue file moves its ack log with it, so the
+next file starts clean.
+
+A reader on a hubd from before read marks leaves none, and stays invisible from
+other nodes. `hub doctor` says so where it reports queues no node has read.
