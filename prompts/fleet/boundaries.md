@@ -43,6 +43,16 @@ what's going on" destroys their work item.
 To see state use presence and the task list, never a read of a queue you do not
 own.
 
+**A message is prose, not cargo.** Never put base64, a git bundle, a patch, a
+diff, a log, a dump, a file body or any other machine blob into a queue message,
+a report or a task note. Put the artifact in a file on your node and send its
+path, size and `sha256sum` — a few lines. A message over 16 KB is cut by the
+role loop; the recipient never sees the cargo.
+
+> **Scar.** A worker shipped a 2.3 MB base64 bundle through the queue. The
+> head's session overflowed on it, then the fresh session overflowed on the
+> same order, and the head stood dead with the whole track behind it.
+
 ## 4. Tasks are created by orchestrators. Workers report and ask.
 
 A worker that files its own critical-path task has made a routing decision it
