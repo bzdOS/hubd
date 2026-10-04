@@ -354,10 +354,25 @@ const marksFor = (marks, f, sub = null) => marks
   .map(m => ({ node: m.node, entry: sub ? (m.subs[sub] || {})[f] : m.files[f] }))
   .filter(x => x.entry && x.entry.mark);
 
+/* The index in `text` just past the block whose header is `mark`, or -1 when no whole line of
+ * `text` is the mark. Last occurrence first, the same way a shrunken file's cursor finds its
+ * watermark. A block ends on the newline before the next header: where a reader's cursor stops. */
+function blockEndAt(text, mark) {
+  for (let at = text.lastIndexOf(mark); at !== -1; at = at ? text.lastIndexOf(mark, at - 1) : -1) {
+    const end = at + mark.length;
+    if ((at && text[at - 1] !== '\n') || (end < text.length && text[end] !== '\n')) continue;   // not a whole line
+    const next = new RegExp(BLOCK_HEAD.source, 'gm');
+    next.lastIndex = end;
+    const n = next.exec(text);
+    return n ? n.index - 1 : text.length;
+  }
+  return -1;
+}
+
 /* The byte offset just past the block a mark names, or null when the file no longer holds it. The
  * offset the mark carries is taken when the last header before it is the mark itself — one window
- * read, not the whole file; otherwise the header is searched for, last occurrence first, the same
- * way a shrunken file's cursor finds its watermark. `buf`, when the caller already holds the file. */
+ * read, not the whole file; otherwise the header is searched for. `buf`, when the caller already
+ * holds the file. */
 function markOffset(full, size, entry, buf = null) {
   const { mark, off } = entry;
   if (Number.isInteger(off) && off > 0 && off <= size) {
@@ -366,16 +381,8 @@ function markOffset(full, size, entry, buf = null) {
     if (lastHeaderIn(win) === mark) return off;
   }
   let text; try { text = buf ? buf.toString('utf8') : fs.readFileSync(full, 'utf8'); } catch { return null; }
-  for (let at = text.lastIndexOf(mark); at !== -1; at = at ? text.lastIndexOf(mark, at - 1) : -1) {
-    const end = at + mark.length;
-    if ((at && text[at - 1] !== '\n') || (end < text.length && text[end] !== '\n')) continue;   // not a whole line
-    const next = new RegExp(BLOCK_HEAD.source, 'gm');
-    next.lastIndex = end;
-    const n = next.exec(text);
-    // a block ends on the newline before the next header: where a reader's cursor stops
-    return Buffer.byteLength(n ? text.slice(0, n.index - 1) : text, 'utf8');
-  }
-  return null;
+  const end = blockEndAt(text, mark);
+  return end === -1 ? null : Buffer.byteLength(text.slice(0, end), 'utf8');
 }
 
 /* How far a file has been read: the furthest of this node's cursor `local` (null: none here) and
@@ -449,13 +456,35 @@ function writeAck(acksFile, id, status) {
  *
  * On a repeated header — timestamps are minute-resolution, so one sender can write two identical
  * ones — take the LAST. That errs toward delivering less rather than twice, which is the
- * direction at-most-once points. */
+ * direction at-most-once points.
+ *
+ * "Absent, so everything left is newer" fails for the third way a file shrinks: ROLLED BACK to an
+ * older version. Measured on a mesh node: a sync merged in the live hub dir, the merge stopped on a
+ * conflict in other files, and while it stood open the queue file held the remote version with one
+ * more block. A reader took that block; the abort put the local version back, 1315 bytes shorter
+ * and without it, the watermark was gone, the cursor went to 0, and the worker was handed its whole
+ * queue again — 337132 bytes, then 336091 on the next failed sync ten minutes later. Everything in
+ * an older version of a file was handed out before the watermark was, so the blocks not newer than
+ * it — an id not above its id, a time not after its time — were delivered: resume after the last
+ * of those. The ack log cannot settle it: it travels with the mesh, the abort rolled it back too,
+ * and that is why the one block had three "delivered" lines. The cursor is this node's and
+ * outlives the abort. A recreated file, or a purge past the watermark, leaves no such block and
+ * resumes at 0 as before; so does a watermark without an id. */
 function offsetAfterShrink(text, mark) {
   if (!mark) return 0;
   const at = text.lastIndexOf(mark);
-  if (at === -1) return 0;
-  const after = text.indexOf('\n## ', at + mark.length);
-  return Buffer.byteLength(after === -1 ? text : text.slice(0, after + 1), 'utf8');
+  if (at !== -1) {
+    const after = text.indexOf('\n## ', at + mark.length);
+    return Buffer.byteLength(after === -1 ? text : text.slice(0, after + 1), 'utf8');
+  }
+  const [w] = blocksIn(mark);
+  if (!w || w.id == null) return 0;
+  const heads = [...text.matchAll(BLOCK_RE)];
+  let end = 0;
+  heads.forEach((m, i) => {
+    if (m[3] && Number(m[3]) <= w.id && m[1] <= w.ts) end = i + 1 < heads.length ? heads[i + 1].index - 1 : text.length;
+  });
+  return Buffer.byteLength(text.slice(0, end), 'utf8');
 }
 
 /* A cursor this consumer cannot WRITE is the one failure that used to look exactly like an empty
@@ -512,13 +541,21 @@ function drainFile(qdir, stateDir, f, reader = null) {
       if (sz < off) {        // the file shrank: resume after the watermark, and deliver from there now
         let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
         off = Math.min(offsetAfterShrink(text, mark), sz);
-        writeCursor(offFile, off, mark);
+        writeCursor(offFile, off, mark);   // the watermark stays: it is still the last block handed out
       }
       if (sz === off) return null;                    // a competitor drained it first
-      const chunk = readTail(full, off, sz, { exact: true });
+      let chunk = readTail(full, off, sz, { exact: true });
       // The file was cut between the stat and the read: hand nothing out and leave the cursor, or
       // it would move past bytes never read. The next poll sees the new size.
       if (chunk === null) return null;
+      // The watermark AHEAD of the cursor: a file rolled back under it has its newer version back
+      // (the next try of a failed merge, or the one that succeeds), and everything up to and
+      // including the watermark's block was handed out before. Only a header with an id is unique
+      // enough to trust here.
+      if (mark && blocksIn(mark)[0]?.id != null) {
+        const end = blockEndAt(chunk, mark);
+        if (end !== -1) chunk = chunk.slice(end);
+      }
       const last = lastHeaderIn(chunk) || mark;
       writeCursor(offFile, sz, last);
       if (reader) {
@@ -701,7 +738,8 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
  *
  *   - Per-file byte offset in <root>/.qstate/<file>.offset.
  *   - Each poll: for every source file, deliver bytes past its offset; if a file
- *     shrank (truncated/recreated) reset that file's offset to 0.
+ *     shrank (purged, rolled back, recreated) resume after the last block already
+ *     handed out (see offsetAfterShrink), at 0 when there is none.
  *   - New content from several files in one poll is concatenated.
  *   - Poll every 2000 ms until `timeout` seconds elapse.
  *

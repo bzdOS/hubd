@@ -42,14 +42,31 @@ ok "$([ "$cn" = 'pine_box-2' ] && echo 1 || echo 0)" "node name: commits under H
 
 # ── exit 2: a genuine content clash on a non-union file ───────────────────────
 git clone -q "$TMP/origin" "$TMP/b"
+# The merge is tried outside the tree first, and a union file written on both sides must still
+# merge there: a node that reads it as a conflict would stop syncing for good.
+mkdir -p "$TMP/b/queues"; printf '\n## 2026-09-01 12:00 · from b · id 1\nfirst\n' > "$TMP/b/queues/r.b.queue.md"
+printf '{"ts":"2026-09-01 12:00","kind":"note","text":"b"}\n' >> "$TMP/b/journal.seed.jsonl"
+git -C "$TMP/b" add -A && git -C "$TMP/b" -c user.name=t -c user.email=t@t commit -q -m q && git -C "$TMP/b" push -q origin main
+printf '{"ts":"2026-09-01 12:00","kind":"note","text":"a"}\n' >> "$TMP/a/journal.seed.jsonl"
+HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out1" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && [ "$(grep -c '"text":"[ab]"' "$TMP/a/journal.seed.jsonl")" = 2 ] && echo 1 || echo 0)" "union: a file both sides appended to merges cleanly (got $rc)"
+git -C "$TMP/b" pull -q origin main
+printf '\n## 2026-09-01 12:01 · from b · id 2\nsecond\n' >> "$TMP/b/queues/r.b.queue.md"
 printf 'b writes here\n' > "$TMP/b/notes.md"
 git -C "$TMP/b" add -A && git -C "$TMP/b" -c user.name=t -c user.email=t@t commit -q -m b
 git -C "$TMP/b" push -q origin main
 printf 'a writes something else\n' > "$TMP/a/notes.md"
+# A merge that stood open in the hub put the other side's version of every file it touched there
+# until the abort put it back; a queue reader took a block from it, and lost its place when the
+# file came back shorter. The file a reader polls must not change at all.
+fstat() { node -e 'const s = require("fs").statSync(process.argv[1]); console.log(s.ino, s.mtimeMs, s.ctimeMs)' "$1"; }
+qa="$TMP/a/queues/r.b.queue.md"; qbefore="$(fstat "$qa") $(cksum < "$qa")"
 HUBD_DIR="$TMP/a" sh "$SCRIPT" >"$TMP/out2" 2>&1; rc=$?
 ok "$([ $rc -eq 2 ] && echo 1 || echo 0)" "conflict: a real content clash exits 2 (got $rc)"
 ok "$(grep -q 'real content conflict' "$TMP/out2" && echo 1 || echo 0)" "conflict: and is named a content conflict"
 ok "$(grep -q 'CONFLICT\|Merge conflict' "$TMP/out2" && echo 1 || echo 0)" "conflict: git's own output is shown, not swallowed"
+ok "$([ "$(fstat "$qa") $(cksum < "$qa")" = "$qbefore" ] && echo 1 || echo 0)" \
+  "conflict: a queue file the other side appended to is never touched - same inode, times and bytes"
 git -C "$TMP/a" checkout -q -- . 2>/dev/null; git -C "$TMP/a" merge --abort 2>/dev/null
 
 # ── exit 5: git refuses before merging, so nothing conflicted ─────────────────

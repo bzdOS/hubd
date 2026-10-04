@@ -4,6 +4,25 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.39 — 2026-10-04
+
+- **A failed mesh merge no longer hands a queue out again.** `mesh-sync` merged in the live hub
+  dir. A merge that stopped on a conflict in other files stood open until the abort, and every
+  file it touched held the other side's version meanwhile. A reader took a block from a queue
+  file; the abort put the shorter local version back, the cursor fell to 0, and the worker got
+  its whole queue again, on every failed run for over an hour. Two fixes, either enough for that
+  case:
+  - `mesh-sync` fetches and tries the merge outside the working tree first (`git merge-tree
+    --write-tree`, git 2.38+). A conflicted merge still exits 2, and the hub is not touched.
+    Only a clean merge is made in place. An older git merges in place and aborts, as before.
+  - A queue cursor tells a rollback from a purge. When its watermark is gone but the file holds
+    blocks not newer than it (an id not above its id, a time not after its time), it resumes
+    after the last of them, not at 0. When the newer version comes back, the watermark is ahead
+    of the cursor and everything through its block is skipped. Both rules need a header with an
+    id; without one, nothing changes.
+- A node that runs a copy of `mesh-sync.sh` rather than the one in the package gets the first
+  fix only when the copy is replaced.
+
 ## 0.9.38 — 2026-10-04
 
 - **Nine rules from a finished project, in the role rules where they are read.** Each comes from

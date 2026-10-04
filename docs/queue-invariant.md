@@ -108,7 +108,8 @@ On a shrink, the watermark decides:
 - **Watermark absent** → it was purged along with everything before it, so every
   remaining block postdates it and is genuinely undelivered. Offset `0` is correct.
   (A file that was truly *recreated* lands in the same branch and gets the same
-  right answer.)
+  right answer. A file *rolled back* to an older version does not: see
+  [Rolled back](#rolled-back--a-merge-that-failed-in-the-live-hub) below.)
 
 Where the same header appears more than once — the timestamp is minute-resolution,
 so one sender can produce two identical headers — take the **last** occurrence.
@@ -161,6 +162,33 @@ migration and a new class of state — in order to enable a merge strategy that
 should not be needed — is the wrong trade. Revisit if the invariant breaks again
 from a *different* cause: that would be evidence it cannot be held, and then Layer 3
 earns its cost.
+
+## Rolled back — a merge that failed in the live hub
+
+The third way a file shrinks. Measured on a mesh node: `mesh-sync` merged in the
+live hub dir, and the merge stopped on a conflict in other files. For over an hour
+every run opened the merge and aborted it. While it stood open, the queue file held
+the other side's version, 1315 bytes longer by one block, and a waiting reader took
+that block. The abort put the local version back. The watermark, that block's
+header, was not in it, so "absent" sent the cursor to `0` and the worker was handed
+its whole queue again: 337132 bytes, and 336091 on the next failed run. The ack log
+could not have caught it. It travels with the mesh, the abort rolled it back too,
+and the one block ended up with three "delivered" lines.
+
+Two fixes, either enough for this case:
+
+- **No merge stands open in the hub.** `mesh-sync` fetches and tries the merge
+  outside the working tree first (`git merge-tree --write-tree`, git 2.38+). A
+  conflicted merge never reaches the hub: the run exits 2 and touches nothing. Only
+  a clean merge is made in place. An older git merges in place as before.
+- **The cursor tells a rollback from a purge.** Everything in an older version of a
+  file was handed out before the watermark was. So when the watermark is absent but
+  the file holds blocks not newer than it (an id not above its id, a time not after
+  its time), resume after the last of them. When the file comes forward again, the
+  watermark turns up *ahead* of the cursor: everything through its block was handed
+  out, so it is skipped. Only a header with an id is unique enough for either rule.
+  Without one, the rules above hold, and a file recreated with its ids from 1 again
+  is told apart by its times.
 
 ## Read marks — the position every node can see
 

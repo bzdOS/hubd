@@ -5,8 +5,8 @@
 #   sh mesh-sync.sh                 # uses $HUBD_DIR, else ~/.hubd
 #   HUBD_DIR=/srv/hub sh mesh-sync.sh
 #
-# Commits this node's writes, then — only if a remote named 'origin' exists — pulls and
-# pushes. Runs unattended (cron / launchd / systemd timer): non-interactive ssh, no
+# Commits this node's writes, then — only if a remote named 'origin' exists — fetches, merges
+# and pushes. Runs unattended (cron / launchd / systemd timer): non-interactive ssh, no
 # prompts, distinct exit codes, and it never leaves the hub in a half-merged state.
 #
 # Every safety property below is a scar. Read them before "simplifying" this file:
@@ -16,12 +16,18 @@
 #     it — syncing that would propagate the damage to every peer. Refuse, and say how to
 #     restore. (A migration adds set/backfill events. Data is richer than the schema by
 #     design; an unrecognized field is meaning, not cruft.)
-#   * IDENTITY ON BOTH COMMIT AND PULL. A merge commit needs a committer, and a fresh node
-#     often has no global git user. Without this, the pull fails and reports a MERGE
+#   * IDENTITY ON BOTH COMMIT AND MERGE. A merge commit needs a committer, and a fresh node
+#     often has no global git user. Without this, the merge fails and reports a MERGE
 #     CONFLICT that does not exist — a content clash that is really a missing name.
 #   * ABORT, NEVER HALF-MERGE (exit 2). Conflict markers inside journal or task files are
 #     corrupt hub data, not a thing to resolve later. Abort and leave it to a human.
-#   * NAME THE RIGHT FAILURE (exit 5 vs 2). A pull git REFUSES before merging is not a
+#   * NO MERGE STANDS OPEN IN THE HUB (exit 2). Readers poll the hub while this runs. A merge
+#     that stopped on a conflict used to stand in the hub dir until the abort, every file it
+#     touched holding the other side's version meanwhile. A queue reader took a block from
+#     one; the abort rolled the file back, shorter, its cursor fell to 0, and the worker got
+#     its whole queue again, on every failed run for over an hour. So the merge is tried
+#     first outside the tree (git merge-tree, git 2.38+), and only a clean one is made here.
+#   * NAME THE RIGHT FAILURE (exit 5 vs 2). A merge git REFUSES before merging is not a
 #     conflict, and telling a human to "resolve it by hand" sends them to fix nothing. Exit
 #     5 is that case — local changes, or two paths differing only by case, which no
 #     case-insensitive filesystem can hold. Exit 2 stays for a genuine content clash.
@@ -30,19 +36,19 @@
 #     history for every peer on the next push, which is the same damage by a different route.
 #     The one exception is a MOVE into an archive with the bytes intact (hub gc): same history,
 #     another name. It is checked by content, so an rm or an edited copy is still refused.
-#   * KEEP A SHARED HUB WRITABLE (after pull). On a fleet node the hub is one directory used by
-#     several users — roles under one account, this script under root. Whatever a pull creates
-#     belongs to the user running the pull, so a root-run sync silently locks the roles out of
+#   * KEEP A SHARED HUB WRITABLE (after merge). On a fleet node the hub is one directory used by
+#     several users — roles under one account, this script under root. Whatever a merge creates
+#     belongs to the user running the merge, so a root-run sync silently locks the roles out of
 #     new directories and out of .git. The symptom is not an error: a role reads everything,
 #     writes nothing, and its queue answers "nothing new" forever (task maple-98). So when
 #     the hub dir is itself group-writable — the mark of a shared hub — group write is restored
-#     over the tree after any pull that changed something. A private hub is left untouched.
+#     over the tree after any merge that changed something. A private hub is left untouched.
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
 #   * BOUND THE NETWORK STEPS. Unattended on a timer, a git that blocks forever leaves a
 #     process nothing will clean up and no line in the log to say so. BatchMode and
-#     ConnectTimeout cover ssh, not git. HUBD_SYNC_TIMEOUT (default 300s) caps pull and
+#     ConnectTimeout cover ssh, not git. HUBD_SYNC_TIMEOUT (default 300s) caps fetch and
 #     push; hitting the cap is a failed run that the next one retries.
 #
 # Per-host files are what make this work at all: journal.<node>.jsonl,
@@ -60,7 +66,7 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
 
 # Bound the network steps. This runs unattended on a timer, and a git that blocks forever -- a
-# wedged pull, an unresponsive peer, a filesystem that stops answering -- leaves a process nothing
+# wedged fetch, an unresponsive peer, a filesystem that stops answering -- leaves a process nothing
 # will ever clean up and no line in the log to say so. BatchMode and ConnectTimeout above cover
 # ssh; they do not cover git itself. A run that hits the cap exits non-zero and the next one
 # retries, which is the same contract as a failed push.
@@ -132,7 +138,7 @@ if [ -n "$DELETED_LOGS" ]; then
   exit 4
 fi
 
-# Restore group write over a SHARED hub after a pull created files as this user. Only when the
+# Restore group write over a SHARED hub after a merge created files as this user. Only when the
 # hub dir carries the group-write bit itself; a private hub keeps its own modes. Both chmods are
 # idempotent, so a run that changed nothing costs one find.
 share_perms() {
@@ -150,12 +156,26 @@ fi
 # 2. exchange with upstream, if one is configured (the always-on hub has none)
 if git remote | grep -qx origin; then
   HEAD_BEFORE="$(git rev-parse HEAD 2>/dev/null)"
-  # identity injected on the pull too: the merge commit needs a committer, and a
+  if ! FETCH_OUT="$(g fetch -q origin "$BR" 2>&1)"; then
+    [ -n "$FETCH_OUT" ] && printf '%s\n' "$FETCH_OUT" >&2
+    echo "mesh-sync: fetch failed on $BR (output above) — nothing was merged." >&2
+    exit 2
+  fi
+  # The trial merge, outside the working tree: exit 0 clean, 1 conflicted. Anything else is a git
+  # without --write-tree (before 2.38), which merges in place below as it always did.
+  MT_OUT="$(git merge-tree --write-tree --name-only HEAD FETCH_HEAD 2>&1)"; MT=$?
+  if [ "$MT" -eq 1 ]; then
+    printf '%s\n' "$MT_OUT" | sed 1d >&2   # line 1 is the tree; then the paths and git's messages
+    echo "mesh-sync: real content conflict on $BR — nothing was merged, the hub was not touched; resolve by hand in $DIR" >&2
+    exit 2
+  fi
+  # identity injected on the merge too: the merge commit needs a committer, and a
   # node may have no global git user set (fir hit exactly this — reported as a
   # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
-  if ! PULL_OUT="$(g -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" pull --no-rebase --no-edit -q origin "$BR" 2>&1)"; then
+  # Not under the timeout: it is local, and a merge killed halfway is the half-merged hub.
+  if ! MERGE_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" merge --no-edit -q FETCH_HEAD 2>&1)"; then
     git merge --abort 2>/dev/null
-    [ -n "$PULL_OUT" ] && printf '%s\n' "$PULL_OUT" >&2
+    [ -n "$MERGE_OUT" ] && printf '%s\n' "$MERGE_OUT" >&2
     # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
     # unconditionally, and it was wrong twice. Once for a missing git identity — the scar the
     # comment above describes, where the fix went into the code and the message was left saying
@@ -163,9 +183,9 @@ if git remote | grep -qx origin; then
     # refuses BEFORE merging anything, so there is no conflict to resolve and no amount of
     # resolving by hand will help. One node retried that failure every 60 seconds for 228
     # commits of everyone else's history, and the log said "resolve by hand" each time.
-    case "$PULL_OUT" in
+    case "$MERGE_OUT" in
       *"would be overwritten by merge"*)
-        echo "mesh-sync: pull REFUSED on $BR before merging — nothing conflicted." >&2
+        echo "mesh-sync: merge REFUSED on $BR before merging — nothing conflicted." >&2
         echo "  Cause is local changes to a tracked file, or two paths differing only by case" >&2
         echo "  (which a case-insensitive filesystem cannot both check out). Run: hub doctor" >&2
         exit 5 ;;
@@ -173,7 +193,7 @@ if git remote | grep -qx origin; then
         echo "mesh-sync: real content conflict on $BR — aborted; resolve by hand in $DIR" >&2
         exit 2 ;;
       *)
-        echo "mesh-sync: pull failed on $BR (output above) — aborted; nothing was merged." >&2
+        echo "mesh-sync: merge failed on $BR (output above) — aborted; nothing was merged." >&2
         exit 2 ;;
     esac
   fi
