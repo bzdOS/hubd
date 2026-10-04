@@ -1,6 +1,7 @@
 // queue.mjs — queues: depth, buttons, ghosts, task refs, the ledger, spellings, a role's work, two readers, acks, the CLI
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn, execSync } from 'node:child_process';
 import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done } from './_h.mjs';
 
@@ -664,6 +665,98 @@ const AK = mktmp();
   ok(/· id 1\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')), 'archive: and the next file starts over at id 1');
 }
 
+// ── a message is prose, not cargo ──
+{
+  const C = mktmp();
+  const b64 = (n) => crypto.randomBytes(n).toString('base64');
+  const qfile = path.join(C, 'queues', 'cg.cedar.queue.md');
+  const size = () => { try { return fs.statSync(qfile).size; } catch { return 0; } };
+  // refused, with the rule in the error, and nothing appended
+  const refused = (text, re) => {
+    const before = size();
+    try { queueLib.queueSend('cg', text, { from: 'dev-t', root: C }); return false; }
+    catch (e) { return re.test(e.message) && /prose, not cargo/.test(e.message) && /path, size and sha256sum/.test(e.message) && size() === before; }
+  };
+  ok(refused(b64(1_700_000), /^message refused: 22\d{5} bytes, over the 16384-byte limit \(HUBD_MSG_MAX\)/),
+    'cargo: a 2.3 MB base64 bundle is refused, nothing is appended, and the error names the rule');
+  ok(refused('plain words '.repeat(1450), /^message refused: 17399 bytes, over the 16384-byte limit/), 'cargo: 17 KB of plain text is refused');
+  ok(refused('Build done, the bundle:\n' + b64(2300) + '\nPlease apply it.', /carries a base64 or hex run of 3068 characters \(line 2\)/),
+    'cargo: a 3 KB base64 line inside a normal message is refused, though the message is under the size limit');
+  ok(refused('the key:\n' + b64(2300).replace(/(.{76})/g, '$1\n'), /carries a base64 or hex run/), 'cargo: base64 wrapped at 76 columns is one run');
+  ok(refused('hex: ' + crypto.randomBytes(1100).toString('hex'), /carries a base64 or hex run of 2200/), 'cargo: a 2.2 KB hex run is refused');
+  ok(refused('fix:\ndiff --git a/x.c b/x.c\n--- a/x.c\n+++ b/x.c\n', /carries a git diff \(line 2\)/), 'cargo: a git diff is refused at any size');
+  ok(refused('# v2 git bundle\n1f2e3d refs/heads/main\n', /carries a git bundle/), 'cargo: a git bundle header is refused');
+  ok(refused('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n-----END OPENSSH PRIVATE KEY-----', /carries a PEM block/), 'cargo: a PEM block is refused');
+  const sent = (text) => { try { queueLib.queueSend('cg', text, { from: 'dev-t', root: C }); return true; } catch { return false; } };
+  ok(sent('Dispatch: build the image on your node and report its sha256. '.repeat(32)), 'cargo: a 2 KB dispatch passes');
+  ok(sent('bundle at /srv/out/x.bundle, 2318044 bytes, sha256 ' + 'ab12'.repeat(16)), 'cargo: path, size and sha256 — what the rule asks for — pass');
+  ok(sent('short token ' + b64(1100) + ' and a ruler\n' + ('='.repeat(80) + '\n').repeat(40)), 'cargo: a 1.5 KB token and a long ruler pass');
+  process.env.HUBD_MSG_MAX = '32768';
+  ok(sent('plain words '.repeat(1450)), 'cargo: HUBD_MSG_MAX raises the size limit');
+  delete process.env.HUBD_MSG_MAX;
+  // the same rule for a report and for a task's text
+  const err = (f) => { try { f(); return ''; } catch (e) { return e.message; } };
+  ok(/^report refused: it carries a git diff/.test(err(() => core.runReport({ project: 'cg', by: 'dev-t', text: 'FACT: built\ndiff --git a/y b/y' }))),
+    'cargo: a report carrying a diff is refused');
+  ok(/^task text refused: \d+ bytes, over the 16384-byte limit/.test(err(() => core.runTaskAdd({ project: 'cg', by: 'dev-t', text: 'x'.repeat(17000) }))),
+    'cargo: a 17 KB task is refused');
+  const t = core.runTaskAdd({ project: 'cg', by: 'dev-t', text: 'a task in prose' }).task;
+  ok(/^task text refused: it carries a base64/.test(err(() => core.runTaskUpdate({ id: t.id, by: 'dev-t', text: b64(2300) }))),
+    'cargo: a task update that pastes base64 into the text is refused');
+  ok(err(() => core.runTaskUpdate({ id: t.id, by: 'dev-t', status: 'done' })) === '', 'cargo: an update that leaves the text alone is not checked');
+}
+
+// ── a queue nobody reads takes no more ──
+{
+  const D = mktmp();
+  const send = (role, text = 'order', root = D) => { try { queueLib.queueSend(role, text, { from: 'dev-t', root }); return ''; } catch (e) { return e.message; } };
+  const blocks = (f) => (fs.readFileSync(path.join(D, 'queues', f), 'utf8').match(/^## /gm) || []).length;
+  for (let i = 1; i <= 50; i++) send('dq', 'order ' + i);
+  ok(queueLib.unreadLoad('dq', { root: D }).msgs === 50 && blocks('dq.cedar.queue.md') === 50, 'depth: 50 unread messages are taken');
+  const e51 = send('dq', 'order 51');
+  ok(/^queue full: dq already holds 50 unread message\(s\)/.test(e51) && /HUBD_QUEUE_MAX_MSGS/.test(e51) && /hub queue status dq/.test(e51),
+    'depth: the 51st unread message is refused, and the error names the limit and where to look');
+  ok(blocks('dq.cedar.queue.md') === 50, 'depth: and nothing was appended');
+  await queueLib.queueWait('dq', { root: D, timeout: 0 });
+  fs.rmSync(path.join(D, 'queues', 'dq.cedar.acks'));   // the read position alone has to say it
+  ok(send('dq', 'order 51') === '', 'depth: once the reader has taken them, the queue takes more');
+
+  // a reader that leaves no mark (a hubd from before read marks) still leaves its acks in the mesh
+  for (let i = 1; i <= 50; i++) send('da', 'order ' + i);
+  fs.writeFileSync(path.join(D, 'queues', 'da.cedar.acks'),
+    Array.from({ length: 50 }, (_, i) => JSON.stringify({ id: i + 1, status: 'delivered', ts: '2026-10-03 10:00' })).join('\n') + '\n');
+  ok(queueLib.unreadLoad('da', { root: D }).msgs === 0 && send('da') === '', 'depth: a block the ack log says was handed out is not unread');
+
+  // a broadcast role counts its furthest reader
+  fs.writeFileSync(path.join(D, 'subscriber-roles.json'), '["db"]');
+  for (let i = 1; i <= 50; i++) send('db', 'news ' + i);
+  await queueLib.queueWait('db', { root: D, subscriber: 'p1', timeout: 0 });
+  fs.rmSync(path.join(D, 'queues', 'db.cedar.acks'));
+  ok(send('db', 'news 51') === '', 'depth: a broadcast role is as full as its furthest reader leaves it');
+
+  process.env.HUBD_QUEUE_MAX_BYTES = '4096';
+  ok(send('dbytes', 'b'.repeat(1500)) === '' && send('dbytes', 'b'.repeat(1500)) === '', 'depth: under the byte limit, sends pass');
+  ok(/^queue full: dbytes already holds 2 unread message\(s\), \d+ bytes/.test(send('dbytes', 'b'.repeat(1500))),
+    'depth: a send that would take the unread bytes past HUBD_QUEUE_MAX_BYTES is refused');
+  delete process.env.HUBD_QUEUE_MAX_BYTES;
+
+  fs.writeFileSync(path.join(T0, 'owner-roles.json'), '["downer"]');
+  for (let i = 1; i <= 51; i++) send('downer', 'button ' + i);
+  ok(queueLib.unreadLoad('downer', { root: D }).msgs === 51, 'depth: an owner role is never refused — a human reads the file, not a loop');
+  fs.rmSync(path.join(T0, 'owner-roles.json'));
+
+  process.env.HUBD_QUEUE_MAX_MSGS = '0';
+  for (let i = 1; i <= 51; i++) send('doff', 'order ' + i);
+  ok(queueLib.unreadLoad('doff', { root: D }).msgs === 51, 'depth: HUBD_QUEUE_MAX_MSGS=0 turns the count limit off');
+  delete process.env.HUBD_QUEUE_MAX_MSGS;
+
+  // what doctor lists: 80% of a limit and up, fullest first
+  const E = mktmp();
+  for (const [role, n] of [['e39', 39], ['e40', 40], ['e50', 50]]) for (let i = 1; i <= n; i++) send(role, 'order ' + i, E);
+  const near = queueLib.queuesNearFull({ root: E });
+  ok(near.map(x => `${x.role}:${x.msgs}:${x.full}`).join() === 'e50:50:true,e40:40:false', `depth: queues at 80%+ of a limit are listed, full ones marked (${JSON.stringify(near)})`);
+}
+
 // ── the queue from the CLI: a roundtrip, what doctor sees of it, a second waiter, the sender rule ──
 {
   const Q = mktmp(), hub = path.join(Q, 'hub'), team = path.join(Q, 'team'); fs.mkdirSync(team);
@@ -689,6 +782,18 @@ const AK = mktmp();
   const s0 = q(['queue', 'send', 'smoketest', 'no author'], { HUBD_AGENT: '' });
   ok(s0.code !== 0 && /from required/.test(s0.out), 'queue send: refused without --from or HUBD_AGENT, and the error names the flag');
   ok(q(['queue', 'send', 'smoketest', 'floored'], { HUBD_AGENT: 'dev-smoke' }).code === 0, 'queue send: HUBD_AGENT floors an omitted --from');
+  // a file sent as the message: 20 KB is refused with the rule, 2 KB goes
+  const fileSend = (bytes) => cli(['queue', 'send', 'smokefile', '-', '--from', 'tester'], { env, cwd: team, input: 'line of a log file\n'.repeat(Math.ceil(bytes / 19)).slice(0, bytes) });
+  const big = fileSend(20480);
+  ok(big.code === 1 && /^Error: message refused: \d+ bytes, over the 16384-byte limit \(HUBD_MSG_MAX\)\. A message is prose, not cargo: put the artifact in a file on your node and send its path, size and sha256sum\./m.test(big.stderr),
+    'queue send: a 20 KB file is refused, exit 1, and the error says where the artifact goes');
+  ok(!fs.existsSync(path.join(team, 'queues')) || !fs.readdirSync(path.join(team, 'queues')).some(f => f.startsWith('smokefile.')), 'queue send: and no queue file was written for it');
+  ok(fileSend(2048).code === 0, 'queue send: a 2 KB dispatch from a file goes');
+  // doctor says a queue is filling before its senders are refused
+  for (let i = 1; i <= 41; i++) queueLib.queueSend('smokefull', 'order ' + i, { from: 'dev-t', root: team });
+  const dr = q(['doctor']).out;
+  ok(/1 queue\(s\) at 80%\+ of the send limit \(50 messages \/ 262144 bytes unread\)  WARNING/.test(dr) && /smokefull: 41 msg, \d+B unread\n/.test(dr),
+    'doctor: a queue at 80% of the send limit is a warning, with the role and its unread count');
 }
 
 done();

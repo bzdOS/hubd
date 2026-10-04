@@ -4,6 +4,21 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.34 — 2026-10-03
+
+- **A message is prose, not cargo.** A queue message is read whole by a model, and a role loop
+  cuts one past 16 KB: a 2.3 MB base64 bundle sent to a head overflowed it twice, and the work it
+  carried stood. A queue message (`hub queue send`, `hub_queue_send`), a report and a task's text
+  over 16 KB (`HUBD_MSG_MAX`) are now refused, and so are four shapes at any size: a base64 or hex
+  run over 2 KB (lines wrapped at 60+ columns count as one run), a git diff, a git bundle, a PEM
+  block. The error names the rule: put the artifact in a file and send its path, size and sha256.
+- **A queue nobody reads takes no more.** A send is refused once the role already holds 50 unread
+  messages or 256 KB (`HUBD_QUEUE_MAX_MSGS`, `HUBD_QUEUE_MAX_BYTES`; 0 turns either off). Unread
+  is counted past the furthest read position (this node's cursor and every node's read mark; a
+  broadcast role's furthest reader), less every block the ack log says was handed out, so a
+  reader on an older hubd is credited through its acks. An owner role is exempt. `hub doctor`
+  warns at 80% of either limit and marks a full queue.
+
 ## 0.9.33 — 2026-10-03
 
 - **Every node counts a queue the same way.** A cursor never leaves its node, so the node that

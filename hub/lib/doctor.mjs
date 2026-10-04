@@ -20,7 +20,7 @@ import { conflictedFiles } from './conflicts.mjs';
 import { cardSectionIssues } from './cards.mjs';
 import {
   resolveQueueRoot, resolveQueueRootInfo, subscriberRoles, subscriberNamespaces, queueInventory, strandedQueues, outOfBandTrims,
-  listShards, readCursor, pidAlive,
+  listShards, readCursor, pidAlive, queuesNearFull, queueLimits,
 } from './queue.mjs';
 
 /** Raw vs distinct line counts per node log family — exactly what readLogEntries drops, so the
@@ -610,6 +610,20 @@ export function runDoctor() {
         if (fed.length > 4) console.log('    ... and ' + (fed.length - 4) + ' more');
         console.log('    NOT a backlog yet: presence is node-local, and a reader on a hubd from before read marks');
         console.log('    leaves no mark in the mesh. Check on the node that runs the role before touching these.');
+      }
+      /* A send to a role that already holds HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES unread is
+       * refused. Said here at 80%, counted the way the send counts it, so the reader gets looked at
+       * before its senders start failing rather than after. */
+      const nearFull = queuesNearFull({ root: teamRoot });
+      if (nearFull.length) {
+        warnings++;
+        const lim = queueLimits();
+        console.log('  ' + nearFull.length + ' queue(s) at 80%+ of the send limit (' + (lim.msgs || 'no') + ' messages / ' +
+          (lim.bytes || 'no') + ' bytes unread)  WARNING');
+        for (const q of nearFull.slice(0, 6))
+          console.log('    ' + q.role + ': ' + q.msgs + ' msg, ' + q.bytes + 'B unread' + (q.full ? '  — FULL, sends to it are refused' : ''));
+        if (nearFull.length > 6) console.log('    ... and ' + (nearFull.length - 6) + ' more');
+        console.log('    their readers are behind or stopped: hub queue status <role>, then look on the node that runs it');
       }
       // Reader namespaces nobody has used in a week: dead sessions of a broadcast role, each one
       // listed as a reader "behind" in `hub queue status` forever. Housekeeping, not a fault — no
