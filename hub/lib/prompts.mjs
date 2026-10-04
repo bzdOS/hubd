@@ -51,11 +51,11 @@ export function renderPrompt(name, vars = {}, dir = META_DIR) {
   };
   const expand = (rel, chain) => {
     let text = fs.readFileSync(path.join(dir, rel), 'utf8');
+    // Notes go in a fragment as in a template: a rule nothing checks is marked as a wish next to it,
+    // for authors, and the role never reads the mark.
     const cuts = [];   // [offset in the stripped text, lines removed there]: errors name the line in the file
-    if (chain.length === 1) {
-      let shift = 0;
-      text = text.replace(NOTE, (c, at) => { cuts.push([at - shift, c.split('\n').length - 1]); shift += c.length; return ''; });
-    }
+    let shift = 0;
+    text = text.replace(NOTE, (c, at) => { cuts.push([at - shift, c.split('\n').length - 1]); shift += c.length; return ''; });
     const lineOf = (off) => lineAt(text, off) + cuts.reduce((n, [o, k]) => n + (o <= off ? k : 0), 0);
     return text.replace(TOKEN, (tok, frag, v, offset) => {
       const at = `${rel}:${lineOf(offset)}`;

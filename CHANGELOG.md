@@ -4,6 +4,21 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.38 — 2026-10-04
+
+- **Nine rules from a finished project, in the role rules where they are read.** Each comes from
+  a case that happened. Heads: the cheap mechanical check of an artifact is the first dispatch
+  and is rerun after every step; a full pass waits until names are fixed; verification gets no
+  less time than production. Every role: exit code 0 is not a result; a claim about quality is
+  a sample; check against the original, not a retelling; an event is a `FACT` only once observed
+  or confirmed; an owner decision outranks an older practice found in the history. The
+  orchestrator does not warn again about a risk the owner has weighed. The protocol's
+  compaction section: a label in the narrative ("a project convention") is checked against
+  state. The rules extend existing lines; a render grows by 0.9-1.2 KB.
+- **A note for authors is not rendered in a fragment either.** It was stripped only in the top
+  template. None of the nine rules has a check, so each is marked `<!-- wish: …; no check -->`
+  next to it; the role never reads the mark, and `grep -rn '^<!-- wish' prompts/meta` lists them.
+
 ## 0.9.37 — 2026-10-04
 
 - **A role hands a branch over; it does not push.** The role rules said "before a push", "rewrite

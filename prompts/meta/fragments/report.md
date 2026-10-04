@@ -15,5 +15,8 @@ Rules:
 - First line: what was checked and with what (the command and its result), then the rest.
 - Do not list files and commits: those are read from git.
 - Do not write "done" without an artifact. Name a skipped or failed step plainly.
+- An event (published, merged, deployed, sent) is a FACT only once you observed it or its owner confirmed it;
+  until then it is HYPO or "prepared". The card and the digest take the same rule: they outlive the turn.
+<!-- wish: an event is a FACT only once observed or confirmed; no check -->
 - `blocked`: what you tried, the exact error text, what exactly is stuck. Then take other work.
 - Length: up to 15 lines, then the reflection block at the end of the same report (see below).

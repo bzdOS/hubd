@@ -13,3 +13,6 @@
 - Announce an irreversible step in one line before running it: what you are doing, and to what.
 - Before acting: whose work does it unblock. No addressee, do not do it.
 - Do not recreate a recipe, read it: builds and keys live in resource cards.
+- An owner decision outranks a pattern found in the history or the code: an older practice that contradicts it
+  is not a convention. Do not continue it; report where it still occurs.
+<!-- wish: an owner decision outranks a pattern in the history; no check -->

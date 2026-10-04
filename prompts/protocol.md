@@ -253,7 +253,9 @@ an instance says which is which:
 A context compaction hands you a NARRATIVE of what happened; work resumes from STATE — what
 exists now. Fleet sessions compact often and on purpose, so this is the normal way a session
 returns, not an edge case. One session re-discovered its own finding (already committed under a
-subject that named it) and re-wrote a script that already sat untracked in `scripts/`.
+subject that named it) and re-wrote a script that already sat untracked in `scripts/`. The
+narrative also carries labels nobody measured ("a project convention", "already announced");
+check a label against state before you continue what it names.
 
 1. `hub whereami` in a shell, `hub_context({cwd})` over MCP — the same function. It answers
    from state: the digest with its age and `digestStale`, `presenceHere` (who else is in this
