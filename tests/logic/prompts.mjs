@@ -58,6 +58,37 @@ ok(/^## FLEET-REFLECT/m.test(P.renderPrompt('orchestrator', VARS)), 'prompts: th
   const r = cli(['prompts', 'render', 'worker', '--vars', JSON.stringify(noCheck)]);
   ok(r.code === 2 && /private_check/.test(r.stderr) && r.stdout === '', 'prompts: a render without private_check is an error that names it, and prints nothing');
 }
+// Nine lessons from a finished project, each where it is read. None has a check, so each is marked
+// as a wish for authors; the mark never reaches the role.
+{
+  const LESSONS = [
+    [1, 'head', 'head-cycle', 'is the first dispatch and is rerun after every step'],
+    [2, 'head', 'head-cycle', 'A full pass waits\n   until the names and terms it depends on are fixed'],
+    [3, 'head', 'head-cycle', 'Verification gets no less time than production'],
+    [4, 'worker', 'turn', 'Exit code 0 is not a result'],
+    [5, 'worker', 'turn', 'A claim about quality is a sample'],
+    [6, 'worker', 'turn', 'not against a retelling of it'],
+    [7, 'worker', 'report', 'is a FACT only once you observed it or its owner confirmed it'],
+    [8, 'worker', 'boundaries', 'An owner decision outranks a pattern found in the history or the code'],
+    [9, 'orchestrator', 'orch-reflect', 'a risk the owner has weighed is noise'],
+  ];
+  for (const [n, t, frag, phrase] of LESSONS)
+    ok(P.renderPrompt(t, VARS).includes(phrase) && fs.readFileSync(path.join(REPO, 'prompts/meta/fragments', frag + '.md'), 'utf8').includes(phrase),
+      `prompts: lesson ${n} sits in ${frag} and reaches the ${t}: "${phrase.replace(/\s+/g, ' ')}"`);
+  ok(fs.readFileSync(path.join(REPO, 'prompts/protocol.md'), 'utf8').includes('check a label against state before you continue what it names'),
+    'prompts: lesson 6 also sits in the protocol, where a session recovers after compaction');
+  const wishes = fs.readdirSync(path.join(REPO, 'prompts/meta'), { recursive: true }).filter(f => f.endsWith('.md'))
+    .flatMap(f => fs.readFileSync(path.join(REPO, 'prompts/meta', f), 'utf8').split('\n').filter(l => l.startsWith('<!-- wish:')).map(() => f.replace(/^fragments\/|\.md$/g, '')));
+  const per = (f) => wishes.filter(w => w === f).length;
+  ok(wishes.length === 9 && per('head-cycle') === 3 && per('turn') === 3 && per('report') === 1 && per('boundaries') === 1 && per('orch-reflect') === 1,
+    `prompts: each of the nine lessons is marked as a wish, on a line of its own (got ${JSON.stringify(wishes)})`);
+  // The lessons extend existing lines; a repeated line would cost every role on every step.
+  for (const [t, n] of [['worker', 2], ['head', 2], ['orchestrator', 3]]) {
+    const s = P.renderPrompt(t, VARS);
+    ok(s.split('Do not claim what you have not measured').length - 1 === n && !s.includes('<!--'),
+      `prompts: ${t} says "Do not claim what you have not measured" ${n} times, as before the lessons, and shows no wish mark`);
+  }
+}
 // a value is inserted as it is: neither re-expanded nor stripped inside
 const odd = P.renderPrompt('worker', { ...VARS, track_goal: '\n\nkeep {{role}} and {{> turn}} literal\n\n' });
 ok(odd.includes('keep {{role}} and {{> turn}} literal\n'), 'prompts: a value is not expanded again, only its outer blank lines trimmed');
@@ -104,6 +135,12 @@ put('unused.md', '<!-- vars: x, z -->\n{{x}}\n');
 ok(/never used: z/.test(err(() => P.renderPrompt('unused', { x: '1', z: '2' }, F))), 'prompts: a variable declared but never used is an error');
 put('nofrag.md', '<!-- vars: -->\n{{> gone}}\n');
 ok(/no fragment "gone".*nofrag\.md:2/.test(err(() => P.renderPrompt('nofrag', {}, F))), 'prompts: a missing fragment is an error naming where it was included');
+put('fragments/n.md', 'one\n<!-- wish: a rule\n     nothing checks -->\ntwo {{y}}\n');
+put('note.md', '<!-- vars: x -->\n<!-- a note -->\n{{x}}\n{{> n}}\n');
+ok(/unknown variable: y \(fragments\/n\.md:4\)/.test(err(() => P.renderPrompt('note', { x: '1' }, F))),
+  'prompts: an error in a fragment names its line in the file, notes included');
+put('fragments/n.md', 'one\n<!-- wish: a rule\n     nothing checks -->\ntwo\n');
+ok(P.renderPrompt('note', { x: '1' }, F) === '1\none\ntwo\n', 'prompts: a note that starts a line is not rendered, in a fragment as in a template');
 put('nodecl.md', '{{x}}\n');
 ok(/declares no variables/.test(err(() => P.renderPrompt('nodecl', { x: '1' }, F))), 'prompts: a template without its vars line is an error');
 

@@ -30,8 +30,8 @@ nothing, so a loop can tell stale rules from a render that cannot happen.
 ## Format
 
 - The first line of a template declares every variable it and its fragments
-  use: `<!-- vars: role, project, cwd -->`. A comment that starts a line in a
-  template is a note for authors and is not rendered.
+  use: `<!-- vars: role, project, cwd -->`. A comment that starts a line, in a
+  template or a fragment, is a note for authors and is not rendered.
 - `{{name}}` becomes the variable's value as given: leading and trailing blank
   lines and trailing spaces are trimmed, nothing inside it is expanded.
 - `{{> name}}` becomes `fragments/name.md` without its trailing newline, so an
@@ -66,4 +66,7 @@ nothing, so a loop can tell stale rules from a render that cannot happen.
 
 Edit the fragment, not a rendered file: a hand edit is overwritten by the next
 render, and `--check` reports it until then. A prohibition comes with the check
-that fails when it is broken, or it is marked as a wish (see `orch-reflect`).
+that fails when it is broken, or it is marked as a wish (see `orch-reflect`): a
+note `<!-- wish: <the rule>; no check -->` on the line after it. The mark is for
+authors, so the role never reads it, and `grep -rn '^<!-- wish' prompts/meta`
+lists the rules nothing checks yet.

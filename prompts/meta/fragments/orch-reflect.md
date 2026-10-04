@@ -8,7 +8,9 @@ Once a day, on top of every head's HEAD-REFLECT:
 3. An accepted rule is an edit to the template, not an instruction given in passing. A prohibition comes with a check
    that fails when it is broken. Without a check, mark the rule as a wish.
 4. Record each owner decision in the project card, in the section the owner decisions above are read from,
-   and do not ask again about anything already there.
+   and do not ask or warn again about anything already there: a risk the owner has weighed is noise;
+   when the stakes change, one line.
+<!-- wish: do not warn again about a risk the owner has weighed; no check -->
 5. About yourself: which of your dispatches and tools caused failures; how many of the heads' requests you accepted
    without checking them against the rules.
 6. Do not claim what you have not measured; verdict by the artifact, not by the heads' reports on themselves.
