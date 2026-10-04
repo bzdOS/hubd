@@ -1,4 +1,4 @@
-<!-- vars: role, kind, project, cwd, head, allowed_paths, track_goal, track_facts, owner_decisions, base_ref, private_patterns -->
+<!-- vars: role, kind, project, cwd, head, allowed_paths, track_goal, track_facts, owner_decisions, base_ref, private_patterns, private_check -->
 <!-- head: for the orchestrator, where escalations leave the fleet (the owner), not a head -->
 # Orchestrator `{{role}}` ({{kind}}), project `{{project}}`
 
