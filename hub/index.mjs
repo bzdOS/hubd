@@ -305,7 +305,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_queue_send',
-    description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node.',
+    description: 'Append a message to a role\'s queue (queues/<role>.<node>.queue.md) for cross-agent/cross-node handoffs. Delivered to whoever calls hub_queue_wait (or `hub queue wait`) for that role, here or on a mesh-synced peer node. Prose, not cargo: over 16 KB, or carrying a base64/hex run over 2 KB, a git diff, a git bundle or a PEM block, it is refused — put the artifact in a file and send its path, size and sha256. Refused too while the role already holds 50 unread messages or 256 KB: its reader is behind, check it before sending more.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'queue/role to deliver to, e.g. "dev" or "owner"' },
       text: { type: 'string' },

@@ -157,6 +157,13 @@ is a folder you own. They are two separate things — and that is the whole poin
   pending on one, 0 on the other, for one queue. Since 0.9.33 a role's reader publishes how far it
   got (`queues/read/<role>.<node>.json`, mesh-synced, one writer each), and every count — `hub queue
   status`, a send's depth, `hub brief`, `hub doctor` — takes the furthest position any node reached.
+- **A file sent as a message.** A queue message is read whole by a model, and a role loop cuts one
+  past 16 KB: a 2.3 MB base64 bundle sent to a head overflowed it twice, and the work stood. Since
+  0.9.34 a queue message, a report and a task text over 16 KB (`HUBD_MSG_MAX`) are refused, and so
+  are a base64 or hex run over 2 KB, a git diff, a git bundle and a PEM block at any size; the
+  error says to put the artifact in a file and send its path, size and sha256. A send is refused
+  too once the role holds 50 unread messages or 256 KB (`HUBD_QUEUE_MAX_MSGS`,
+  `HUBD_QUEUE_MAX_BYTES`, 0 = off; an owner role is exempt), and `hub doctor` warns at 80%.
 - **A card that grew into a log.** The digest is advertised as a few lines of current state, and
   nothing held it there: one hub reached three cards past 72 KB, and reading the largest was
   refused by the caller's context budget. hubd now refuses an over-long digest and a dated

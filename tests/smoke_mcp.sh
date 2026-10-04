@@ -8,8 +8,11 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 HUBD_DIR="$(mktemp -d)"; export HUBD_DIR
 trap 'rm -rf "$HUBD_DIR"' EXIT
 
-# A >64KB single line stress-tests stdin chunking (readline must not split it).
+# A >64KB single line stress-tests stdin chunking (readline must not split it). A task that big is
+# refused (a message is prose, not cargo), and the refusal counting all 70000 bytes is the proof the
+# line arrived whole; the compact reply is checked on a task under the limit.
 BIG=$(node -e 'process.stdout.write("x".repeat(70000))')
+MID=$(node -e 'process.stdout.write("word ".repeat(3000))')
 
 REQS=$(cat <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
@@ -18,6 +21,7 @@ REQS=$(cat <<EOF
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hub_task_add","arguments":{"project":"smoke","text":"$BIG","by":"smoke-suite"}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"hub_task_add","arguments":{"project":"smoke","text":"$MID","by":"smoke-suite"}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_brief","arguments":{}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"hub_card_set","arguments":{"project":"smoke","digest":"smoke digest line","by":"smoke-suite"}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"hub_kanban","arguments":{}}}
@@ -54,10 +58,11 @@ ok(byId[2] && Array.isArray(byId[2].result.tools), "tools/list returns an array"
   ok(missing.length === 0, "tools/list has required tools (" + names.size + " total, missing: " + (missing.join(",") || "none") + ")");
 }
 ok(byId[3] && byId[3].result && byId[3].result.isError === false, "hub_status ok");
-ok(byId[4] && byId[4].result && byId[4].result.isError === false, "hub_task_add with >64KB payload ok");
+ok(byId[4] && byId[4].result && byId[4].result.isError === true && /70000 bytes, over the 16384-byte limit/.test(byId[4].result.content[0].text),
+  "hub_task_add with a >64KB line arrives whole, and is refused as cargo");
 {
-  // The 70 KB text went in; the reply must not carry it back (task maple-83).
-  const txt = byId[4] && byId[4].result ? byId[4].result.content[0].text : "";
+  // The 15 KB text went in; the reply must not carry it back (task maple-83).
+  const txt = byId[13] && byId[13].result ? byId[13].result.content[0].text : "";
   let r = null; try { r = JSON.parse(txt); } catch {}
   ok(r && r.ok === true && r.id != null && typeof r.textPreview === "string" && r.textPreview.length <= 81 && txt.length < 400,
     "hub_task_add reply is compact (" + txt.length + " bytes, textPreview, no full echo)");

@@ -29,7 +29,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock, readJson, atomicWrite,
-  loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting } from './core.mjs';
+  assertProse, envLimit, loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -555,6 +555,85 @@ export function parseTaskRefs(text) {
   return out;
 }
 
+/* ── A queue nobody is reading takes no more ──
+ *
+ * Sending appends; it never waits for the reader. A reader that is behind or stopped therefore
+ * gets everything at once when it comes back, and a role loop that is handed more than it can
+ * hold drops it: the message that mattered is buried under the ones sent after it. So a send is
+ * refused once the role already holds HUBD_QUEUE_MAX_MSGS unread messages (default 50) or
+ * HUBD_QUEUE_MAX_BYTES unread bytes (default 256 KB); 0 turns either off. An owner role is
+ * exempt: a human reads the file, not a loop. */
+export function queueLimits() {
+  return { msgs: envLimit('HUBD_QUEUE_MAX_MSGS', 50), bytes: envLimit('HUBD_QUEUE_MAX_BYTES', 262144) };
+}
+
+/* What waits unread in `role`'s queue, as { msgs, bytes }: the blocks past the furthest read
+ * position — this node's cursor and every node's read mark; for a broadcast role, the reader
+ * furthest ahead in each file — less every block the ack log says was handed out. A reader on a
+ * hubd from before read marks leaves no mark, but its acks travel with the mesh. Every doubt is
+ * counted as read: the cap refuses on this number, and a refusal must not be wrong. */
+export function unreadLoad(role, { root } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = path.join(r, '.qstate');
+  const fileRe = roleFileRe(role);
+  let files;
+  try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { msgs: 0, bytes: 0 }; }
+  const marks = readMarks(qdir, role);
+  const subs = new Set();
+  if (subscriberRoles(r).includes(role)) {
+    for (const s of subscriberDirs(stateDir)) subs.add(s);
+    for (const m of marks) for (const s of Object.keys(m.subs)) subs.add(s);
+  }
+  const cursor = (p) => (fs.existsSync(p) ? readCursor(p).off : null);
+  let msgs = 0, bytes = 0;
+  for (const f of files) {
+    const full = path.join(qdir, f);
+    let size = 0; try { size = fs.statSync(full).size; } catch { continue; }
+    let off = readPosition(full, size, cursor(path.join(stateDir, `${f}.offset`)), marksFor(marks, f)).off;
+    for (const s of subs) off = Math.max(off, readPosition(full, size, cursor(path.join(stateDir, s, `${f}.offset`)), marksFor(marks, f, s)).off);
+    if (off >= size) continue;
+    let tail; try { tail = readTail(full, off, size); } catch { continue; }
+    const handed = new Set(readAcks(acksPath(full)).map(a => a.id));
+    const heads = [...tail.matchAll(BLOCK_RE)];
+    heads.forEach((m, i) => {
+      if (m[3] && handed.has(Number(m[3]))) return;
+      msgs++;
+      bytes += Buffer.byteLength(tail.slice(m.index, i + 1 < heads.length ? heads[i + 1].index : tail.length), 'utf8');
+    });
+  }
+  return { msgs, bytes };
+}
+
+/* The roles whose unread load has reached `ratio` of either limit, counted the way a send counts
+ * it, as [{ role, msgs, bytes, full }] fullest first: the ones a send will soon be refused for, or
+ * already is (`full`). An owner role is never refused, so never listed. */
+export function queuesNearFull({ root, ratio = 0.8 } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const lim = queueLimits();
+  if (!lim.msgs && !lim.bytes) return [];
+  const owners = new Set(ownerRoles());
+  const out = [];
+  for (const role of new Set(listShards(path.join(r, 'queues')).map(s => s.role))) {
+    if (owners.has(role)) continue;
+    let u; try { u = unreadLoad(role, { root: r }); } catch { continue; }
+    const share = Math.max(lim.msgs ? u.msgs / lim.msgs : 0, lim.bytes ? u.bytes / lim.bytes : 0);
+    if (share >= ratio) out.push({ role, ...u, share, full: !!((lim.msgs && u.msgs >= lim.msgs) || (lim.bytes && u.bytes >= lim.bytes)) });
+  }
+  return out.sort((a, b) => b.share - a.share).map(({ share, ...x }) => x);
+}
+
+/** Refuse a send of `add` bytes to `role` when its queue is already at the limit. */
+function assertRoom(role, root, add) {
+  const lim = queueLimits();
+  if ((!lim.msgs && !lim.bytes) || ownerRoles().includes(role)) return;
+  const u = unreadLoad(role, { root });
+  if ((lim.msgs && u.msgs + 1 > lim.msgs) || (lim.bytes && u.bytes + add > lim.bytes))
+    throw new Error(`queue full: ${role} already holds ${u.msgs} unread message(s), ${u.bytes} bytes; the limit is ` +
+      `${lim.msgs || 'no'} messages / ${lim.bytes || 'no'} bytes (HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES). Its reader is ` +
+      `behind or stopped, and more messages only bury the first ones: check it (hub queue status ${role}) before sending again.`);
+}
+
 export function queueSend(role, text, { from, root, node, task } = {}) {
   // A queue block is a durable, mesh-synced write that says "from <sender>" forever —
   // so the sender is held to the same rule as every other author. This used to default
@@ -563,6 +642,7 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   // (HUBD_AGENT) fills an omitted `from` before it reaches here.
   const sender = requireAuthor(from, 'from');
   assertRole(role);
+  const body = assertProse(String(text ?? '').trim(), 'message');
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   fs.mkdirSync(qdir, { recursive: true });
@@ -588,7 +668,8 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
   // prefix every existing reader (peekQueueDepth, doctor, the archive) keys on.
   const ref = (task ?? '') !== '' ? ` · task #${String(task).trim()}` : '';
-  const entry = `\n## ${ts} · from ${sender} · id ${blockId}${ref}\n${String(text).trim()}\n`;
+  const entry = `\n## ${ts} · from ${sender} · id ${blockId}${ref}\n${body}\n`;
+  assertRoom(role, r, Buffer.byteLength(entry, 'utf8'));
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');

@@ -147,6 +147,61 @@ export function requireAuthor(value, field = 'agent') {
   return v;
 }
 
+/** A non-negative integer from env var `name`; unset, empty or malformed gives `dflt`. 0 means "no limit". */
+export function envLimit(name, dflt) {
+  const raw = String(process.env[name] ?? '').trim();
+  if (raw === '') return dflt;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : dflt;
+}
+
+/* ── A message is prose, not cargo ──
+ *
+ * A queue message, a report and a task are read whole by a model, every time, and a role loop cuts
+ * a message past 16 KB, so cargo sent this way never arrives: a 2.3 MB base64 bundle sent to one
+ * head overflowed it twice, and the work it carried stood still. The artifact belongs in a file on
+ * the sender's node; the message carries its path, size and sha256. So the size is capped
+ * (HUBD_MSG_MAX, bytes, 0 = no cap), and four shapes are refused at any size — they are cargo
+ * however short, and a few KB of them is a file pasted where a sentence was due. */
+export const PROSE_RULE = 'A message is prose, not cargo: put the artifact in a file on your node and send its path, size and sha256sum.';
+const MSG_MAX_DEFAULT = 16384;
+// base64 or hex: one run of 2 KB+ with no space in it. Lines wrapped at 60+ columns (an encoder's
+// default) are one run; a run with no digit or no letter in it is a ruler, not an encoding.
+const B64_RUN = /(?:[A-Za-z0-9+/=_-]{60,}\r?\n)+[A-Za-z0-9+/=_-]+(?=\r?\n|$)|[A-Za-z0-9+/=_-]{2049,}/g;
+const CARGO_SHAPES = [
+  { what: 'a git diff', re: /^diff --git \S/m },
+  { what: 'a git bundle', re: /^# v[23] git bundle\s*$/m },
+  { what: 'a PEM block (a key or a certificate)', re: /^-----BEGIN [A-Z0-9 ]+-----\s*$/m },
+];
+
+/** The first cargo shape in `text`, as { what, line }, or null. */
+export function cargoIn(text) {
+  const s = String(text ?? '');
+  const lineAt = (i) => s.slice(0, i).split('\n').length;
+  for (const m of s.matchAll(B64_RUN)) {
+    if (m[0].length <= 2048) continue;
+    const run = m[0].replace(/\s+/g, '');
+    if (run.length > 2048 && /[0-9]/.test(run) && /[A-Za-z]/.test(run))
+      return { what: `a base64 or hex run of ${run.length} characters`, line: lineAt(m.index) };
+  }
+  for (const c of CARGO_SHAPES) {
+    const m = c.re.exec(s);
+    if (m) return { what: c.what, line: lineAt(m.index) };
+  }
+  return null;
+}
+
+/** Refuse `text` that is too big or carries cargo; `what` names it in the error ("message", "report", ...). */
+export function assertProse(text, what = 'message') {
+  const s = String(text ?? '');
+  const max = envLimit('HUBD_MSG_MAX', MSG_MAX_DEFAULT);
+  const bytes = Buffer.byteLength(s, 'utf8');
+  if (max && bytes > max) throw new Error(`${what} refused: ${bytes} bytes, over the ${max}-byte limit (HUBD_MSG_MAX). ${PROSE_RULE}`);
+  const cargo = cargoIn(s);
+  if (cargo) throw new Error(`${what} refused: it carries ${cargo.what} (line ${cargo.line}). ${PROSE_RULE}`);
+  return s;
+}
+
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -2674,6 +2729,7 @@ export function runReport(a) {
   const project = a.project || 'general';
   const slug = slugify(project);
   const by = requireAuthor(a.by ?? a.agent, 'by');
+  assertProse(a.text, 'report');
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
@@ -3270,6 +3326,7 @@ export function normalizeCat(cat, tags) {
 
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
+  assertProse(a.text, 'task text');
   return withLock(TASK_EVENTS, () => {
     const id = `${TASK_ID_PREFIX}-${nextLocalSeq()}`;
     const norm = normalizeCat(a.cat, a.tags);
@@ -3351,6 +3408,7 @@ export function runTaskUpdate(a) {
   // wrong place.
   if (a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
   const author = requireAuthor(a.by, 'by');
+  if (a.text != null) assertProse(a.text, 'task text');
   return withLock(TASK_EVENTS, () => {
     const db = loadTasks();
     const t = db.tasks.find(x => String(x.id) === String(a.id));
