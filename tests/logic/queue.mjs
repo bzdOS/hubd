@@ -316,6 +316,74 @@ ok(/NO watermark — will restart from 0/.test(run('doctor', { HUBD_DIR: WM, HUB
   'doctor: and says which of them will re-deliver, rather than letting it happen quietly');
 fs.rmSync(WM, { recursive: true, force: true });
 
+/* ── a failed merge in the hub must not re-deliver ──
+ * A sync merged in the live hub dir and stopped on a conflict in other files. While the merge stood
+ * open, the queue file held the other side's version, one block longer, and a reader took that
+ * block; the abort put the shorter version back, the watermark was not in it, and the cursor fell
+ * to 0: the worker got its whole queue again, on every failed run. Here git does the merging, in a
+ * real repo used as the hub: open, aborted, tried again, aborted, then made. */
+const FM = mktmp();
+const fmGit = (args) => execSync(`git -c user.name=t -c user.email=t@t -c commit.gpgsign=false ${args}`, { cwd: FM, stdio: 'pipe' });
+const fmQ = path.join(FM, 'queues', 'w.n1.queue.md');
+const fmBlk = (id) => `\n## 2026-10-01 18:0${id} · from orch · id ${id}\nmessage ${id}\n`;
+fs.mkdirSync(path.join(FM, 'queues'), { recursive: true });
+fs.writeFileSync(path.join(FM, '.gitignore'), '.qstate/\nqueues/read/\n*.acks\n');
+fs.writeFileSync(fmQ, fmBlk(1) + fmBlk(2) + fmBlk(3));
+fs.writeFileSync(path.join(FM, 'notes.md'), 'base\n');
+fmGit('init -q -b main'); fmGit('add -A'); fmGit('commit -q -m base');
+fmGit('checkout -q -b other');
+fs.appendFileSync(fmQ, fmBlk(4)); fs.writeFileSync(path.join(FM, 'notes.md'), 'other\n'); fmGit('commit -q -am other');
+fmGit('checkout -q main');
+fs.writeFileSync(path.join(FM, 'notes.md'), 'local\n'); fmGit('commit -q -am local');
+const fmSeen = [];
+const fmWait = async () => {
+  const r = await queueLib.queueWait('w', { timeout: 0, root: FM });
+  const ids = r.changed ? [...r.text.matchAll(/· id (\d+)/g)].map(m => Number(m[1])) : [];
+  fmSeen.push(...ids);
+  return ids.join();
+};
+const fmOff = () => parseInt(fs.readFileSync(path.join(FM, '.qstate', 'w.n1.queue.md.offset'), 'utf8'), 10);
+const fmMerge = () => { try { fmGit('merge --no-edit -q other'); return 'made'; } catch { return 'conflict'; } };
+ok(await fmWait() === '1,2,3', 'failed merge: before it, the queue is read to its end');
+ok(fmMerge() === 'conflict' && /message 4/.test(fs.readFileSync(fmQ, 'utf8')),
+  'failed merge: the merge stops on a conflict elsewhere, with the longer queue file in the hub');
+ok(await fmWait() === '4', 'failed merge: a reader takes the new block while it stands open, and only that block');
+fmGit('merge --abort');
+const fmShort = fs.statSync(fmQ).size;
+const fmAbort = await fmWait();
+ok(fmAbort === '', `failed merge: after the abort put the shorter file back, nothing is handed out again (got ${fmAbort})`);
+ok(fmOff() === fmShort, `failed merge: and the cursor is at the end of that file, not at 0 (got ${fmOff()} of ${fmShort})`);
+ok(fmMerge() === 'conflict' && await fmWait() === '',
+  'failed merge: the next failed try hands out nothing — its one new block was had the first time');
+fmGit('merge --abort');
+ok(await fmWait() === '' && fmOff() === fmShort, 'failed merge: nor does its abort');
+fmMerge(); fs.writeFileSync(path.join(FM, 'notes.md'), 'merged\n'); fmGit('commit -q -am merged');
+ok(await fmWait() === '', 'failed merge: the merge that is made hands out nothing new');
+fs.appendFileSync(fmQ, fmBlk(5));
+ok(await fmWait() === '5', 'failed merge: and the block after it is delivered, alone');
+ok(fmSeen.join() === '1,2,3,4,5', `failed merge: every block was delivered exactly once (got ${fmSeen})`);
+// What the watermark's id does NOT cover: a file that holds nothing it has seen is delivered whole.
+const fmAt = async (file, cursor) => {
+  fs.writeFileSync(fmQ, file);
+  fs.writeFileSync(path.join(FM, '.qstate', 'w.n1.queue.md.offset'), cursor);
+  return fmWait();
+};
+const fmMark = '## 2026-10-01 18:04 · from orch · id 4';
+const fmLater = (id) => `\n## 2026-10-02 09:0${id} · from orch · id ${id}\nmessage ${id}\n`;
+ok(await fmAt(fmLater(1) + fmLater(2), `999999\n${fmMark}\n`) === '1,2',
+  'shrunk: a file recreated with its ids from 1 again, written after the watermark, is delivered whole');
+ok(await fmAt(fmBlk(5) + fmBlk(6), `999999\n${fmMark}\n`) === '5,6',
+  'shrunk: a purge that took the watermark with it leaves only newer ids, and they are delivered');
+const fm123 = fmBlk(1) + fmBlk(2) + fmBlk(3);
+ok(await fmAt(fm123 + fmBlk(4) + fmBlk(5), `${Buffer.byteLength(fm123)}\n${fmMark}\n`) === '5',
+  'ahead: with the watermark past the cursor, the blocks up to it are skipped and the one after it delivered');
+const fmLegacy = (n) => `\n## 2026-10-01 18:0${n} · from orch\nlegacy ${n}\n`;
+fs.writeFileSync(fmQ, fmLegacy(1) + fmLegacy(2));
+fs.writeFileSync(path.join(FM, '.qstate', 'w.n1.queue.md.offset'), `0\n## 2026-10-01 18:01 · from orch\n`);
+const fmNoId = await queueLib.queueWait('w', { timeout: 0, root: FM });
+ok(fmNoId.changed && /legacy 1/.test(fmNoId.text) && /legacy 2/.test(fmNoId.text),
+  'ahead: a watermark without an id is not trusted to skip anything');
+
 // this node's own shard (the tests run as node "cedar"), and an empty one of its own
 fs.writeFileSync(path.join(QG, 'queues', 'ghost.cedar.queue.md'), oldMsg);
 fs.writeFileSync(path.join(QG, 'queues', 'hollow.cedar.queue.md'), '');
