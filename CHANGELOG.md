@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.37 — 2026-10-04
+
+- **A role hands a branch over; it does not push.** The role rules said "before a push", "rewrite
+  before the push" and "you push to a local branch". Roles push nowhere: a branch goes for review,
+  as a bundle or a patch. Workers read push as a step, and heads waited on one. `privacy.md` now
+  runs the private check before a branch is handed over, and says a role never pushes to an
+  external remote or asks anyone to.
+- **New required variable `private_check`** for `hub prompts render`: the command a role runs
+  before handing a branch over; empty output means clean. A worker had the patterns to look for
+  but not the command. A render without it exits 2 and names it, and the rules file is not
+  rewritten: add `private_check` to a role's variables before upgrading.
+
 ## 0.9.36 — 2026-10-04
 
 - **A queue read that came up short no longer hands out stray bytes.** The reader takes the

@@ -1,4 +1,4 @@
-<!-- vars: role, kind, project, cwd, head, allowed_paths, track_goal, track_facts, owner_decisions, base_ref, private_patterns -->
+<!-- vars: role, kind, project, cwd, head, allowed_paths, track_goal, track_facts, owner_decisions, base_ref, private_patterns, private_check -->
 # Worker `{{role}}` ({{kind}}), project `{{project}}`
 
 You are a worker. Your head `{{head}}` gives you work as a dispatch in your queue. You do not hand out dispatches,

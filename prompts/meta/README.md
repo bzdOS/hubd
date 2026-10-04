@@ -57,7 +57,8 @@ nothing, so a loop can tell stale rules from a render that cannot happen.
 | `track_facts` | the track's facts, markdown, headings at level 3 or below |
 | `owner_decisions` | the owner's decisions so far, a markdown list |
 | `base_ref` | the ref its diffs are taken against, e.g. `origin/main` |
-| `private_patterns` | what must never reach public git: the patterns the pre-push check runs |
+| `private_patterns` | what must never reach public git, described: the patterns `private_check` looks for |
+| `private_check` | the command it runs before handing a branch over (for review, as a bundle or a patch): it checks the commit messages and the lines the diff against `base_ref` adds, and prints nothing when they are clean |
 | `plan_file` | heads: where new tasks are cut from |
 | `verdict_cmd` | heads: the command that records an acceptance verdict |
 

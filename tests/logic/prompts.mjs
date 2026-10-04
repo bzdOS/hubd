@@ -9,6 +9,7 @@ const VARS = {
   role: 'w1', kind: 'worker', project: 'demo', cwd: '/work/demo', head: 'demo-head',
   allowed_paths: '  - `/work/demo/**`', track_goal: 'Ship 1.0.', track_facts: '- the build takes 4 min',
   owner_decisions: '- keep zero dependencies', base_ref: 'origin/main', private_patterns: 'internal-',
+  private_check: 'sh tools/private-check.sh origin/main',
   plan_file: 'PLAN.md', verdict_cmd: 'hub sense demo-head verdict task/<slug> accept|reject "<what>"',
 };
 const T = mktmp();
@@ -38,6 +39,24 @@ ok(/^## FLEET-REFLECT/m.test(P.renderPrompt('orchestrator', VARS)), 'prompts: th
   const sp = example ? sense.splitReflect(example[1]) : { body: '', reflect: '' };
   ok(/^NEXT: /m.test(sp.body) && /^REFLECT\ngoal: .*\nresult: partial\nobstacle: permissions — .*\ninstead: .*\nrule: .*$/.test(sp.reflect),
     'prompts: the fragment\'s own example report is split by hub sense into its body and a trailing reflection');
+}
+// A role does not push: its branch is handed over for review, as a bundle or a patch, and the
+// private check runs before that. "push" as a step had workers pushing and heads waiting on one.
+{
+  const PROHIBIT = 'You never push to an external remote and never ask anyone to; publishing is not your step and never a blocker.';
+  for (const t of ['worker', 'head', 'orchestrator']) {
+    const s = P.renderPrompt(t, VARS);
+    ok(s.includes('run `sh tools/private-check.sh origin/main`') && /Before you hand a branch over/.test(s),
+      `prompts: ${t} runs the private check, given as a command, before handing a branch over`);
+    ok(s.split('\n').filter(l => /\bpush/i.test(l)).every(l => l === '- ' + PROHIBIT) && s.includes(PROHIBIT),
+      `prompts: in ${t}, push appears only in the line that forbids it`);
+  }
+  const src = fs.readdirSync(path.join(REPO, 'prompts/meta'), { recursive: true }).filter(f => f.endsWith('.md'))
+    .flatMap(f => fs.readFileSync(path.join(REPO, 'prompts/meta', f), 'utf8').split('\n').filter(l => /\bpush/i.test(l)).map(l => f + ': ' + l));
+  ok(src.length === 1 && src[0] === 'fragments/privacy.md: - ' + PROHIBIT, `prompts: grep -w push over prompts/meta finds the prohibition and nothing else (got ${JSON.stringify(src)})`);
+  const { private_check, ...noCheck } = VARS;
+  const r = cli(['prompts', 'render', 'worker', '--vars', JSON.stringify(noCheck)]);
+  ok(r.code === 2 && /private_check/.test(r.stderr) && r.stdout === '', 'prompts: a render without private_check is an error that names it, and prints nothing');
 }
 // a value is inserted as it is: neither re-expanded nor stripped inside
 const odd = P.renderPrompt('worker', { ...VARS, track_goal: '\n\nkeep {{role}} and {{> turn}} literal\n\n' });
