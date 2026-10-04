@@ -217,6 +217,30 @@ ok(JSON.stringify(tiny, null, 1).length <= 2000 && tiny.tasks.length >= 1,
   `budget: an impossible budget empties the first list before gutting the last (tasks left ${tiny.tasks.length})`);
 ok(core.capOutput({ tasks: [1, 2] }, plan).truncated === undefined, 'budget: a small payload is passed through untouched');
 
+// ── compact views: a journal keeps its newest end, texts are cut, bookkeeping is left out ──
+{
+  const journal = Array.from({ length: 15 }, (_, i) => ({ ts: `2026-07-01 10:${String(i).padStart(2, '0')}`, text: 'j'.repeat(i === 14 ? 50 : 600) + i }));
+  const tasks = Array.from({ length: 70 }, (_, i) => ({ id: i, text: 't'.repeat(400), deadline: null, depends_on: [], note: '', _origin: { node: 'pine', id: i } }));
+  const v = core.capOutput({ journal, tasks }, [['journal', 5, { keep: 'tail', textMax: 240 }], ['tasks', 50, { textMax: 160, drop: ['_origin'], dropEmpty: true }]]);
+  ok(v.journal.length === 5 && v.journal[0].ts === journal[10].ts && v.journal[4].ts === journal[14].ts,
+    `compact: keep:'tail' keeps the NEWEST entries of an oldest-first journal (got ${v.journal.map(e => e.ts.slice(-2)).join(',')})`);
+  ok(v.journal.slice(0, 4).every(e => e.text.length === 240 && e.text.endsWith('…')) && v.journal[4].text === journal[14].text,
+    'compact: textMax cuts a long text to its limit with an ellipsis and leaves a short one alone');
+  ok(v.truncated.journal.hidden === 10 && v.truncated.journal.textCut === 4 && /journal: 5 shown, 10 hidden, 4 text\(s\) cut to 240 chars/.test(v.hint),
+    `compact: the cut texts are counted and named in the hint (got ${v.hint})`);
+  ok(v.tasks.length === 50 && v.tasks.every(t => !('_origin' in t) && !('deadline' in t) && !('depends_on' in t) && !('note' in t) && t.text.length === 160),
+    'compact: drop leaves bookkeeping out, dropEmpty leaves null / [] / "" out, texts cut to 160');
+  ok(tasks[0]._origin && tasks[0].text.length === 400 && journal[0].text.length === 601, 'compact: the caller\'s objects are not mutated');
+  const f = core.capOutput({ journal, tasks }, [['journal', 5, { keep: 'tail', textMax: 240 }]], { full: true });
+  ok(f.journal.length === 15 && f.journal[0].text.length === 601 && f.truncated === undefined, 'compact: full:true returns every entry whole');
+  // Over budget the shrink passes cut the same end the plan does: the oldest of a tail list goes first.
+  const sq = core.capOutput({ journal }, [['journal', 15, { keep: 'tail' }]], { maxChars: 3000 });
+  ok(sq.journal.length < 15 && sq.journal.at(-1).ts === journal[14].ts,
+    `compact: under budget pressure a tail list still loses its oldest entries, not its newest (kept ${sq.journal.length}, last ${sq.journal.at(-1).ts.slice(-2)})`);
+  const only = core.capOutput({ tasks: [{ id: 1, text: 'x'.repeat(300) }] }, [['tasks', 50, { textMax: 160 }]]);
+  ok(only.truncated?.tasks?.hidden === 0 && only.truncated.tasks.textCut === 1, 'compact: a text cut alone is reported, even when no item was hidden');
+}
+
 // ── one task by id, and a miss that points somewhere ──
 const GT = mktmp();
 core.setHubBase(GT); core.ensureHubDirs();

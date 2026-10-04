@@ -12,4 +12,4 @@
 - Your working directory is `{{cwd}}`. You may write and go only along the paths below; anything else is a client refusal:
 {{allowed_paths}}
   A path outside the list is not something to work around but a report `obstacle: permissions` (see the reflection).
-- Step finished: hub_report, then the reflection, then the end of the turn.
+- Step finished: one hub_report that ends with the reflection, then the end of the turn.

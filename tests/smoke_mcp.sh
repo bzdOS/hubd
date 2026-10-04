@@ -13,6 +13,13 @@ trap 'rm -rf "$HUBD_DIR"' EXIT
 # line arrived whole; the compact reply is checked on a task under the limit.
 BIG=$(node -e 'process.stdout.write("x".repeat(70000))')
 MID=$(node -e 'process.stdout.write("word ".repeat(3000))')
+# 24 long reports, so hub_get, hub_whatsnew and hub_task_list have something to be compact about
+LONG=$(node -e 'process.stdout.write("long journal line ".repeat(40))')
+RPT=""; i=1
+while [ $i -le 24 ]; do
+  RPT="$RPT{\"jsonrpc\":\"2.0\",\"id\":$((100 + i)),\"method\":\"tools/call\",\"params\":{\"name\":\"hub_report\",\"arguments\":{\"project\":\"smoke\",\"agent\":\"smoke-suite\",\"text\":\"report $i: $LONG\"}}}
+"; i=$((i + 1))
+done
 
 REQS=$(cat <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{}}}
@@ -28,6 +35,13 @@ REQS=$(cat <<EOF
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"hub_context","arguments":{"cwd":"$HUBD_DIR"}}}
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"hub_heartbeat","arguments":{"agent":"smoke-agent","role":"smoke"}}}
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"hub_presence","arguments":{}}}
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"hub_card_set","arguments":{"project":"smoke","appendLine":"a patched line","by":"smoke-suite","verbose":true}}}
+$RPT{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"hub_get","arguments":{"project":"smoke"}}}
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"hub_get","arguments":{"project":"smoke","full":true}}}
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"hub_whatsnew","arguments":{"agent":"smoke-reader"}}}
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"hub_whatsnew","arguments":{"agent":"smoke-reader-full","since":"2020-01-01T00:00:00Z","full":true}}}
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"hub_task_list","arguments":{"project":"smoke"}}}
+{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"hub_task_list","arguments":{"project":"smoke","full":true}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}
 {"jsonrpc":"2.0","id":7,"method":"ping"}
 EOF
@@ -70,6 +84,44 @@ ok(byId[4] && byId[4].result && byId[4].result.isError === true && /70000 bytes,
 ok(byId[5] && byId[5].result && byId[5].result.isError === false, "hub_brief ok");
 ok(byId[5] && byId[5].result.content[0].text.includes("\"buttons\""), "hub_brief includes a buttons rollup");
 ok(byId[8] && byId[8].result && byId[8].result.isError === false, "hub_card_set ok");
+const J = (id) => { try { return JSON.parse(byId[id].result.content[0].text); } catch { return null; } };
+{
+  // The digest was just written by the caller; the reply says where and how much, not what.
+  const txt = byId[8] ? byId[8].result.content[0].text : "", r = J(8) || {};
+  ok(r.ok === true && r.project === "smoke" && r.section === "Digest" && r.bytes === Buffer.byteLength("smoke digest line") &&
+    !("digest" in r) && !("card" in r) && txt.length < 200,
+    "hub_card_set reply is compact: {ok, project, section, bytes} (" + txt.length + " bytes: " + txt.replace(/\s+/g, " ") + ")");
+  const v = J(14) || {};
+  ok(v.ok === true && typeof v.card === "string" && /a patched line/.test(v.digest || "") && Array.isArray(v.patched),
+    "hub_card_set verbose:true returns the card path, the patches applied and the new digest");
+}
+{
+  // A role run by a shell loop has hub_heartbeat denied: the text every client gets does not send it there.
+  const tools = byId[2] && byId[2].result.tools || [];
+  const hb = tools.find(t => t.name === "hub_heartbeat") || {};
+  ok(!/hub_heartbeat/.test(byId[1].result.instructions) && /right after hub_report/.test(hb.description || ""),
+    "server instructions do not tell every client to call hub_heartbeat; the tool description still does");
+}
+{
+  // Compact by default: the newest 5 journal entries cut to 240 chars and the head of the card; full:true the rest.
+  const g = J(20) || {}, gf = J(21) || {};
+  const jt = (g.journal || []).map(e => (e.text.match(/^report (\d+):/) || [])[1]).join(",");
+  ok(jt === "20,21,22,23,24" && g.journal.every(e => e.text.length <= 240) && g.truncated && g.truncated.journal.textCut === 5,
+    "hub_get is compact by default: the 5 NEWEST journal entries, texts cut to 240 (got " + jt + ")");
+  ok((gf.journal || []).length === 15 && gf.journal.some(e => e.text.length > 600) && gf.truncated === undefined,
+    "hub_get full:true: 15 journal entries, whole");
+  ok(JSON.stringify(g).length * 2 < JSON.stringify(gf).length, "hub_get compact is under half the full view (" + JSON.stringify(g).length + " vs " + JSON.stringify(gf).length + ")");
+  const w = J(22) || {}, wf = J(23) || {};
+  ok(Array.isArray(w.entries) && w.entries.length <= 20 && w.entries.length < w.newEntries && w.entries.every(e => e.text.length <= 240) && w.truncated && w.truncated.entries.textCut > 0,
+    "hub_whatsnew is compact by default: at most 20 entries, texts cut to 240 (" + (w.entries || []).length + " of " + w.newEntries + ")");
+  ok(Array.isArray(wf.entries) && wf.entries.length === wf.newEntries && wf.entries.some(e => e.text.length > 600),
+    "hub_whatsnew full:true: every entry, whole");
+  const t = J(24) || {}, tf = J(25) || {};
+  const big = (t.tasks || []).find(x => /^word word/.test(x.text)), bigF = (tf.tasks || []).find(x => /^word word/.test(x.text));
+  ok(big && big.text.length === 160 && !("_origin" in big) && t.truncated && t.truncated.tasks.textCut === 1,
+    "hub_task_list is compact by default: texts cut to 160, bookkeeping left out");
+  ok(bigF && bigF.text.length === 15000 && "_origin" in bigF, "hub_task_list full:true: whole texts and every field");
+}
 ok(byId[9] && byId[9].result && byId[9].result.isError === false, "hub_kanban ok");
 ok(byId[10] && byId[10].result && byId[10].result.isError === false, "hub_context ok");
 ok(byId[11] && byId[11].result && byId[11].result.isError === false, "hub_heartbeat ok");

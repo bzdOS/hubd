@@ -164,6 +164,12 @@ is a folder you own. They are two separate things — and that is the whole poin
   error says to put the artifact in a file and send its path, size and sha256. A send is refused
   too once the role holds 50 unread messages or 256 KB (`HUBD_QUEUE_MAX_MSGS`,
   `HUBD_QUEUE_MAX_BYTES`, 0 = off; an owner role is exempt), and `hub doctor` warns at 80%.
+- **Reads that cost more than the work.** On a live hub `hub_get`, `hub_whatsnew` and
+  `hub_task_list` came to 6-11k tokens a call. Since 0.9.35 they are compact by default over MCP:
+  the card's head and the newest 5 journal lines for `hub_get`, the newest 20 entries for
+  `hub_whatsnew`, 50 tasks for `hub_task_list`, long texts cut, and `truncated` saying what was
+  left out — about 2k tokens each on the same hub (5.6k for 50 tasks across every project).
+  `full: true` gives the whole answer. `hub_card_set` no longer echoes the digest it was given.
 - **A card that grew into a log.** The digest is advertised as a few lines of current state, and
   nothing held it there: one hub reached three cards past 72 KB, and reading the largest was
   refused by the caller's context budget. hubd now refuses an over-long digest and a dated

@@ -282,7 +282,16 @@ There is nothing hidden from you — narrow the question (`project`, `hours`, `s
 page through it (`hub_task_list` takes `limit`/`offset` and always reports the full
 `total`), or pass `full: true` to get everything. The journal is trimmed before anything
 else, because recent chatter compresses best; open tasks and pending buttons are the last
-to go. The CLI is never capped — a terminal has `grep`.
+to go, and a journal kept oldest-first loses its oldest entries, not its newest. The CLI is
+never capped — a terminal has `grep`.
+
+The three reads a role makes every turn are compact, not just capped: `hub_get` gives the
+card's first 4000 chars and the newest 5 journal entries (text cut to 240 chars),
+`hub_whatsnew` the newest 20 entries (text cut to 240), `hub_task_list` at most 50 tasks
+(text cut to 160, no `_origin`, no empty fields). `truncated` counts the cut texts as
+`textCut`. Need the whole card, every entry or a task's full text? `full: true`, or
+`hub_task_get` for one task. `hub_card_set` replies `{ok, project, section, bytes}`; pass
+`verbose: true` for the card path, the patches applied and the new digest.
 
 ## Resources & the relationship graph
 

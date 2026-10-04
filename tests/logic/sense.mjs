@@ -57,6 +57,30 @@ core.setHubBase(SN); core.ensureHubDirs();
   const rN = sense.collectEvents(conf, stM, nowS + 120, pres, [], [...same, ...many], null, null, {}, cfg);
   ok(rN.ev.filter(e => e[0].startsWith('rep:a:') && !e[0].includes(':more:')).length === 3 && rN.ev.some(e => e[0].startsWith('rep:a:more:') && /2 MORE REPORTS/.test(e[2])),
     'sense: beyond three reports the rest is one line saying how many, never silently dropped');
+  // The reflection ends the turn's one report (prompts/meta/fragments/reflect.md), and the journal
+  // joins a report's lines with " · ". Both that and the old leading form are read.
+  const RF = 'REFLECT\ngoal: build the package\nresult: partial\nobstacle: permissions — read refused, 3 attempts\ninstead: check the path first\nrule: none';
+  const sTrail = sense.splitReflect('checked the build: make pkg, exit 2\nNEXT: ask the head\n' + RF);
+  ok(sTrail.body === 'checked the build: make pkg, exit 2\nNEXT: ask the head' && sTrail.reflect === RF,
+    'sense: a trailing REFLECT block is split off the report body');
+  const joined = 'checked the build: make pkg, exit 2 · ' + RF.split('\n').join(' · ');
+  const sJoin = sense.splitReflect(joined);
+  ok(sJoin.body === 'checked the build: make pkg, exit 2' && /^REFLECT · goal: .* · rule: none$/.test(sJoin.reflect),
+    `sense: the journal form, lines joined with " · ", is split the same way (body ${JSON.stringify(sJoin.body)})`);
+  ok(sense.splitReflect(RF).body === '' && sense.splitReflect(RF).reflect === RF, 'sense: a report that is only a reflection (the old separate form) is all reflection');
+  ok(sense.splitReflect('NOTE: REFLECT on this later, the build is red').reflect === '' &&
+    sense.splitReflect('REFLECT on the build tomorrow\nexit 2').reflect === '',
+    'sense: REFLECT as a word in prose, with no result:/obstacle: after it, is not a reflection');
+  const longBody = 'line of the report body, measured and long. '.repeat(40);
+  const ex = sense.reportExcerpt(longBody + '\n' + RF);
+  ok(ex.length <= 700 && ex.endsWith(RF) && ex.startsWith('line of the report body') && ex.includes('…'),
+    `sense: a long report keeps its trailing reflection whole in the head's excerpt and cuts the body instead (${ex.length} chars)`);
+  ok(sense.reportExcerpt(longBody) === longBody.slice(0, 700), 'sense: a report without a reflection is cut as before, the first 700 chars');
+  const stR = {};
+  sense.collectEvents(conf, stR, nowS, pres, [], [{ ts: ts(10), agent: 'a', text: 'mark', project: 'p' }], null, null, {}, cfg);
+  const rR = sense.collectEvents(conf, stR, nowS + 60, pres, [], [{ ts: ts(-1), agent: 'a', text: longBody + ' · ' + RF.split('\n').join(' · '), project: 'p' }], null, null, {}, cfg);
+  ok(rR.ev.some(e => e[0].startsWith('rep:a:') && /WORKER REPORT a .* · REFLECT · goal: build the package · result: partial .* · rule: none$/.test(e[2])),
+    'sense: the WORKER REPORT the head is woken with carries the reflection that ends a long journaled report');
   const fresh = (p) => ({ ...p, last_seen: ts(-64) });   // still heartbeating an hour later
   const pres4 = { a: fresh(pres.a), b: fresh(pres.b) };
   st.waiting.a = nowS + 200;   // a pass after its report saw it waiting again

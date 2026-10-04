@@ -4,6 +4,29 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.35 — 2026-10-04
+
+- **Three reads are compact by default.** Over MCP, on a live hub, `hub_get` came to 6-8k tokens
+  a call, `hub_whatsnew` to 8k and `hub_task_list` to 9-11k (tokens estimated as chars / 3.5). Now
+  `hub_get` gives the card's first 4000 chars (frontmatter, digest, facts, next step) and the newest
+  5 journal entries with text cut to 240 chars; `hub_whatsnew` the newest 20 entries, text cut to
+  240; `hub_task_list` at most 50 tasks, text cut to 160, without `_origin` and empty fields. On the
+  same hub: 1.8k, 2.0k and 2.1k tokens for one project's open tasks (5.6k for 50 open tasks across
+  every project). `truncated` and `hint` say what was cut, and `full: true` returns all of it
+  whole. A list trimmed to fit kept its oldest end even when that end was a journal's past; the
+  newest end is kept now. The CLI is unchanged.
+- **`hub_card_set` replies `{ok, project, section, bytes}`.** The caller wrote the digest a moment
+  ago; the reply no longer carries it, the card path or the patches back (`verbose: true` does).
+- **The server's instructions no longer say "call hub_heartbeat after each hub_report".** That text
+  reaches every client, and a role run by a shell loop has `hub_heartbeat` denied. The advice stays
+  in the tool's own description.
+- **The reflection is the last block of the turn's one report**, not a report of its own: a call
+  late in a turn re-reads the whole turn (`prompts/meta/fragments/reflect.md`, `report.md`,
+  `turn.md`). `hub sense` reads it at the end of a report, as the journal joins it (`· REFLECT ·
+  goal: …`), and still at the start: the WORKER REPORT a head is woken with keeps the reflection
+  whole (up to 500 chars) and cuts the body before it, where it used to cut at 700 chars and lose
+  a trailing reflection.
+
 ## 0.9.34 — 2026-10-03
 
 - **A message is prose, not cargo.** A queue message is read whole by a model, and a role loop

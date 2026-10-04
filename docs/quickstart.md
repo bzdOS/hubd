@@ -106,6 +106,9 @@ digest. (A project that has simply gone quiet is never flagged.)
 Over MCP, long answers are capped to fit an agent's context and say what they
 left out in `truncated` — narrow the question, page with `limit`/`offset`, or
 pass `full: true`. The CLI is never capped; a terminal has `grep`.
+`hub_get`, `hub_whatsnew` and `hub_task_list` are compact by default: the card's
+head and the newest 5 journal entries, the newest 20 entries, 50 tasks, with
+long texts cut. `full: true` gives each of them whole.
 
 ## 5. The daily loop
 

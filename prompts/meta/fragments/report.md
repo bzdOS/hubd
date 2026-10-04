@@ -16,4 +16,4 @@ Rules:
 - Do not list files and commits: those are read from git.
 - Do not write "done" without an artifact. Name a skipped or failed step plainly.
 - `blocked`: what you tried, the exact error text, what exactly is stuck. Then take other work.
-- Length: up to 15 lines. The reflection is a separate hub_report (see below).
+- Length: up to 15 lines, then the reflection block at the end of the same report (see below).
