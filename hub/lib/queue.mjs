@@ -155,12 +155,24 @@ export function archiveQueueFile(root, file) {
 }
 
 /** The bytes of `file` from `off` to `size`, decoded — cursors are byte offsets, never string ones. */
-function readTail(file, off, size) {
+/** The bytes [off, size) as text — only those actually read. `size` comes from an earlier stat, and
+ *  the file can be replaced by a shorter one before the open (a sync checking out another version):
+ *  the read then comes up short, and the end of an allocUnsafe buffer is whatever memory held
+ *  before. A short read gives what was there, or null with `exact`, for a caller that moves a
+ *  cursor to `size`. */
+function readTail(file, off, size, { exact = false } = {}) {
   const fd = fs.openSync(file, 'r');
   try {
-    const buf = Buffer.allocUnsafe(size - off);
-    fs.readSync(fd, buf, 0, size - off, off);
-    return buf.toString('utf8');
+    const want = Math.max(0, size - off);
+    const buf = Buffer.allocUnsafe(want);
+    let got = 0;
+    while (got < want) {
+      const n = fs.readSync(fd, buf, got, want - got, off + got);
+      if (n === 0) break;
+      got += n;
+    }
+    if (exact && got < want) return null;
+    return buf.subarray(0, got).toString('utf8');
   } finally { fs.closeSync(fd); }
 }
 
@@ -503,7 +515,10 @@ function drainFile(qdir, stateDir, f, reader = null) {
         writeCursor(offFile, off, mark);
       }
       if (sz === off) return null;                    // a competitor drained it first
-      const chunk = readTail(full, off, sz);
+      const chunk = readTail(full, off, sz, { exact: true });
+      // The file was cut between the stat and the read: hand nothing out and leave the cursor, or
+      // it would move past bytes never read. The next poll sees the new size.
+      if (chunk === null) return null;
       const last = lastHeaderIn(chunk) || mark;
       writeCursor(offFile, sz, last);
       if (reader) {

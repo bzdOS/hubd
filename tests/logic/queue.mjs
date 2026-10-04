@@ -796,4 +796,47 @@ const AK = mktmp();
     'doctor: a queue at 80% of the send limit is a warning, with the role and its unread count');
 }
 
+/* ── a file cut between the stat and the read ──
+ * The cursor moves to the size taken by stat; the read comes after it. A sync that checks out a
+ * shorter version in between left the read short, and the reader handed out the bytes it got plus
+ * the uninitialised end of its buffer, then put the cursor past bytes it never read. */
+{
+  const SR = mktmp();
+  fs.mkdirSync(path.join(SR, 'queues'), { recursive: true });
+  fs.mkdirSync(path.join(SR, '.qstate'), { recursive: true });
+  const srQ = path.join(SR, 'queues', 'cut.n1.queue.md');
+  const srOff = path.join(SR, '.qstate', 'cut.n1.queue.md.offset');
+  const line = "\t@printf 'include_dir=%s/usr/include\\nsys_include_dir=%s/usr/include\\ncrt_dir=%s/usr/lib\\nmsvc_lib_dir=\\nkernel32_lib_dir=\\ngcc_dir=\\n' \\ $(SYSROOT) \"$(FLAGS)\" `x` 100% > $(LIBC_TXT) && echo \"written: $@\"";
+  const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+  const first = '\n## 2026-09-04 10:00 · from alice\nfirst\n';
+  const full = first + `\n## 2026-09-04 10:01 · from alice\n${line}\n${line}\n`;
+  fs.writeFileSync(srQ, first);
+  ok((await queueLib.queueWait('cut', { timeout: 0, root: SR })).changed, 'short read: the first block is delivered');
+  const offBefore = parseInt(fs.readFileSync(srOff, 'utf8'), 10);
+  fs.writeFileSync(srQ, full);
+  // The swap lands between drainFile's stat and readTail's open: the file is replaced by a version
+  // cut in the middle of the second block, as a checkout would leave it.
+  const realOpen = fs.openSync;
+  let armed = true;
+  fs.openSync = function (p, flags, ...rest) {
+    if (armed && p === srQ && (flags === 'r' || flags === undefined)) {
+      armed = false;
+      fs.writeFileSync(srQ + '.tmp', full.slice(0, first.length + 60));
+      fs.renameSync(srQ + '.tmp', srQ);
+    }
+    return realOpen.call(fs, p, flags, ...rest);
+  };
+  let cut;
+  try { cut = await queueLib.queueWait('cut', { timeout: 0, root: SR }); } finally { fs.openSync = realOpen; }
+  ok(!armed, 'short read: the test did cut the file under the reader');
+  ok(!cut.changed, `short read: nothing is handed out from a read that came up short (got ${JSON.stringify(String(cut.text || '').slice(-40))})`);
+  ok(parseInt(fs.readFileSync(srOff, 'utf8'), 10) === offBefore, 'short read: and the cursor stays where it was');
+  fs.writeFileSync(srQ, full);
+  const after = await queueLib.queueWait('cut', { timeout: 0, root: SR });
+  const lines = String(after.text || '').split('\n').filter(l => l === line);
+  ok(after.changed && lines.length === 2 && lines.every(l => sha(l) === sha(line) && Buffer.byteLength(l) === Buffer.byteLength(line)),
+    `short read: once the file is whole, the block arrives byte for byte (${Buffer.byteLength(line)}-byte lines, sha256 equal)`);
+  fs.rmSync(SR, { recursive: true, force: true });
+}
+
 done();

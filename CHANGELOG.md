@@ -4,6 +4,15 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.36 — 2026-10-04
+
+- **A queue read that came up short no longer hands out stray bytes.** The reader takes the
+  file's size, then reads up to it. A sync that replaced the file with a shorter version in
+  between left the read short. The reader handed out the bytes it got plus the unread end of
+  an uninitialised buffer, which can hold fragments of other messages. Its cursor then moved
+  past bytes it never read. Now a short read hands out nothing and leaves the cursor; the next
+  poll reads the file as it is. Readers that only count or peek get the bytes actually read.
+
 ## 0.9.35 — 2026-10-04
 
 - **Three reads are compact by default.** Over MCP, on a live hub, `hub_get` came to 6-8k tokens
