@@ -1,7 +1,8 @@
 ## Reflection: the required end of every turn
 
-The last action of a turn, after the main report, is a separate hub_report. Its text starts
-with exactly the word `REFLECT`, followed by exactly five lines:
+The reflection is the last block of the turn's one hub_report, not a hub_report of its own: every
+call late in a turn re-reads the whole turn, so a separate call costs as much as the turn has grown.
+After the report's own lines, one line that is exactly the word `REFLECT`, then exactly five lines:
 
 ```
 REFLECT
@@ -14,12 +15,14 @@ rule: <one rule for the prompt, or "none">
 
 - `obstacle`: the class strictly from the list `permissions | path | unclear-dispatch | environment | model | none`,
   then " — " and the fact with a number or a quote (exit code, seconds, refusal text). The class `none` takes no fact.
-- `result: done` is allowed only if this turn's main report named an artifact. Otherwise `partial`.
+- `result: done` is allowed only if this report named an artifact. Otherwise `partial`.
 - Do not invent measurements; with no measurement, write "not measured" and say in `instead` what you would measure it with.
-- The loop counts a skipped reflection as "a turn without reflection"; the head sees it.
+- Nothing follows the block. The loop counts a report without it as "a turn without reflection"; the head sees it.
 
-Example:
+Example, the end of a report:
 ```
+checked the build: make pkg, exit 2; build.log line 41: permission denied on the recipe's directory
+NEXT: ask the head to move the recipe into the role's tree
 REFLECT
 goal: build the package and attach the build log
 result: partial

@@ -35,6 +35,7 @@ const TOOLS = [
       replace: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }, description: 'patch: exact substrings to swap, each must occur exactly once in the current digest' },
       appendLine: { type: 'string', description: 'patch: one line to add at the end of the current digest' },
       by: { type: 'string', description: 'the function you are performing, e.g. "dev-hubd". NOT which model you are — that is read from the transcript, and many sessions share a model. NOT a queue role either: a role is a mailbox (see hub_queue_wait), this is who is at it.' },
+      verbose: { type: 'boolean', description: 'return the card path, the patches applied and the new digest; by default the reply is {ok, project, section, bytes} (plus patched: <count> and rotated when they happened) — you just wrote the text, it is not echoed back' },
     }, required: ['project', 'by'] } },
 
   { name: 'hub_section_add',
@@ -65,7 +66,7 @@ const TOOLS = [
       staleDays: { type: 'integer', description: 'digest counts as behind after N days of journal it does not reflect, default 7' },
     } } },
 
-  { name: 'hub_get', description: 'Everything about ONE project: its full card (digest + facts), recent journal entries for it, and any active soft-locks. Use after hub_status or hub_search points you at a project.',
+  { name: 'hub_get', description: 'ONE project in depth: its card, its recent journal entries and any active soft-locks. Compact by default — the card\'s first 4000 chars (frontmatter, digest, facts, next step), the newest 5 journal entries with text cut to 240 chars; full:true gives the whole card and 15 entries. Use after hub_status or hub_search points you at a project.',
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
 
   { name: 'hub_context',
@@ -103,7 +104,7 @@ const TOOLS = [
     }, required: ['id'] } },
 
   { name: 'hub_task_list',
-    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog. Looking for ONE task you can name? hub_task_get by id, or hub_search by keyword — both beat listing and scanning.',
+    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog. Compact by default: at most 50 tasks, each text cut to 160 chars (full:true for whole texts, or hub_task_get for one). Looking for ONE task you can name? hub_task_get by id, or hub_search by keyword — both beat listing and scanning.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, status: { type: 'string', enum: ['open', 'done', 'all'] },
       limit: { type: 'integer', description: 'page size' },
@@ -282,7 +283,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_whatsnew',
-    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing.',
+    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Compact by default: the newest 20 entries, each text cut to 240 chars; full:true for all of them whole. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing.',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
@@ -347,12 +348,17 @@ const OUTPUT_PLANS = {
   // `card` is a STRING, cut by characters (capOutput handles both). Listed FIRST because an
   // over-long card is exactly what makes this answer unreadable, and the journal and claims beside
   // it are the parts a caller can least afford to lose.
-  hub_get:        [['card', 12000], ['journal', 15], ['claims', 20]],
-  hub_whatsnew:   [['entries', 50]],
+  // hub_get, hub_whatsnew and hub_task_list are COMPACT by default, not just capped: on a live
+  // hub they came to 6-11k tokens a call, and to about 2k compact. The card's head (frontmatter,
+  // digest, facts, next step) and the newest few journal lines, cut, answer "where is this";
+  // full:true is the rest.
+  // The journal is oldest-first, so its tail is kept; whatsnew is newest-first, so its head is.
+  hub_get:        [['card', 4000], ['journal', 5, { keep: 'tail', textMax: 240 }], ['claims', 20]],
+  hub_whatsnew:   [['entries', 20, { textMax: 240 }]],
   hub_search:     [['hits', 40]],
   hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25], ['addressed', 25]],
   hub_kanban:     [['inbox', 30], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
-  hub_task_list:  [['tasks', 100]],
+  hub_task_list:  [['tasks', 50, { textMax: 160, drop: ['_origin'], dropEmpty: true }]],
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
   hub_graph:      [['edges', 200], ['dangling', 50]],
   hub_presence:   [['agents', 60], ['coverage', 12]],
@@ -370,11 +376,19 @@ for (const name of Object.keys(OUTPUT_PLANS)) {
   if (!t) continue;
   t.inputSchema = t.inputSchema || { type: 'object', properties: {} };
   t.inputSchema.properties = t.inputSchema.properties || {};
-  t.inputSchema.properties.full = { type: 'boolean', description: 'return everything, uncapped. By default long lists are trimmed to fit an agent context and what was left out is reported in `truncated`.' };
+  t.inputSchema.properties.full = { type: 'boolean', description: 'return everything, uncapped. By default long lists are trimmed (and, where the description says so, long texts cut) to fit an agent context, and what was left out is reported in `truncated`.' };
 }
 
 const DISPATCH = {
-  hub_sync: runSync, hub_card_set: runCardSet, hub_report: runReport, hub_status: (a) => runStatus(a),
+  hub_sync: runSync, hub_report: runReport, hub_status: (a) => runStatus(a),
+  // Same reasoning as hub_task_add below: the digest was just written by the caller, and the reply
+  // echoed it back with the card path, about 1k tokens a call.
+  hub_card_set: (a) => {
+    const r = runCardSet(a);
+    if (a.verbose) return r;
+    return { ok: true, project: r.project, section: 'Digest', bytes: r.bytes,
+      ...(r.patched ? { patched: r.patched.length } : {}), ...(r.rotated ? { rotated: r.rotated } : {}) };
+  },
   hub_section_add: runSectionAdd,
   hub_get: runGet, hub_search: runSearch, hub_context: runContext,
   // The caller wrote the text a moment ago; echoing 2-3 KB of it back is context spent on nothing
@@ -568,7 +582,10 @@ async function handleMessage(msg, mode = 'stdio') {
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: {
     protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     serverInfo: { name: 'hubd', version: VERSION },
-    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning after time away? Call hub_whatsnew instead of re-reading hub_status from scratch. Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session. Working a queue in a loop? Call hub_heartbeat after each hub_report so you show up in hub_presence instead of being invisible between waits. hub_brief gives a morning overview. Create work with hub_task_add.' } };
+    // No "call hub_heartbeat after each hub_report" here: this text reaches every client, and a role
+    // run by a shell loop has hub_heartbeat denied — the advice sent it to a tool it is refused. The
+    // tool's own description carries it, and a client without the tool never sees that.
+    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning after time away? Call hub_whatsnew instead of re-reading hub_status from scratch. Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session. hub_brief gives a morning overview. Create work with hub_task_add.' } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };

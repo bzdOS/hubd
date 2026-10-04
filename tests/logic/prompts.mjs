@@ -26,6 +26,19 @@ for (const t of ['worker', 'head', 'orchestrator']) {
 ok(/^## The head's dispatch cycle/m.test(P.renderPrompt('head', VARS)) && !/dispatch cycle/.test(P.renderPrompt('worker', VARS)),
   'prompts: the head gets the dispatch cycle, the worker does not');
 ok(/^## FLEET-REFLECT/m.test(P.renderPrompt('orchestrator', VARS)), 'prompts: the orchestrator gets the fleet reflection');
+// The reflection is the last block of the turn's ONE report: a second hub_report late in a turn
+// re-reads the whole turn. The prompt says so, and its own example is what hub sense splits.
+{
+  const w = P.renderPrompt('worker', VARS);
+  ok(/last block of the turn's one hub_report, not a hub_report of its own/.test(w) && /one hub_report that ends with the reflection/.test(w) &&
+    !/(a|the|one) (separate|second) hub_report/.test(w.replace(/not a hub_report of its own/, '')),
+    'prompts: the worker is told to end its one report with the reflection, not to file it separately');
+  const sense = await import(path.join(REPO, 'hub/lib/sense.mjs'));
+  const example = (fs.readFileSync(path.join(REPO, 'prompts/meta/fragments/reflect.md'), 'utf8').split('Example, the end of a report:')[1] || '').match(/```\n([\s\S]*?)```/);
+  const sp = example ? sense.splitReflect(example[1]) : { body: '', reflect: '' };
+  ok(/^NEXT: /m.test(sp.body) && /^REFLECT\ngoal: .*\nresult: partial\nobstacle: permissions — .*\ninstead: .*\nrule: .*$/.test(sp.reflect),
+    'prompts: the fragment\'s own example report is split by hub sense into its body and a trailing reflection');
+}
 // a value is inserted as it is: neither re-expanded nor stripped inside
 const odd = P.renderPrompt('worker', { ...VARS, track_goal: '\n\nkeep {{role}} and {{> turn}} literal\n\n' });
 ok(odd.includes('keep {{role}} and {{> turn}} literal\n'), 'prompts: a value is not expanded again, only its outer blank lines trimmed');

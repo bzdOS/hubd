@@ -1696,12 +1696,37 @@ export const OUTPUT_BUDGET_CHARS = Math.max(2000, parseInt(process.env.HUBD_MAX_
 // not to compact JSON: pretty-printing adds a newline and a run of spaces per key, which came to
 // ~15% on a real brief — measuring the compact form let a payload pass the budget and still arrive
 // over it, which is the one failure this whole mechanism exists to prevent.
+/* A plan entry is [key, limit] or [key, limit, opts], and opts are what make a DEFAULT view compact
+ * rather than merely capped (hub_get, hub_whatsnew, hub_task_list came to 6-11k tokens a call on a
+ * live hub):
+ *   keep: 'tail'  — the list is oldest-first and its END is the news (a journal tail): cut from
+ *                   the front, here and in the over-budget passes alike;
+ *   textMax: N    — each item's `text` is cut to N chars, and the note says how many were;
+ *   drop: [keys]  — bookkeeping fields no reader of the view acts on;
+ *   dropEmpty     — null, '' and [] fields are left out: an absent key says the same, for less.
+ * `full: true` still bypasses all of it. */
 export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDGET_CHARS, indent = 1 } = {}) {
   if (full || !obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
   const out = { ...obj };
   const truncated = {};
   const totals = {};
-  const note = (key, arr) => { truncated[key] = { shown: arr.length, hidden: totals[key] - arr.length }; };
+  const textCut = {};
+  const note = (key, arr) => { truncated[key] = { shown: arr.length, hidden: totals[key] - arr.length, ...textCut[key] }; };
+  const cut = (arr, n, opts) => opts?.keep === 'tail' ? (n > 0 ? arr.slice(-n) : []) : arr.slice(0, n);
+  const slim = (key, arr, { textMax, drop, dropEmpty } = {}) => {
+    if (!textMax && !drop && !dropEmpty) return arr;
+    let n = 0;
+    const res = arr.map(it => {
+      if (!it || typeof it !== 'object' || Array.isArray(it)) return it;
+      const c = { ...it };
+      for (const k of drop || []) delete c[k];
+      if (dropEmpty) for (const [k, v] of Object.entries(c)) if (v == null || v === '' || (Array.isArray(v) && !v.length)) delete c[k];
+      if (textMax && typeof c.text === 'string' && c.text.length > textMax) { c.text = c.text.slice(0, textMax - 1) + '…'; n++; }
+      return c;
+    });
+    if (n) textCut[key] = { textCut: n, textMax };
+    return res;
+  };
   /* A long STRING was invisible to this budget, and it is the one payload a caller cannot page
    * through: hub_get returns the card as one field, and a 72 KB card therefore left here whole and
    * was refused by the caller's context — the tool could not deliver its own data (task
@@ -1710,6 +1735,7 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
   const noteStr = (key, s) => { truncated[key] = { shownChars: s.length, hiddenChars: totals[key] - s.length,
     hint: `read the rest with full: true, or open the file` }; };
 
+  const opts = Object.fromEntries(plan.map(([key, , o]) => [key, o || {}]));
   for (const [key, limit] of plan) {
     const v = out[key];
     if (typeof v === 'string') {
@@ -1719,7 +1745,8 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
     }
     if (!Array.isArray(v)) continue;
     totals[key] = v.length;
-    if (v.length > limit) { out[key] = v.slice(0, limit); note(key, out[key]); }
+    out[key] = slim(key, v.length > limit ? cut(v, limit, opts[key]) : v, opts[key]);
+    if (v.length > limit || textCut[key]) note(key, out[key]);
   }
 
   // Headroom for the two keys this function adds itself: `truncated` and `hint` are written
@@ -1745,7 +1772,7 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
       }
       if (!Array.isArray(arr)) continue;
       while (arr.length > floor && size() > budget) {
-        arr = arr.slice(0, Math.max(floor, arr.length - Math.max(1, Math.ceil(arr.length / 4))));
+        arr = cut(arr, Math.max(floor, arr.length - Math.max(1, Math.ceil(arr.length / 4))), opts[key]);
         out[key] = arr;
         note(key, arr);
       }
@@ -1764,7 +1791,7 @@ export function capOutput(obj, plan = [], { full = false, maxChars = OUTPUT_BUDG
       // branch once printed "card: undefined shown, undefined hidden" here.
       Object.entries(truncated).map(([k, v]) => v.shownChars != null
         ? `${k}: ${v.shownChars} chars shown, ${v.hiddenChars} hidden`
-        : `${k}: ${v.shown} shown, ${v.hidden} hidden`).join(' · ') +
+        : `${k}: ${v.shown} shown, ${v.hidden} hidden` + (v.textCut ? `, ${v.textCut} text(s) cut to ${v.textMax} chars` : '')).join(' · ') +
       '. Pass full:true for everything, or narrow the question (project, hours, status).';
   }
   return out;
@@ -2372,8 +2399,8 @@ export function runCardSet(a) {
   journalAppend({ ts: now(), project: slug, agent: author, kind: 'note',
     text: (patched ? 'card patched: ' + patched.applied.map(p => p.appendLine ? '+ ' + p.appendLine.slice(0, 40) : `"${p.from.slice(0, 30)}" -> "${p.to.slice(0, 30)}"`).join('; ')
                    : 'card set: ' + digest.split('\n')[0].slice(0, 80)).slice(0, 160) });
-  return { ok: true, project: slug, card: cardPath(pname), ...(patched ? { patched: patched.applied, digest } : {}),
-    ...(rot.moved.length ? { rotated: rot.moved } : {}) };
+  return { ok: true, project: slug, card: cardPath(pname), bytes: Buffer.byteLength(digest, 'utf8'),
+    ...(patched ? { patched: patched.applied, digest } : {}), ...(rot.moved.length ? { rotated: rot.moved } : {}) };
 }
 
 /* ── Resources (infra/topology as cards) + typed relationship graph ──
