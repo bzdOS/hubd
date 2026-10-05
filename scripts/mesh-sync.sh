@@ -55,6 +55,14 @@
 #     process nothing will clean up and no line in the log to say so. BatchMode and
 #     ConnectTimeout cover ssh, not git. HUBD_SYNC_TIMEOUT (default 300s) caps fetch and
 #     push; hitting the cap is a failed run that the next one retries.
+#   * PACK IN THE FOREGROUND, ONCE A RUN. git packs its objects by itself after a commit, a
+#     fetch or a merge, in a process it forks into the background. On macOS that process
+#     crashed after the fork and left .git/gc.log.lock behind, and every background gc after
+#     it stopped on that lock without a word. One hub went seven weeks unpacked, 86000 loose
+#     objects and 3.75 GiB, and every run of this script redid the part of gc that comes
+#     before the fork, once for each command that started one. So git's own gc is off for the
+#     commands here, and one `gc --auto` runs after the push, in the foreground, with its
+#     errors in this script's log. It returns at once when there is nothing to pack.
 #
 # Per-host files are what make this work at all: journal.<node>.jsonl,
 # tasks.<node>.events.jsonl and queues/<role>.<node>.queue.md have exactly one writer
@@ -70,6 +78,8 @@ set -u
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
 export LC_ALL=C   # the case below reads git's messages; a translated one fell through to "merge failed"
+# No gc inside the commit, fetch and merge (git 2.31+ reads this); step 3 packs, once.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false
 
 # Bound the network steps. This runs unattended on a timer, and a git that blocks forever -- a
 # wedged fetch, an unresponsive peer, a filesystem that stops answering -- leaves a process nothing
@@ -205,6 +215,16 @@ if git remote | grep -qx origin; then
     esac
   fi
   [ "$HEAD_BEFORE" = "$(git rev-parse HEAD 2>/dev/null)" ] || share_perms
-  g push -q origin "$BR" || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
+  g push -q origin "$BR" || PUSH_FAILED=1
 fi
+
+# 3. pack, after the push, so it never widens the gap between fetch and push. Also after a failed
+#    push: a peer down for days must not leave this node unpacked for days. Not under the timeout:
+#    a repack killed halfway has done its work for nothing, and the next run would start it again.
+OBJ_BEFORE="$(git count-objects 2>/dev/null)"
+nice git -c gc.autoDetach=false gc --auto --quiet ||
+  echo "mesh-sync: git gc failed (output above); the sync itself is not affected" >&2
+[ "$OBJ_BEFORE" = "$(git count-objects 2>/dev/null)" ] || share_perms
+
+[ -z "${PUSH_FAILED:-}" ] || { echo "mesh-sync: push failed (remote busy/dirty?) — retry next run" >&2; exit 3; }
 echo "mesh-sync: ok ($NODE $STAMP, $BR)"
