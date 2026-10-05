@@ -116,6 +116,10 @@ details.item>summary .meta{font-weight:400}
 .verdict .full{margin-top:2px}
 .stalled{border-top:1px solid #E3E3DE;padding-bottom:6px}
 .t-grid.two{grid-template-columns:repeat(2,1fr)}
+.bad{color:#C92A2A}
+.scroll-x{overflow-x:auto}
+.roles th{padding:5px 8px;text-align:left;font-weight:400;color:#6B6B66;border-top:1px solid #ECECE8}
+.roles th:first-child{padding-left:20px}
 @media(max-width:900px){.t-grid,.t-grid.two,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
 @media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
 </style>
@@ -438,9 +442,30 @@ function escalationsEl(e,d){
     listBlock('s:esc:w','Unanswered',e.waiting.slice().reverse(),escItem)+'</div><div class="t-col">'+
     listBlock('s:esc:a','Answered, '+esc(d.answeredHours)+'h',e.answered.slice().reverse(),escItem)+'</div></div></section>';
 }
+/* Each node as its snapshot.<node>.json states it; red is what /api/summary flags (stale, full, down). */
+function nodesEl(ns,d){
+  if(!ns||!ns.length)return '';
+  function red(on,h){return on?'<span class="bad">'+h+'</span>':h}
+  var lines=ns.filter(function(n){return !n.unreadable}).map(function(n){
+    return '<div class="item">'+meta(['<b>'+esc(n.node)+'</b>',red(n.stale,'snapshot '+(n.ageMin==null?'with no time':ago(n.ageMin)+' ago')),
+      n.disks.length?'disks '+n.disks.map(function(x){return red(x.full,esc(x.mount)+' '+(x.usedPct==null?'?':esc(x.usedPct))+'%')+(x.freeGb==null?'':' <span class="meta">'+esc(x.freeGb)+' GB free</span>')}).join(', '):'',
+      n.relays.length?'relays '+n.relays.map(function(x){return red(x.down,esc(x.pair)+' '+(x.failed?'failed':x.active?'active':'not active'))+(x.lastOk?' <span class="meta">ok '+hm(x.lastOk)+'</span>':'')}).join(', '):''])+'</div>';
+  }).join('');
+  var rows=[];
+  ns.forEach(function(n){
+    if(n.unreadable){rows.push('<tr><td></td><td class="bad">'+esc(n.node)+'</td><td colspan="4" class="bad">snapshot unreadable: '+esc(n.unreadable)+'</td></tr>');return}
+    n.sessions.forEach(function(s){
+      rows.push('<tr><td>'+esc(s.session)+'</td><td>'+red(n.stale,esc(n.node))+'</td><td>'+esc(s.role)+'</td><td>'+esc(s.state)+'</td>'+
+        '<td>'+ago(s.hubAgeMin)+'</td><td>'+ago(s.motionMin)+'</td></tr>');
+    });
+  });
+  return '<section class="track"><div class="track-head"><span class="track-name">nodes</span><span class="meta">from each node\'s snapshot &middot; red: snapshot over '+
+    esc(d.snapshotStaleMin)+'m old, disk at '+esc(d.diskFullPct)+'% or more, relay failed or not active</span></div>'+lines+
+    (rows.length?'<div class="scroll-x"><table class="roles"><tr><th>Session</th><th>Node</th><th>Role</th><th>State</th><th title="hub_age_min">Hub</th><th title="motion_min">Motion</th></tr>'+rows.join('')+'</table></div>':'')+'</section>';
+}
 function renderSummary(){
   var d=smData; if(!d)return;
-  document.getElementById('summary').innerHTML=escalationsEl(d.escalations,d)+(d.tracks.length?d.tracks.map(function(t){return summaryEl(t,d)}).join(''):
+  document.getElementById('summary').innerHTML=escalationsEl(d.escalations,d)+nodesEl(d.nodes,d)+(d.tracks.length?d.tracks.map(function(t){return summaryEl(t,d)}).join(''):
     '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>');
 }
 function loadSummary(){

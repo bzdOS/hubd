@@ -38,6 +38,10 @@
  * however old, and those answered in the last 24 hours with their answers, both oldest first and
  * whole. An escalation is answered when an entry of the fleet card's Owner decisions quotes its
  * "<date> · from <role> · id N"; nothing else is taken for an answer.
+ *
+ * And the NODES, as each one's own `snapshot.<node>.json` states them (nodes.mjs): its sessions,
+ * disks and relays, with what is wrong flagged — a snapshot over 5 minutes old, a disk at 90% or
+ * more, a relay failed or not active — and a file that cannot be read named, not skipped.
  */
 import path from 'node:path';
 import {
@@ -46,6 +50,7 @@ import {
 } from './core.mjs';
 import { trackLayout } from './board.mjs';
 import { escalationState, ANSWERED_HOURS } from './escalations.mjs';
+import { nodeSnapshots, SNAPSHOT_STALE_MIN, DISK_FULL_PCT } from './nodes.mjs';
 
 const JOURNAL_DAYS = 30;   // how far back verdicts and blocked entries are read, as on the board
 const CLOSED_HOURS = 24;
@@ -77,9 +82,10 @@ function firstTaskNamed(text, byId) {
 }
 
 const head = (nowMs) => ({ v: 1, asOf: new Date(nowMs).toISOString().slice(0, 16).replace('T', ' '),
-  journalDays: JOURNAL_DAYS, closedHours: CLOSED_HOURS, answeredHours: ANSWERED_HOURS });
+  journalDays: JOURNAL_DAYS, closedHours: CLOSED_HOURS, answeredHours: ANSWERED_HOURS,
+  snapshotStaleMin: SNAPSHOT_STALE_MIN, diskFullPct: DISK_FULL_PCT });
 /** The answer for a hub with nothing in it (a tenant that has not written yet). */
-export function emptySummary(nowMs = Date.now()) { return { ...head(nowMs), tracks: [], escalations: { fleet: [], waiting: [], answered: [] } }; }
+export function emptySummary(nowMs = Date.now()) { return { ...head(nowMs), tracks: [], escalations: { fleet: [], waiting: [], answered: [] }, nodes: [] }; }
 
 export function runSummary(a = {}) {
   const nowMs = Number.isFinite(a.now) ? a.now : Date.now();
@@ -163,5 +169,5 @@ export function runSummary(a = {}) {
       working, blocked: stuck, closed, stalled,
     };
   });
-  return { ...head(nowMs), tracks, escalations: escalationState({ roles, root: a.queueRoot, nowMs }) };
+  return { ...head(nowMs), tracks, escalations: escalationState({ roles, root: a.queueRoot, nowMs }), nodes: nodeSnapshots({ nowMs }) };
 }

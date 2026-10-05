@@ -167,7 +167,8 @@ appear once roles are declared as cards — `hub resource set <role> --type role
 --attr project=<slug> --by <you>`, and `--link head:<head>` for a worker.
 A block with an id in the queue of a `fleet` role is an escalation; it waits for you on the board
 until the fleet card's Owner decisions quote its key: `hub section add <slug> owner-decisions
-"<date> · from <role> · id N — <answer>" --by <you>`.
+"<date> · from <role> · id N — <answer>" --by <you>`. A node whose fleet tool writes
+`snapshot.<node>.json` into the hub shows on the Summary with its sessions, disks and relays.
 
 ## 7. Queues — make an agent addressable
 
