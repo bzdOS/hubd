@@ -20,6 +20,9 @@ node tests/run.mjs queue       # only the suites whose name contains "queue"
 node tests/logic/queue.mjs     # one file on its own
 ```
 
+The runner takes half the cores at nice 10, so the machine stays usable while it runs;
+`HUBD_TEST_JOBS=N` sets how many suites run at once.
+
 `tests/logic/` holds the engine and CLI tests, one file per area, sharing
 `tests/logic/_h.mjs` (a throwaway hub, `ok()`, `cli()` and `run()` for the CLI,
 temp dirs removed at exit). The shell suites next to it cover the MCP server
