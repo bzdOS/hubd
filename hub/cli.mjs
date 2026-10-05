@@ -1560,7 +1560,7 @@ command('lint', () => {
 
 command('sections', () => {
   console.log('section key      heading   (single source for card scaffold + report routing)');
-  for (const s of sectionsConfig()) console.log('  ' + pad(s.key, 16) + s.heading);
+  for (const s of sectionsConfig()) console.log('  ' + pad(s.key, 16) + s.heading + (s.scaffold === false ? '   (not in new cards; written when needed)' : ''));
   console.log('\nlocalise in ONE file → HUB/sections.json  (merged by key onto the defaults)');
   console.log('  e.g. { "decisions": "<your heading>", "next": {"heading":"...","hint":"..."} }');
   done(0);

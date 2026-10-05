@@ -4,6 +4,26 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.45 — 2026-10-05
+
+- **`hub serve` opens on a Summary: where each track stands, assembled by a script.** Asked
+  "where is each track", a coordinator retold the board, and two retellings of one state differed.
+  `/api/summary` answers from the files: per track, the goal, the tasks in work, blocked and
+  closed in the last 24 hours, each with its age, its assignee and the head's newest verdict
+  entry in full, and each role's newest `blocked` entry until the role hands that task in or the
+  task closes. Lists are ordered by their own fields, so a fixed hub at a fixed moment gives the
+  same bytes. It is the first screen of a hub with heads; a mode chosen before still wins.
+- **A verdict is a head's entry that names the task and holds a verdict word** in capitals:
+  ACCEPT, ACCEPTED, REJECT, REJECTED, plus the words a hub lists in `<hub>/verdicts.json`,
+  `{"accept": [...], "reject": [...]}`. At one position the longer word wins, so a negated form
+  listed under reject is read whole. A task is named by `#<id>`, or bare when its id has a letter:
+  a bare number in prose is a count. In an entry that opens with a verdict, a task takes the
+  word before its name ("ACCEPT #12, REJECT #13"); in one that names a task first, the word after.
+- **A card's `goal` section** (`## Goal`), which the Summary quotes; without one, the digest's
+  first line. New cards do not get it: a head writes it with `hub section add <slug> goal
+  "<line>" --by <you> --set`, and `sections.json` localises its heading like any other.
+- The board and the Summary share one definition of a track (`trackLayout`).
+
 ## 0.9.44 — 2026-10-05
 
 - **`hub_reflect`: the reflection digest over MCP**, what `hub reflect --json` prints: `project`

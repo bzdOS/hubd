@@ -1847,6 +1847,8 @@ const SECTIONS_DEFAULT = [
   { key: 'facts',         heading: 'Facts & hypotheses', hint: 'what is known (fact) vs what is being tested (hypothesis)' },
   { key: 'decisions',     heading: 'Decisions',          hint: 'append-only log: decision · why · date' },
   { key: 'communication', heading: 'Communication',      hint: 'what has gone out externally vs what is still queued' },
+  // Read, not scaffolded: a card has it when someone writes it (hub section add <slug> goal "..." --by <you> --set).
+  { key: 'goal',          heading: 'Goal',               hint: 'what the track is for, in a line the summary quotes', scaffold: false },
 ];
 export function sectionsConfig() {
   // `defaultHeading` survives the override: a card written before sections.json existed (or on a
@@ -2268,7 +2270,7 @@ function cardScaffold() {
     const override = path.join(HUB, 'card-template.md');   // deprecated freeform escape hatch
     if (fs.existsSync(override)) { const t = fs.readFileSync(override, 'utf8').trim(); if (t) return t + '\n'; }
   } catch {}
-  return sectionsConfig().map(s => `## ${s.heading}\n\n<${s.hint}>\n`).join('\n');
+  return sectionsConfig().filter(s => s.scaffold !== false).map(s => `## ${s.heading}\n\n<${s.hint}>\n`).join('\n');
 }
 
 function openTaskCount(slug) {

@@ -156,14 +156,14 @@ Two habits that pay for themselves the first week:
 hub brief           # morning brief: tasks by deadline, journal, locks, queues
 hub inbox           # only what needs a DECISION: blocked/overdue/unassigned
 hub board           # every track: roles, done this week, next, what waits for you
-hub serve           # read-only board on localhost:7777 (Tracks, Live, History)
+hub serve           # read-only board on localhost:7777 (Summary, Tracks, Live, History)
 hub reflect --project <slug>   # the turns' reflections: obstacles by class, rules proposed again
 hub watch --as me --follow     # new journal entries as they arrive, each once
 ```
 
 The board's only button is ⚙ Rules, and it opens AGENTS.md. Cards move because
-agents move them; you manage the rules, not the agents. Tracks appear once roles
-are declared as cards — `hub resource set <role> --type role --attr rank=head
+agents move them; you manage the rules, not the agents. Tracks and the Summary
+appear once roles are declared as cards — `hub resource set <role> --type role --attr rank=head
 --attr project=<slug> --by <you>`, and `--link head:<head>` for a worker.
 
 ## 7. Queues — make an agent addressable

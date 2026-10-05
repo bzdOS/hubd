@@ -307,7 +307,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   edge mechanism reads project cards, so `hub graph` renders one topology
   across projects ↔ resources; a task links to what it touches with
   `--resource`. Facts go in fields, not prose.
-- **Board (read-only)** — `hub serve`: Tracks, a Live kanban, and a History of
+- **Board (read-only)** — `hub serve`: a Summary of each track, assembled by a
+  script (goal, work in hand, blocked, closed today, the head's verdict on each
+  task, what each role reports blocked), Tracks, a Live kanban, and a History of
   the journal to play back. Cards move because agents move them. The only
   button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
   agents — you manage the rules.

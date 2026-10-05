@@ -105,7 +105,8 @@ decisions/facts = many lines (one per line):
 
 One card per project at `projects/<slug>.md`: `## Digest` plus the sections reports
 route into — Next step / Gates / Metrics / Market / Facts & hypotheses / Decisions /
-Communication. Section headings localise (any language) in ONE file, `sections.json`;
+Communication. `## Goal` (key `goal`) is not in a new card: a head writes it, and the Summary
+quotes it. Section headings localise (any language) in ONE file, `sections.json`;
 see `hub sections`. A write finds the section the card ALREADY has for that key — under the
 configured heading, the English default, or an alias declared as `{"heading": ..., "aliases":
 [...]}`, case-insensitively — before it creates one, so a card never grows a second copy of a
@@ -493,6 +494,17 @@ current task, last journal step and handoff; what got done in the window (`--day
 the line that accepted it; what is next, with blockers; the branch verdicts. Above the tracks, what
 waits for the owner: the owner queue, the owner's tasks, `owner-go` tasks, and what was escalated to
 a `fleet` role and answered. Titles are a task's first line, at most 80 characters.
+
+The Summary view of `hub serve` (`/api/summary`, the first screen of a hub with heads) answers
+"where is each track" from the files, so nobody retells the board. Per track: the goal (the
+card's `goal` section — `hub section add <slug> goal "<line>" --by <you> --set`; without one, the
+digest's first line); the tasks in work (open, assigned, nothing open before them), blocked, and
+closed in the last 24 hours, each with its age and the head's newest verdict entry in full; and
+each role's newest `blocked` entry, until the role hands that task in or it closes. A verdict is a
+head's journal entry that names the task (`#<id>`, or the bare id when it has a letter) and holds
+ACCEPT, ACCEPTED, REJECT or REJECTED in capitals. Heads who write in another language list their
+words in `<hub>/verdicts.json`, `{"accept": [...], "reject": [...]}`, negated forms under reject.
+Every list is ordered by its own fields, so one hub state gives one answer.
 
 **`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
 never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat

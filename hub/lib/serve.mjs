@@ -14,6 +14,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { HUB, setHubBase, ensureHubDirs, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
 import { runBoard } from './board.mjs';
+import { runSummary, emptySummary } from './summary.mjs';
 import { resolveQueueRoot } from './queue.mjs';
 
 export function startServer(port) {
@@ -59,6 +60,7 @@ export function startServer(port) {
           if (url.pathname === '/api/journal-since') return res.end(JSON.stringify({ entries: [] }));
           if (url.pathname === '/api/board') return res.end(JSON.stringify({ days: 7, registry: { roles: 0, heads: 0, fleet: [] }, tracks: [], allTracks: [],
             waiting: { queue: [], tasks: [], ownerGo: [], escalations: [], answers: [] }, unknownAssignees: [], generated: now() }));
+          if (url.pathname === '/api/summary') return res.end(JSON.stringify(emptySummary()));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
@@ -73,6 +75,7 @@ export function startServer(port) {
       if (url.pathname === '/api/board') return res.end(JSON.stringify(runBoard({
         days: url.searchParams.get('days') || undefined, project: url.searchParams.get('project') || undefined,
         all: url.searchParams.get('all') === '1', queueRoot: MT ? HUB : undefined })));
+      if (url.pathname === '/api/summary') return res.end(JSON.stringify(runSummary({ project: url.searchParams.get('project') || undefined })));
       res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
   };
@@ -80,7 +83,7 @@ export function startServer(port) {
   const server = http.createServer(handler);
   server.listen(port, HOST, () => {
     console.log('hubd kanban  http://' + HOST + ':' + port + (MT ? '  (multi-tenant — open with ?t=<token>)' : ''));
-    console.log('  Tracks: roles, done, next, waiting for you   Live: kanban   History: sparkline + event playback');
+    console.log('  Summary: where each track stands   Tracks: roles, done, next, waiting for you   Live: kanban   History: sparkline + event playback');
     console.log('Ctrl+C to stop');
   });
 }
