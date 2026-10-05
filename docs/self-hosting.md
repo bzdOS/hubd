@@ -24,8 +24,79 @@ export HUBD_DIR=/opt/hubd-team
 hubd --http 8787
 ```
 
-Run it under a process manager (systemd, pm2, tmux) so it survives restarts.
-The daemon refuses to start without `HUBD_TOKEN` of at least 16 characters.
+Run it under a process manager (systemd, pm2, tmux, or rc.d on FreeBSD, below)
+so it survives restarts. The daemon refuses to start without `HUBD_TOKEN` of at
+least 16 characters.
+
+### FreeBSD: rc.d and daemon(8)
+
+daemon(8) supervises the server, and an rc.d script starts it at boot. Install
+node and the package, add a user and a data directory, and keep the secret in a
+file only root reads (`/etc/rc.conf` is readable by every user):
+
+```sh
+pkg install node npm && npm i -g @bzdos/hubd
+pw useradd hubd -d /var/db/hubd -s /usr/sbin/nologin -c "hubd server"
+install -d -o hubd -g hubd -m 700 /var/db/hubd
+install -m 600 /dev/null /usr/local/etc/hubd.env
+echo "HUBD_TOKEN=$(openssl rand -hex 24)" > /usr/local/etc/hubd.env    # or HUBD_MULTITENANT=1
+```
+
+`/usr/local/etc/rc.d/hubd`, mode 755:
+
+```sh
+#!/bin/sh
+#
+# PROVIDE: hubd
+# REQUIRE: LOGIN
+# KEYWORD: shutdown
+#
+# hubd_enable    YES to start at boot
+# hubd_user      the account the server runs as (hubd)
+# hubd_dir       HUBD_DIR, where the data lives (/var/db/hubd)
+# hubd_port      the port on 127.0.0.1 (8787)
+# hubd_env_file  read before start: HUBD_TOKEN, or HUBD_MULTITENANT=1
+
+. /etc/rc.subr
+
+name=hubd
+rcvar=hubd_enable
+load_rc_config $name
+
+: ${hubd_enable:=NO}
+: ${hubd_user:=hubd}
+: ${hubd_dir:=/var/db/hubd}
+: ${hubd_port:=8787}
+: ${hubd_env_file:=/usr/local/etc/hubd.env}
+
+pidfile=/var/run/${name}/${name}.pid
+command=/usr/sbin/daemon
+command_args="-f -r -R 5 -S -T ${name} -P ${pidfile} \
+    /usr/bin/env HUBD_DIR=${hubd_dir} /usr/local/bin/node /usr/local/bin/hubd --http ${hubd_port}"
+start_precmd="install -d -o ${hubd_user} -m 755 /var/run/${name}"
+
+run_rc_command "$1"
+```
+
+```sh
+sysrc hubd_enable=YES && service hubd start
+fetch -qo - http://127.0.0.1:8787/healthz
+```
+
+- `HUBD_DIR` is set in the script on purpose. rc starts a service with
+  `HOME=/`, and without it the server makes its hub in `/.hubd`, not in
+  `hubd_dir`.
+- rc.subr runs the command as `hubd_user`, so daemon(8) runs as that user too,
+  and its pidfile goes in a directory that user owns. `-P` writes the pid of
+  daemon(8) itself, the process `service hubd status` and `stop` look for; with
+  `-p` the file would hold node's pid and they would not recognize it. `-r -R 5`
+  starts node again 5 seconds after it exits; `stop` ends both.
+- Output goes to syslog under the tag `hubd` (`/var/log/messages`).
+- Upgrade: back up `/var/db/hubd`, then `npm i -g @bzdos/hubd@<version>` and
+  `service hubd restart`.
+- TLS: `pkg install caddy`, the Caddyfile from [TLS is required](#tls-is-required)
+  in `/usr/local/etc/caddy/Caddyfile`, then `sysrc caddy_enable=YES && service
+  caddy start`. The server stays on 127.0.0.1, the `HUBD_HTTP_HOST` default.
 
 ## Multi-tenant: a workspace per token
 
