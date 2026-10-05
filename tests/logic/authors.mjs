@@ -559,4 +559,29 @@ core.setHubBase(RG); core.ensureHubDirs();
 }
 core.setHubBase(T0); core.ensureHubDirs();
 
+/* ── PS: a node whose sessions never heartbeat still says it is up ──
+ * The snapshot was written on heartbeat only. A node used by people at a terminal kept the one it
+ * wrote weeks before, and every other node read it as silent for 24 days while it wrote to the mesh
+ * every minute. Any MCP tool call now refreshes it, on the same throttle, where one exists. */
+{
+  const mcpCall = (dir, name) => execSync(`node ${REPO}/hub/index.mjs`, {
+    input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }) + '\n',
+    encoding: 'utf8', env: { ...process.env, HUBD_DIR: dir, HUBD_TEAM_DIR: dir }, timeout: 15000 });
+  const old = mktmp();
+  const snap = path.join(old, 'presence.' + core.JOURNAL_NODE + '.json');
+  fs.writeFileSync(snap, JSON.stringify({ node: core.JOURNAL_NODE, written: '2026-09-11 14:42', v: '0.9.30', agents: [] }));
+  const weeks = new Date(Date.now() - 24 * 86400000);
+  fs.utimesSync(snap, weeks, weeks);
+  mcpCall(old, 'hub_presence');
+  const after = JSON.parse(fs.readFileSync(snap, 'utf8'));
+  ok(after.written !== '2026-09-11 14:42' && fs.statSync(snap).mtimeMs > weeks.getTime() + 86400000,
+    `refreshPresenceSnapshot: a tool call that only reads refreshes a snapshot weeks old (written ${after.written})`);
+  const at = fs.statSync(snap).mtimeMs;
+  mcpCall(old, 'hub_presence');
+  ok(fs.statSync(snap).mtimeMs === at, 'refreshPresenceSnapshot: and the next call inside the window leaves it as it is');
+  const none = mktmp();
+  mcpCall(none, 'hub_presence');
+  ok(!fs.readdirSync(none).some(f => /^presence\..+\.json$/.test(f)), 'refreshPresenceSnapshot: a hub that never published one gets none');
+}
+
 done();

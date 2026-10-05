@@ -212,6 +212,15 @@ ok(coll.length === 1 && coll[0].paths.join(' ') === 'queues/r.Node.queue.md queu
 core.setHubBase(MS); core.ensureHubDirs();
 ok(doc.caseCollisions().length === 1,
   'caseCollisions: and finds it from the index too, on the node that can hold both');
+// With every core busy, git ls-files once took longer than the 8 s bound, and the pair came back
+// as no pair. Here a git that answers ls-files after 9 s, and nothing else is slow.
+const SLOW = mktmp(), realGit = core.sh('command -v git');
+fs.writeFileSync(path.join(SLOW, 'git'), `#!/bin/sh\n[ "$1" = ls-files ] && sleep 9\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+const pathWas = process.env.PATH;
+process.env.PATH = `${SLOW}:${pathWas}`;
+const slowColl = doc.caseCollisions();
+process.env.PATH = pathWas;
+ok(slowColl.length === 1, `caseCollisions: a git that takes 9 s is waited for, not read as an empty index (got ${JSON.stringify(slowColl)})`);
 const collDoc = run('doctor', { HUBD_DIR: MSUP, HUBD_TEAM_DIR: MSUP });
 ok(/r\.Node\.queue\.md {2}\+ {2}queues\/r\.node\.queue\.md/.test(collDoc.out),
   'doctor: prints the colliding pair');

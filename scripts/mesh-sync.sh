@@ -51,6 +51,13 @@
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
+#   * A LOST PUSH RACE IS FETCHED AGAIN, IN THE SAME RUN. Every node pushes to one mirror about
+#     once a minute, and a push that lands between this node's fetch and its push wins: git
+#     refuses ours ("fetch first"), or the mirror cannot lock the branch it is moving. One node
+#     lost one run in six that way, about 90 a day, each a minute of delay and a failed unit in
+#     systemd's log. So that failure, and only that one, goes back to the fetch, up to
+#     HUBD_SYNC_PUSH_TRIES times in all (default 3). Any other push failure is not retried: an
+#     unreachable peer would only be waited on again.
 #   * BOUND THE NETWORK STEPS. Unattended on a timer, a git that blocks forever leaves a
 #     process nothing will clean up and no line in the log to say so. BatchMode and
 #     ConnectTimeout cover ssh, not git. HUBD_SYNC_TIMEOUT (default 300s) caps fetch and
@@ -171,51 +178,65 @@ fi
 
 # 2. exchange with upstream, if one is configured (the always-on hub has none)
 if git remote | grep -qx origin; then
-  HEAD_BEFORE="$(git rev-parse HEAD 2>/dev/null)"
-  if ! FETCH_OUT="$(g fetch -q origin "$BR" 2>&1)"; then
-    [ -n "$FETCH_OUT" ] && printf '%s\n' "$FETCH_OUT" >&2
-    echo "mesh-sync: fetch failed on $BR (output above) — nothing was merged." >&2
-    share_perms; exit 2
-  fi
-  # The trial merge, outside the working tree: exit 0 clean, 1 conflicted. Anything else is a git
-  # without --write-tree (before 2.38), which merges in place below as it always did.
-  MT_OUT="$(git merge-tree --write-tree --name-only HEAD FETCH_HEAD 2>&1)"; MT=$?
-  if [ "$MT" -eq 1 ]; then
-    printf '%s\n' "$MT_OUT" | sed 1d >&2   # line 1 is the tree; then the paths and git's messages
-    echo "mesh-sync: real content conflict on $BR — nothing was merged, the hub was not touched; resolve by hand in $DIR" >&2
-    share_perms; exit 2
-  fi
-  # identity injected on the merge too: the merge commit needs a committer, and a
-  # node may have no global git user set (fir hit exactly this — reported as a
-  # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
-  # Not under the timeout: it is local, and a merge killed halfway is the half-merged hub.
-  if ! MERGE_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" merge --no-edit -q FETCH_HEAD 2>&1)"; then
-    git merge --abort 2>/dev/null
-    share_perms
-    [ -n "$MERGE_OUT" ] && printf '%s\n' "$MERGE_OUT" >&2
-    # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
-    # unconditionally, and it was wrong twice. Once for a missing git identity — the scar the
-    # comment above describes, where the fix went into the code and the message was left saying
-    # the same wrong thing. And once for two tracked paths differing only by case, where git
-    # refuses BEFORE merging anything, so there is no conflict to resolve and no amount of
-    # resolving by hand will help. One node retried that failure every 60 seconds for 228
-    # commits of everyone else's history, and the log said "resolve by hand" each time.
-    case "$MERGE_OUT" in
-      *"would be overwritten by merge"*)
-        echo "mesh-sync: merge REFUSED on $BR before merging — nothing conflicted." >&2
-        echo "  Cause is local changes to a tracked file, or two paths differing only by case" >&2
-        echo "  (which a case-insensitive filesystem cannot both check out). Run: hub doctor" >&2
-        exit 5 ;;
-      *CONFLICT*)
-        echo "mesh-sync: real content conflict on $BR — aborted; resolve by hand in $DIR" >&2
-        exit 2 ;;
-      *)
-        echo "mesh-sync: merge failed on $BR (output above) — aborted; nothing was merged." >&2
-        exit 2 ;;
+  TRIES="${HUBD_SYNC_PUSH_TRIES:-3}"; TRY=1
+  while :; do
+    HEAD_BEFORE="$(git rev-parse HEAD 2>/dev/null)"
+    if ! FETCH_OUT="$(g fetch -q origin "$BR" 2>&1)"; then
+      [ -n "$FETCH_OUT" ] && printf '%s\n' "$FETCH_OUT" >&2
+      echo "mesh-sync: fetch failed on $BR (output above) — nothing was merged." >&2
+      share_perms; exit 2
+    fi
+    # The trial merge, outside the working tree: exit 0 clean, 1 conflicted. Anything else is a git
+    # without --write-tree (before 2.38), which merges in place below as it always did.
+    MT_OUT="$(git merge-tree --write-tree --name-only HEAD FETCH_HEAD 2>&1)"; MT=$?
+    if [ "$MT" -eq 1 ]; then
+      printf '%s\n' "$MT_OUT" | sed 1d >&2   # line 1 is the tree; then the paths and git's messages
+      echo "mesh-sync: real content conflict on $BR — nothing was merged, the hub was not touched; resolve by hand in $DIR" >&2
+      share_perms; exit 2
+    fi
+    # identity injected on the merge too: the merge commit needs a committer, and a
+    # node may have no global git user set (fir hit exactly this — reported as a
+    # bogus "MERGE CONFLICT" when it was really an identity failure, not a content clash).
+    # Not under the timeout: it is local, and a merge killed halfway is the half-merged hub.
+    if ! MERGE_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" merge --no-edit -q FETCH_HEAD 2>&1)"; then
+      git merge --abort 2>/dev/null
+      share_perms
+      [ -n "$MERGE_OUT" ] && printf '%s\n' "$MERGE_OUT" >&2
+      # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
+      # unconditionally, and it was wrong twice. Once for a missing git identity — the scar the
+      # comment above describes, where the fix went into the code and the message was left saying
+      # the same wrong thing. And once for two tracked paths differing only by case, where git
+      # refuses BEFORE merging anything, so there is no conflict to resolve and no amount of
+      # resolving by hand will help. One node retried that failure every 60 seconds for 228
+      # commits of everyone else's history, and the log said "resolve by hand" each time.
+      case "$MERGE_OUT" in
+        *"would be overwritten by merge"*)
+          echo "mesh-sync: merge REFUSED on $BR before merging — nothing conflicted." >&2
+          echo "  Cause is local changes to a tracked file, or two paths differing only by case" >&2
+          echo "  (which a case-insensitive filesystem cannot both check out). Run: hub doctor" >&2
+          exit 5 ;;
+        *CONFLICT*)
+          echo "mesh-sync: real content conflict on $BR — aborted; resolve by hand in $DIR" >&2
+          exit 2 ;;
+        *)
+          echo "mesh-sync: merge failed on $BR (output above) — aborted; nothing was merged." >&2
+          exit 2 ;;
+      esac
+    fi
+    [ "$HEAD_BEFORE" = "$(git rev-parse HEAD 2>/dev/null)" ] || share_perms
+    PUSH_OUT="$(g push -q origin "$BR" 2>&1)" && break
+    # Another node's push landed after our fetch: fetch it and try again, a bounded number of times.
+    case "$PUSH_OUT" in
+      *"fetch first"*|*"non-fast-forward"*|*"cannot lock ref"*|*"failed to update ref"*)
+        if [ "$TRY" -lt "$TRIES" ]; then
+          TRY=$((TRY + 1))
+          echo "mesh-sync: another node pushed first — fetching again (try $TRY of $TRIES)"
+          continue
+        fi ;;
     esac
-  fi
-  [ "$HEAD_BEFORE" = "$(git rev-parse HEAD 2>/dev/null)" ] || share_perms
-  g push -q origin "$BR" || PUSH_FAILED=1
+    [ -n "$PUSH_OUT" ] && printf '%s\n' "$PUSH_OUT" >&2
+    PUSH_FAILED=1; break
+  done
 fi
 
 # 3. pack, after the push, so it never widens the gap between fetch and push. Also after a failed

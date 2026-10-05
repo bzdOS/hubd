@@ -9,7 +9,7 @@ import {
   VERSION, tenantKey, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
   runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
-  runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
+  runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
   envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
@@ -259,7 +259,7 @@ const TOOLS = [
     }, required: ['agent'] } },
 
   { name: 'hub_presence',
-    description: 'The fleet roster as far as it can honestly be seen from here: this node\'s live registry plus every other node\'s published snapshot (presence.<node>.json, one small file per node, refreshed on heartbeat). Each row carries `observedOn` — WHICH node saw that heartbeat — and `alsoOn` when one agent name turns up on several. Read `coverage` before believing any absence: it lists every current mesh member with the age of its snapshot, or null when it has published none, and `blindTo`/`note` say so outright. That distinction is the reason this tool exists in this shape — one role read as 383 minutes since heartbeat on one node and 5.9 days on another, nothing was stale and nothing had diverged, the registries were simply of different machines, and an orchestrator escalated "worker is dead" four times over 92 hours while the worker worked. A role nobody reports is invisible, which is NOT the same as dead.',
+    description: 'The fleet roster as far as it can honestly be seen from here: this node\'s live registry plus every other node\'s published snapshot (presence.<node>.json, one small file per node, refreshed on heartbeat and on any tool call there, at most every 5 minutes). Each row carries `observedOn` — WHICH node saw that heartbeat — and `alsoOn` when one agent name turns up on several. Read `coverage` before believing any absence: it lists every current mesh member with the age of its snapshot, or null when it has published none, and `blindTo`/`note` say so outright. That distinction is the reason this tool exists in this shape — one role read as 383 minutes since heartbeat on one node and 5.9 days on another, nothing was stale and nothing had diverged, the registries were simply of different machines, and an orchestrator escalated "worker is dead" four times over 92 hours while the worker worked. A role nobody reports is invisible, which is NOT the same as dead.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'filter to agents heartbeating under this role' },
       aliveOnly: { type: 'boolean', description: 'drop stale (TTL-expired) records, default false' },
@@ -653,6 +653,8 @@ async function handleMessage(msg, mode = 'stdio') {
       // a tenant who could pass `local: true` would get that walk back.
       const argv = { ...withAuthorFloor(params?.arguments || {}), ...(mode === 'http' ? { local: false } : {}) };
       const r = await fn(argv);
+      // A session that never heartbeats still says its node is up (refreshPresenceSnapshot).
+      if (mode === 'stdio') refreshPresenceSnapshot();
       if (name === 'hub_onboarding') onboarded = true;
       if (name === 'hub_whatsnew') whatsnewChecked = true;
       const extra = mode === 'stdio' ? nudges(name) : [];
