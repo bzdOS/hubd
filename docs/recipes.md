@@ -269,6 +269,15 @@ a node that has not run the command merges as it did before. If hubd moves and t
 driver's path goes stale, the merge falls back to git's union merge rather than
 stopping; run the command again to point it at the new place.
 
+The same command installs a second driver, for the files one node rewrites whole:
+`snapshot.<node>.json`, `presence.<node>.json`, `sense.<node>.json` and the read
+marks in `queues/read/`. Only their node writes them, so two versions meet only
+when history was repaired or rebased, or one node name is in two clones, and then
+git's text merge stops on every line with a time in it. With the driver, the
+version with the later time (`ts`, `written`, or the latest `at` among the read
+marks) is taken whole, in a merge and in a `pull --rebase` alike. If its path goes
+stale, the file keeps the side git calls ours.
+
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.
 

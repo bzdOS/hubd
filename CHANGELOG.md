@@ -4,6 +4,19 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.51 — 2026-10-05
+
+- **A file one node rewrites whole no longer stops the mesh.** `snapshot.<node>.json`,
+  `presence.<node>.json`, `sense.<node>.json` and the read marks in `queues/read/` have one
+  writer each, so two versions meet only after history was repaired or rebased, or when one node
+  name is in two clones. git's text merge then stopped on every line with a time in it: one
+  node's snapshot stopped another node's sync until its history was realigned by hand.
+  `hub card merge-driver` now also installs a driver for these files that takes the version with
+  the later time (`ts`, `written`, or the latest read-mark `at`), whole. Ours and theirs swap
+  between a merge and a rebase; the time does not, so both keep the same version. A version whose
+  time does not read loses; equal times pick the same version on every node. If the driver's path
+  goes stale, the file keeps git's ours. Run the command again on each node to get it.
+
 ## 0.9.50 — 2026-10-05
 
 - **`mesh-sync` packs the hub itself, once a run, in the foreground.** git packs after a commit,

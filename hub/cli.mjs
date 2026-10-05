@@ -19,6 +19,7 @@ import {
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
 import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
+import { STATE_ATTRS, STATE_DRIVER, installStateDriver, removeStateDriver } from './lib/statemerge.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/cards.mjs';
 import { runRecall } from './lib/recall.mjs';
@@ -1095,26 +1096,36 @@ command('card', () => args[1] === 'resolve', () => {
   done(left ? 1 : 0);
 });
 
-// card merge-driver: merge cards by ## section on this node (hub/lib/cardmerge.mjs says why).
+// card merge-driver: merge cards by ## section on this node (hub/lib/cardmerge.mjs says why), and
+// the files one node rewrites whole by their time (hub/lib/statemerge.mjs).
 command('card', () => args[1] === 'merge-driver', () => {
   const rel = (f) => path.relative(HUB, f);
+  const scripts = path.join(path.dirname(__filename), '..', 'scripts');
   try {
     if (args.includes('--remove')) {
-      const r = removeCardDriver(HUB);
-      console.log(r.had ? 'Card merge driver removed from ' + HUB + '; the hub\'s own .gitattributes decides how cards merge here.'
+      const c = removeCardDriver(HUB), s = removeStateDriver(HUB);
+      console.log(c.had ? 'Card merge driver removed from ' + HUB + '; the hub\'s own .gitattributes decides how cards merge here.'
         : 'No card merge driver installed in ' + HUB + '.');
+      console.log(s.had ? 'State file merge driver removed from ' + HUB + '; git\'s text merge decides how they merge here.'
+        : 'No state file merge driver installed in ' + HUB + '.');
       done(0);
     }
-    const r = installCardDriver(HUB, { script: path.join(path.dirname(__filename), '..', 'scripts', 'card-merge.mjs') });
-    console.log((r.was === r.driver ? 'Card merge driver already installed in ' : r.was ? 'Card merge driver repointed in ' : 'Card merge driver installed in ') + HUB);
-    console.log('  ' + rel(r.attrFile) + (r.attrAdded ? '   + ' : '   has ') + CARD_ATTR);
-    console.log('  git config           merge.' + CARD_DRIVER + '.driver = ' + r.driver);
-    if (r.was && r.was !== r.driver) console.log('  (was: ' + r.was + ')');
+    const drivers = [
+      ['Card merge driver', CARD_DRIVER, installCardDriver(HUB, { script: path.join(scripts, 'card-merge.mjs') }), [CARD_ATTR]],
+      ['State file merge driver', STATE_DRIVER, installStateDriver(HUB, { script: path.join(scripts, 'state-merge.mjs') }), STATE_ATTRS],
+    ];
+    for (const [what, name, r, attrs] of drivers) {
+      console.log(what + (r.was === r.driver ? ' already installed in ' : r.was ? ' repointed in ' : ' installed in ') + HUB);
+      for (const a of attrs) console.log('  ' + rel(r.attrFile) + (r.added.includes(a) ? '   + ' : '   has ') + a);
+      console.log('  git config           merge.' + name + '.driver = ' + r.driver);
+      if (r.was && r.was !== r.driver) console.log('  (was: ' + r.was + ')');
+    }
   } catch (e) { die(e.message); }
   console.log('This node only: nothing here travels with the mesh, so run it on every node that syncs.');
   console.log('Different ## sections changed on two nodes now merge cleanly. One section changed on both keeps');
-  console.log('both versions under a marker line for a person to review. If node or hubd moves, cards fall back');
-  console.log('to a union merge until this is run again.');
+  console.log('both versions under a marker line for a person to review. A snapshot, presence, sense or read-mark');
+  console.log('file rewritten on both sides takes the version with the later time. If node or hubd moves, cards');
+  console.log('fall back to a union merge and those files to the side git calls ours, until this is run again.');
   done(0);
 });
 
@@ -1978,7 +1989,7 @@ const HELP = [
   ['card <slug> -m "<digest>"', 'set a project card without a folder'],
   ['card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]', 'fix lines of a card, leave the rest byte-for-byte'],
   ['card resolve [slug...]', 'union the list hunks of a conflicted card, name the rest'],
-  ['card merge-driver [--remove]', 'on this node, merge cards by ## section: no conflict, both versions kept and marked'],
+  ['card merge-driver [--remove]', 'on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time'],
   ['cards compact [--apply --by <you>]', 'move the overflow of over-long card sections into projects/history/ (dry run without --apply)'],
   ['cards merge <duplicate> <canonical> [--apply --by <you>]', 'merge two cards for the same project (dry run without --apply)'],
   ['cards merge-sections [--apply --by <you>]', 'fold a section a card holds twice (same heading, or two locales) into the live one'],

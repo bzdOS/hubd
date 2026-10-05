@@ -154,39 +154,50 @@ export function runDriver([base, ours, theirs]) {
   fs.writeFileSync(ours, r.text);
 }
 
-const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+export const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 const git = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const attrFile = (hub) => path.join(hub, '.git', 'info', 'attributes');
 const ownRepo = (hub) => { try { return fs.statSync(path.join(hub, '.git')).isDirectory(); } catch { return false; } };
 
-/** Install (or refresh) the driver in the hub's own repository. `script` is scripts/card-merge.mjs. */
-export function installCardDriver(hub, { node = process.execPath, script }) {
+/** Install (or refresh) merge driver `name` in the hub's own repository: its command in .git/config,
+ *  its `attrs` lines in .git/info/attributes. Returns what was there before and the lines added. */
+export function installDriver(hub, { name, label, command, attrs }) {
   if (!ownRepo(hub)) throw new Error(`${hub} is not a git repository of its own: nothing merges here`);
-  const driver = `${shq(node)} ${shq(script)} %O %A %B || git merge-file --union %A %O %B`;
   let was = '';
-  try { was = git(hub, 'config', '--get', `merge.${CARD_DRIVER}.driver`).trim(); } catch {}
-  git(hub, 'config', `merge.${CARD_DRIVER}.name`, 'hubd: project cards, merged by ## section');
-  git(hub, 'config', `merge.${CARD_DRIVER}.driver`, driver);
+  try { was = git(hub, 'config', '--get', `merge.${name}.driver`).trim(); } catch {}
+  git(hub, 'config', `merge.${name}.name`, label);
+  git(hub, 'config', `merge.${name}.driver`, command);
   const af = attrFile(hub);
   let cur = '';
   try { cur = fs.readFileSync(af, 'utf8'); } catch {}
-  const attrAdded = !cur.split('\n').map(l => l.trim()).includes(CARD_ATTR);
-  if (attrAdded) {
+  const have = new Set(cur.split('\n').map(l => l.trim()));
+  const added = attrs.filter(a => !have.has(a));
+  if (added.length) {
     fs.mkdirSync(path.dirname(af), { recursive: true });
-    fs.appendFileSync(af, (cur && !cur.endsWith('\n') ? '\n' : '') + CARD_ATTR + '\n');
+    fs.appendFileSync(af, (cur && !cur.endsWith('\n') ? '\n' : '') + added.map(a => a + '\n').join(''));
   }
-  return { driver, was: was || null, attrAdded, attrFile: af };
+  return { driver: command, was: was || null, added, attrFile: af };
 }
 
-/** Take it out again: the hub's own .gitattributes decides how cards merge on this node. */
-export function removeCardDriver(hub) {
+/** Take driver `name` and its `attrs` lines out again. */
+export function removeDriver(hub, { name, attrs }) {
   if (!ownRepo(hub)) throw new Error(`${hub} is not a git repository of its own`);
   let had = false;
-  try { git(hub, 'config', '--remove-section', `merge.${CARD_DRIVER}`); had = true; } catch {}
+  try { git(hub, 'config', '--remove-section', `merge.${name}`); had = true; } catch {}
   const af = attrFile(hub);
   let cur = '';
   try { cur = fs.readFileSync(af, 'utf8'); } catch {}
-  const kept = cur.split('\n').filter(l => l.trim() !== CARD_ATTR);
+  const kept = cur.split('\n').filter(l => !attrs.includes(l.trim()));
   if (kept.length !== cur.split('\n').length) { fs.writeFileSync(af, kept.join('\n')); had = true; }
   return { had, attrFile: af };
 }
+
+/** Install (or refresh) the card driver. `script` is scripts/card-merge.mjs. */
+export function installCardDriver(hub, { node = process.execPath, script }) {
+  const r = installDriver(hub, { name: CARD_DRIVER, label: 'hubd: project cards, merged by ## section',
+    command: `${shq(node)} ${shq(script)} %O %A %B || git merge-file --union %A %O %B`, attrs: [CARD_ATTR] });
+  return { ...r, attrAdded: r.added.length > 0 };
+}
+
+/** Take it out again: the hub's own .gitattributes decides how cards merge on this node. */
+export function removeCardDriver(hub) { return removeDriver(hub, { name: CARD_DRIVER, attrs: [CARD_ATTR] }); }

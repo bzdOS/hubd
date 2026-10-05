@@ -276,7 +276,9 @@ tracked file, or two paths that differ only by case): nothing conflicted, run `h
 
 Project cards are the one file several nodes rewrite. Run `hub card merge-driver` once on each
 node, and git merges them by `##` section instead of stopping on them
-([recipes](recipes.md#7-two-machines-one-hub)).
+([recipes](recipes.md#7-two-machines-one-hub)). The same command covers the files one node
+rewrites whole, its snapshot, presence, sense and read marks: when two versions of one meet in a
+merge or a rebase, the one with the later time is kept.
 
 Before you touch the hub folder itself — a purge, a restore, an `absorb`, anything that rewrites —
 stop the sync on that machine, so a tick mid-operation cannot hand a half-finished state to every

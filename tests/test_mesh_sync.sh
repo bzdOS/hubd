@@ -249,6 +249,54 @@ HUBD_DIR="$TMP/d2" sh "$SCRIPT" >"$TMP/out18" 2>&1; r2=$?
 ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && grep -q 'one, from the first node' "$TMP/d2/projects/p.md" && grep -q 'one, from the second node' "$TMP/d2/projects/p.md" && [ "$(markers "$TMP/d2/projects/p.md")" = 0 ] && echo 1 || echo 0)" \
   "driver: a stale driver path falls back to a union merge; the mesh does not stop (got $r1 $r2)"
 
+# ── a file one node rewrites whole: the newer version, in a merge and a rebase ──
+# One node's snapshot, rewritten in two clones at once: history repaired so that its writes sit on
+# both sides, or one node name in two clones. Every line with a time differs, and git stops.
+snap() { printf '{\n "v": 1,\n "node": "fir",\n "ts": "%s",\n "sessions": [{"session": "s", "state": "%s"}]\n}\n' "$1" "$2"; }
+mksnaps() {   # mksnaps <origin> <clone1> <clone2> — one snapshot in the mesh, two clones holding it
+  mkhub "$1"; git -C "$1" config receive.denyCurrentBranch ignore
+  snap 2026-10-05T14:00:00Z IDLE > "$1/snapshot.fir.json"
+  git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -q -m snap
+  git clone -q "$1" "$2"; git clone -q "$1" "$3"
+}
+put() { snap "$2" "$3" > "$1/snapshot.fir.json" && git -C "$1" -c user.name=t -c user.email=t@t commit -qam "snap $2"; }
+newer() { grep -q '"ts": "2026-10-05T14:06:30Z"' "$1/snapshot.fir.json" && [ "$(markers "$1/snapshot.fir.json")" = 0 ]; }
+
+mksnaps "$TMP/osn" "$TMP/sn1" "$TMP/sn2"
+put "$TMP/sn1" 2026-10-05T14:05:00Z WORKING && git -C "$TMP/sn1" push -q origin main
+put "$TMP/sn2" 2026-10-05T14:06:30Z DOWN
+git -C "$TMP/sn2" -c user.name=t -c user.email=t@t pull -q --rebase origin main >/dev/null 2>&1; rc=$?
+git -C "$TMP/sn2" rebase --abort >/dev/null 2>&1
+ok "$([ $rc -ne 0 ] && echo 1 || echo 0)" "state: without the driver, two rewrites of one snapshot stop a pull --rebase (got $rc)"
+
+mksnaps "$TMP/ost" "$TMP/st1" "$TMP/st2"
+for n in st1 st2; do HUBD_DIR="$TMP/$n" HUBD_TEAM_DIR="$TMP/$n" HUBD_NODE=$n $CLI card merge-driver >/dev/null 2>&1; done
+put "$TMP/st1" 2026-10-05T14:05:00Z WORKING && git -C "$TMP/st1" push -q origin main
+put "$TMP/st2" 2026-10-05T14:06:30Z DOWN
+git -C "$TMP/st2" -c user.name=t -c user.email=t@t pull -q --rebase origin main >"$TMP/out-st1" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && newer "$TMP/st2" && echo 1 || echo 0)" "state: with the driver, pull --rebase goes through and keeps the newer snapshot, the replayed one (got $rc)"
+git -C "$TMP/st2" push -q origin main
+put "$TMP/st1" 2026-10-05T14:06:00Z IDLE
+git -C "$TMP/st1" -c user.name=t -c user.email=t@t pull -q --rebase origin main >"$TMP/out-st2" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && newer "$TMP/st1" && echo 1 || echo 0)" "state: and keeps upstream's when the replayed one is older (got $rc)"
+
+put "$TMP/st1" 2026-10-05T14:07:00Z WORKING
+put "$TMP/st2" 2026-10-05T14:08:00Z DOWN
+HUBD_DIR="$TMP/st1" sh "$SCRIPT" >/dev/null 2>&1; r1=$?
+HUBD_DIR="$TMP/st2" sh "$SCRIPT" >"$TMP/out-st3" 2>&1; r2=$?
+HUBD_DIR="$TMP/st1" sh "$SCRIPT" >/dev/null 2>&1; r3=$?
+ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ $r3 -eq 0 ] && grep -q '14:08:00Z' "$TMP/st1/snapshot.fir.json" && cmp -s "$TMP/st1/snapshot.fir.json" "$TMP/st2/snapshot.fir.json" && echo 1 || echo 0)" \
+  "state: mesh-sync merges the two rewrites and both clones hold the newer one (got $r1 $r2 $r3)"
+
+# hubd moved and the driver's path went stale: the file keeps git's ours, and the mesh goes on.
+for n in st1 st2; do git -C "$TMP/$n" config merge.hubd-state.driver "$(git -C "$TMP/$n" config merge.hubd-state.driver | sed 's#state-merge\.mjs#state-merge-moved.mjs#')"; done
+put "$TMP/st1" 2026-10-05T14:10:00Z WORKING
+put "$TMP/st2" 2026-10-05T14:09:00Z DOWN
+HUBD_DIR="$TMP/st1" sh "$SCRIPT" >/dev/null 2>&1; r1=$?
+HUBD_DIR="$TMP/st2" sh "$SCRIPT" >"$TMP/out-st4" 2>&1; r2=$?
+ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && grep -q '14:09:00Z' "$TMP/st2/snapshot.fir.json" && [ "$(markers "$TMP/st2/snapshot.fir.json")" = 0 ] && echo 1 || echo 0)" \
+  "state: a stale driver path keeps ours, whole; the mesh does not stop (got $r1 $r2)"
+
 # ── a shared hub stays group-writable after a pull ────────────────────────────
 # The fleet case: this script runs as root, the roles run as another user in the group. Anything
 # a pull creates is the puller's, and a role then reads everything and writes nothing.
