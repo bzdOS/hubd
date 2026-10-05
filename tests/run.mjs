@@ -3,6 +3,10 @@
 //   node tests/run.mjs queue cards  # only the suites whose name contains one of these
 // One line per suite; a failing suite prints its FAIL lines and the tail of its output.
 // Exit 1 if any suite failed.
+// Half the cores at a time (HUBD_TEST_JOBS sets it), at nice 10, which every process a suite
+// starts inherits. The suites run on the machine their author works on, and one suite per core,
+// each with its own git and node children, stalled it while they ran. On an eight-thread laptop
+// the whole run took 104 s at four suites at a time, against 86 s at eight.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,7 +27,9 @@ const todo = want.length ? suites.filter(s => want.some(w => s.name.includes(w))
 if (!todo.length) { console.error(`no suite matches ${want.join(' ')}; suites: ${suites.map(s => s.name).join(' ')}`); process.exit(2); }
 
 const width = Math.max(...todo.map(s => s.name.length));
-const jobs = Math.max(2, (os.availableParallelism ? os.availableParallelism() : os.cpus().length));
+const cores = os.availableParallelism ? os.availableParallelism() : os.cpus().length;
+const jobs = Math.max(1, parseInt(process.env.HUBD_TEST_JOBS || '', 10) || Math.max(2, Math.floor(cores / 2)));
+try { os.setPriority(Math.max(os.getPriority(), 10)); } catch {}   // never raises it; a platform that refuses runs as is
 const t0 = Date.now();
 let failed = 0, passTotal = 0;
 
