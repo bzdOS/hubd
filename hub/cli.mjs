@@ -18,6 +18,7 @@ import {
   trackedNodeLocal, freezeFile, readFreeze, setReadOnly,
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
+import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/cards.mjs';
 import { runRecall } from './lib/recall.mjs';
@@ -107,7 +108,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check',
+  '--vars', '--out', '--check', '--remove',
 );
 
 function getFlag(name) {
@@ -1002,6 +1003,29 @@ command('card', () => args[1] === 'resolve', () => {
   done(left ? 1 : 0);
 });
 
+// card merge-driver: merge cards by ## section on this node (hub/lib/cardmerge.mjs says why).
+command('card', () => args[1] === 'merge-driver', () => {
+  const rel = (f) => path.relative(HUB, f);
+  try {
+    if (args.includes('--remove')) {
+      const r = removeCardDriver(HUB);
+      console.log(r.had ? 'Card merge driver removed from ' + HUB + '; the hub\'s own .gitattributes decides how cards merge here.'
+        : 'No card merge driver installed in ' + HUB + '.');
+      done(0);
+    }
+    const r = installCardDriver(HUB, { script: path.join(path.dirname(__filename), '..', 'scripts', 'card-merge.mjs') });
+    console.log((r.was === r.driver ? 'Card merge driver already installed in ' : r.was ? 'Card merge driver repointed in ' : 'Card merge driver installed in ') + HUB);
+    console.log('  ' + rel(r.attrFile) + (r.attrAdded ? '   + ' : '   has ') + CARD_ATTR);
+    console.log('  git config           merge.' + CARD_DRIVER + '.driver = ' + r.driver);
+    if (r.was && r.was !== r.driver) console.log('  (was: ' + r.was + ')');
+  } catch (e) { die(e.message); }
+  console.log('This node only: nothing here travels with the mesh, so run it on every node that syncs.');
+  console.log('Different ## sections changed on two nodes now merge cleanly. One section changed on both keeps');
+  console.log('both versions under a marker line for a person to review. If node or hubd moves, cards fall back');
+  console.log('to a union merge until this is run again.');
+  done(0);
+});
+
 command('card', () => {
   const slug = args[1] && !args[1].startsWith('-') ? args[1] : null;
   if (!slug) die('Usage: hub card <slug> -m "<digest>"  |  hub card resolve [slug...]');
@@ -1825,6 +1849,7 @@ const HELP = [
   ['card <slug> -m "<digest>"', 'set a project card without a folder'],
   ['card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]', 'fix lines of a card, leave the rest byte-for-byte'],
   ['card resolve [slug...]', 'union the list hunks of a conflicted card, name the rest'],
+  ['card merge-driver [--remove]', 'on this node, merge cards by ## section: no conflict, both versions kept and marked'],
   ['cards compact [--apply --by <you>]', 'move the overflow of over-long card sections into projects/history/ (dry run without --apply)'],
   ['cards merge <duplicate> <canonical> [--apply --by <you>]', 'merge two cards for the same project (dry run without --apply)'],
   ['cards merge-sections [--apply --by <you>]', 'fold a section a card holds twice (same heading, or two locales) into the live one'],

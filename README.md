@@ -185,6 +185,10 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **When a queue conflicts** — append-only by contract, but without union merge two
   sides that both appended do collide. `hub queue resolve` keeps ours in place and
   appends theirs at the end, which leaves every byte cursor in the hub valid.
+- **So that a card does not conflict** — run `hub card merge-driver` once on each node.
+  Cards then merge by `##` section: two nodes writing different sections never conflict,
+  and one section changed on both keeps both versions under a line asking a person to
+  look. It lives in the node's own `.git`, so a node without it merges as before.
 - **When a card does conflict** — the only shared file that can, being the one
   mutable one — `hub card resolve` unions the bullet-list hunks (two nodes appending
   facts have not disagreed) and leaves prose hunks for you, named by section. It

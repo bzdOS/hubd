@@ -4,6 +4,28 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.40 — 2026-10-05
+
+- **A conflict is named as one in any locale.** `mesh-sync` tells a refused merge (exit 5) from a
+  content conflict (exit 2) by git's own words, and git translates them. On a node with a Russian
+  locale a card conflict was reported as a failed pull, and that node's mesh stood for 2.5 and 4.5
+  hours. The script now runs git under `LC_ALL=C`.
+- **Cards merge by section: `hub card merge-driver`.** Run once on a node, it installs a git merge
+  driver for `projects/*.md` in that node's `.git/config` and `.git/info/attributes`. A section is
+  a `##` heading and what follows it. Sections changed on different sides merge without a
+  conflict. A section changed on both sides gets a line merge of its own; when that clashes, both
+  versions are kept, the node's own first, under a line asking a person to look. Two writes of
+  one card keep the later `- set:` stamp. Measured on a mesh, 72 card merges in nine days: git
+  stopped on 42. With the driver, 4 of those merge clean and 38 are kept and marked, and no line
+  is lost in any. Nothing travels with the mesh, so a node without the driver merges as before. If
+  the driver's path goes stale, the merge falls back to git's union merge; run the command again.
+  `--remove` takes it out.
+- **A shared hub stays group-writable after a sync that stops.** Group write was restored only
+  after a merge that changed HEAD, but a failed fetch or merge has already written into `.git` as
+  the sync's user. Those paths restore it too.
+- A node that runs a copy of `mesh-sync.sh` gets the locale and permission fixes only when the
+  copy is replaced. The driver runs from the installed package.
+
 ## 0.9.39 — 2026-10-04
 
 - **A failed mesh merge no longer hands a queue out again.** `mesh-sync` merged in the live hub
