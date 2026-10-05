@@ -1,8 +1,8 @@
 // watch.mjs — hub watch: each new journal entry once, to a named cursor, whatever the mesh does to the files
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { REPO, T0, ok, cli, done } from './_h.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { REPO, T0, ok, cli, done, mktmp } from './_h.mjs';
 
 const W = await import(path.join(REPO, 'hub/lib/watch.mjs'));
 const throws = (f, re) => { try { f(); return false; } catch (e) { return re.test(e.message); } };
@@ -153,10 +153,125 @@ append('journal.pine.jsonl', entry('one'), entry('two'));
   ok(again.code === 0 && !again.stdout.includes('while following'), 'cli: what --follow printed stays marked after it ends');
   ok(out.trim().split('\n').filter(l => l.includes('while following')).length === 1, 'cli: --follow printed it once');
 }
+
+// ── --exec: each entry to a command, marked when it exits 0 ──
+const X = mktmp();
+const XF = (f) => path.join(X, f);
+const lines = (f) => { try { return fs.readFileSync(XF(f), 'utf8').split('\n').filter(Boolean); } catch { return []; } };
+const until = async (f, ms = 8000) => { const t = Date.now(); while (!f() && Date.now() - t < ms) await new Promise(r => setTimeout(r, 50)); return f(); };
+{
+  pass('execer');
+  append('journal.fir.jsonl', entry('x1'), entry('x2'), entry('x3'));
+  // each command logs its key and the cursor as it stands when the command starts
+  const cmd = `cat >> '${XF('in')}'; { echo "$HUBD_WATCH_KEY"; tr -d '\\n' < '${W.watchFile('execer')}'; echo; } >> '${XF('log')}'; test -e '${W.watchFile('execer')}.lock'`;
+  let r = await W.watchExec({ name: 'execer', cmd });
+  const got = lines('in').map(l => JSON.parse(l));
+  ok(!r.failed && r.shown === 3 && got.map(e => e.text).join() === 'x1,x2,x3', 'exec: each entry goes to the command as one JSON line on stdin, oldest first');
+  const log = lines('log');
+  const keys = log.filter((_, i) => i % 2 === 0);
+  ok(keys.length === 3 && keys.every(k => /^[0-9a-f]{12}$/.test(k)) && new Set(keys).size === 3, 'exec: HUBD_WATCH_KEY is the entry\'s key, one per entry');
+  ok(log[3].includes(keys[0]) && !log[3].includes(keys[1]) && log[5].includes(keys[1]), 'exec: the cursor is saved after each entry, before the next command starts');
+  r = await W.watchExec({ name: 'execer', cmd: 'cat >/dev/null' });
+  ok(!r.failed && r.shown === 0, 'exec: an entry the command took is not handed over again');
+
+  fs.rmSync(XF('in'));
+  append('journal.fir.jsonl', entry('y1'), entry('y2'), entry('y3'));
+  const failing = `e=$(cat); echo "$HUBD_WATCH_KEY $e" >> '${XF('in')}'; case "$e" in *'"y2"'*) exit 3;; esac`;
+  r = await W.watchExec({ name: 'execer', cmd: failing });
+  ok(r.failed && r.failed.why === 'exited 3' && r.shown === 1 && lines('in').length === 2, 'exec: a command that exits non-zero stops the pass at its entry, with the reason');
+  const firstKey = lines('in')[1].split(' ')[0];
+  r = await W.watchExec({ name: 'execer', cmd: `e=$(cat); echo "$HUBD_WATCH_KEY $e" >> '${XF('in')}'` });
+  const again = lines('in').slice(2);
+  ok(!r.failed && again.map(l => JSON.parse(l.slice(13)).text).join() === 'y2,y3', 'exec: the failed entry and the ones after it are handed over on the next pass');
+  ok(again[0].split(' ')[0] === firstKey, 'exec: a retried entry carries the same HUBD_WATCH_KEY, so a receiver can drop the repeat');
+
+  append('journal.fir.jsonl', entry('z1'), entry('z2'));
+  const t = Date.now();
+  r = await W.watchExec({ name: 'execer', cmd: 'sleep 5', timeoutS: 1 });
+  ok(r.failed && r.failed.why === 'ran past 1 s and was killed' && Date.now() - t < 4000 && r.shown === 0, 'exec: a command past its time is killed, and its entry stays new');
+  let calls = 0;
+  r = await W.watchExec({ name: 'execer', cmd: 'cat >/dev/null', stop: () => calls++ > 0 });
+  ok(!r.failed && r.shown === 1, 'exec: stop() ends the pass after the entry in flight');
+  r = await W.watchExec({ name: 'execer', cmd: `cat >> '${XF('z')}'` });
+  ok(r.shown === 1 && JSON.parse(lines('z')[0]).text === 'z2', 'exec: what a stopped pass did not hand over is new on the next one');
+}
+{
+  const env = { HUBD_DIR: T0, HUBD_SUBSCRIBER: undefined };
+  let r = cli(['watch', '--as', 'cli-exec', '--exec', 'cat', '--json'], { env });
+  ok(r.code === 1 && /--json has nothing to shape/.test(r.stderr), 'cli: --exec with --json is an error');
+  r = cli(['watch', '--as', 'cli-exec', '--exec'], { env });
+  ok(r.code === 1 && /--exec needs a value/.test(r.stderr), 'cli: --exec without a command is an error');
+  cli(['watch', '--as', 'cli-exec'], { env });
+  cli(['report', '-p', 'alpha', '--agent', 'dev-exec', '-m', 'to the command'], { env });
+  r = cli(['watch', '--as', 'cli-exec', '--exec', 'exit 4'], { env });
+  ok(r.code === 1 && /the command exited 4 on the entry of .* \[alpha\/dev-exec\]; it and the entries after it are handed over again on the next run/.test(r.stderr), 'cli: one pass whose command fails exits 1 and names the entry');
+  r = cli(['watch', '--as', 'cli-exec', '--exec', 'cat'], { env });
+  ok(r.code === 0 && JSON.parse(r.stdout).text === 'to the command', 'cli: the command\'s own output goes to the watch\'s stdout; the entry is handed over again after a failure');
+  r = cli(['watch', '--as', 'cli-exec', '--exec', 'cat'], { env });
+  ok(r.code === 0 && r.stdout === '', 'cli: once the command exits 0, the entry is not handed over again');
+}
+{
+  // --follow --exec: a failing command is retried each interval, and its recovery is said once
+  const env = { ...process.env, HUBD_DIR: T0 };
+  delete env.HUBD_SUBSCRIBER;
+  const gate = XF('gate');
+  const cmd = `test -e '${gate}' || exit 1; cat >> '${XF('followed')}'`;
+  const child = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-follow', '--follow', '--interval', '0.2', '--exec', cmd], { env });
+  let err = '';
+  child.stderr.on('data', d => { err += d; });
+  await until(() => /a new cursor/.test(err));
+  cli(['report', '-p', 'alpha', '--agent', 'dev-gate', '-m', 'behind the gate'], { env: { HUBD_DIR: T0 } });
+  ok(await until(() => /the command exited 1 on the entry of .*\[alpha\/dev-gate\].* every 0\.2 s until it exits 0/.test(err)), 'cli: --follow says a failing command once, and that it retries');
+  await new Promise(r => setTimeout(r, 700));
+  fs.writeFileSync(gate, '');
+  ok(await until(() => /the command exits 0 again, after \d+ failed attempt\(s\)/.test(err)), 'cli: --follow says when the command exits 0 again');
+  ok((err.match(/the command exited 1/g) || []).length === 1, 'cli: the failure is said once, not on every retry');
+  ok(lines('followed').length === 1 && JSON.parse(lines('followed')[0]).text === 'behind the gate', 'cli: the entry reaches the command once it exits 0');
+
+  // a signal while a command runs: it finishes, the entry is marked, the rest waits
+  const slow = `cat >/dev/null; touch '${XF('started')}'; sleep 1; echo "$HUBD_WATCH_KEY" >> '${XF('slow')}'`;
+  const c2 = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-sig', '--follow', '--interval', '0.2', '--exec', slow], { env });
+  let err2 = '';
+  c2.stderr.on('data', d => { err2 += d; });
+  await until(() => /a new cursor/.test(err2));
+  cli(['report', '-p', 'alpha', '--agent', 'dev-sig', '-m', 'first of two'], { env: { HUBD_DIR: T0 } });
+  cli(['report', '-p', 'alpha', '--agent', 'dev-sig', '-m', 'second of two'], { env: { HUBD_DIR: T0 } });
+  await until(() => fs.existsSync(XF('started')));
+  const code = await new Promise(r => { c2.on('exit', (c) => r(c)); c2.kill('SIGTERM'); });
+  ok(code === 0 && lines('slow').length === 1, 'cli: SIGTERM while a command runs lets it finish, then exits 0 without the next entry');
+  const rest = cli(['watch', '--as', 'exec-sig', '--exec', 'cat'], { env: { HUBD_DIR: T0, HUBD_SUBSCRIBER: undefined } });
+  ok(rest.code === 0 && rest.stdout.trim().split('\n').map(l => JSON.parse(l).text).join() === 'second of two', 'cli: after the signal only the entry not yet handed over is new');
+  child.kill('SIGTERM');
+  await new Promise(r => child.on('exit', r));
+}
 {
   const sh = fs.readFileSync(path.join(REPO, 'contrib/watch-to-matrix.sh'), 'utf8');
-  ok(/hub watch --as \S+ --follow --json/.test(sh) && /_matrix\/client\/v3\/rooms\//.test(sh), 'contrib: the Matrix example follows hub watch --json and posts to the client API');
+  ok(/hub watch --as \S+ --follow .*--exec/.test(sh) && /_matrix\/client\/v3\/rooms\//.test(sh), 'contrib: the Matrix example follows hub watch --exec and posts to the client API');
   ok(sh.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).length <= 15, 'contrib: the Matrix example stays a short script');
+}
+if (spawnSync('jq', ['--version']).status !== 0) console.log('note: no jq here, so the Matrix example was not run');
+else {
+  // the example run for real, against a curl that keeps what it was given and fails its first post
+  const bin = mktmp(), seen = XF('curl');
+  fs.writeFileSync(path.join(bin, 'hub'), `#!/bin/sh\nexec '${process.execPath}' '${path.join(REPO, 'hub/cli.mjs')}' "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n{ for a in "$@"; do echo "arg $a"; done; echo "data $(cat)"; } >> '${seen}'\ntest -e '${seen}.once' && exit 0\ntouch '${seen}.once'; exit 22\n`, { mode: 0o755 });
+  const env = { ...process.env, HUBD_DIR: T0, PATH: `${bin}:${process.env.PATH}`, MATRIX_HS: 'https://matrix.example.org', MATRIX_ROOM: '!room:example.org', MATRIX_TOKEN: 'tok' };
+  delete env.HUBD_SUBSCRIBER;
+  const child = spawn('/bin/sh', [path.join(REPO, 'contrib/watch-to-matrix.sh'), '-p', 'alpha', '--interval', '0.2'], { env });
+  let err = '';
+  child.stderr.on('data', d => { err += d; });
+  await until(() => /a new cursor/.test(err));
+  cli(['report', '-p', 'alpha', '--agent', 'dev-mx', '-m', 'say "hi" & $HOME'], { env: { HUBD_DIR: T0 } });
+  await until(() => /exits 0 again/.test(err));
+  await new Promise(r => { child.on('exit', r); child.kill('SIGTERM'); });
+  const posts = fs.readFileSync(seen, 'utf8').split(/\n(?=arg -fsS)/);
+  const url = (p) => (p.match(/^arg (https:\S+)$/m) || [])[1];
+  const data = (p) => { try { return JSON.parse((p.match(/^data (.*)$/m) || [])[1]); } catch { return null; } };
+  ok(posts.length === 2 && url(posts[0]) && url(posts[0]) === url(posts[1]), 'contrib: a failed post is posted again, with the same transaction id');
+  ok(/^https:\/\/matrix\.example\.org\/_matrix\/client\/v3\/rooms\/%21room%3Aexample\.org\/send\/m\.room\.message\/hubd-[0-9a-f]{12}$/.test(url(posts[1]) || ''), 'contrib: the room is escaped into the path, and the transaction id is the entry\'s key');
+  const d = data(posts[1]);
+  ok(d && d.msgtype === 'm.text' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \[alpha\/dev-mx\] note: say "hi" & \$HOME$/.test(d.body), 'contrib: the message body is the entry as hub log reads it, quotes and dollars intact');
+  ok(/^arg Authorization: Bearer tok$/m.test(posts[1]), 'contrib: the token goes in the Authorization header');
 }
 
 done();

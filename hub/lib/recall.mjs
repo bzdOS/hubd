@@ -4,7 +4,7 @@ import {
   cardStamp, digestOf, escRe, isPlaceholder, journalTail, loadTasks, now, parseTs, projectCards, projectFilter,
   sectionBody, sectionsConfig, slugify,
 } from './core.mjs';
-import { entryReflect, isNoRule, splitReflect } from './reflect.mjs';
+import { entryReflect, isExampleRule, isNoRule, splitReflect } from './reflect.mjs';
 
 /* ── Recall: what do we know about X, and was it still true when we learned it ──
  * hub_search is exact and flat: every line that contains the substring, in file order, a decision
@@ -103,14 +103,15 @@ export function runRecall(a = {}) {
   /* A reflection's rule and obstacle are hits of their own. They end the report, so inside the
    * journal hit they sat past the 300 characters a hit shows: a recall on a rule found the entry
    * and showed its first lines. The journal hit keeps the rest of the text, goal and instead
-   * included, so no word stops being found. */
+   * included, so no word stops being found. A rule that holds the fragment's example is not a
+   * finding of the hub's, so it is no hit. */
   for (const e of journalTail(null, 4000)) {
     const where = `journal ${e.ts} [${e.project || '?'}/${e.agent || '?'}]`;
     const rf = entryReflect(e);
     const text = !rf ? e.text || '' : [splitReflect(e.text).body, rf.goal && 'goal: ' + rf.goal, rf.instead && 'instead: ' + rf.instead,
       ...(rf.decisions || []).map(d => `${d.verdict}: ${d.rule}`)].filter(Boolean).join(' · ');
     if (text) push(e.kind === 'decision' ? 'decision' : 'journal', where, e.project || null, text, e.ts);
-    if (rf && rf.rule && !isNoRule(rf.rule)) push('rule', where + ' rule', e.project || null, rf.rule, e.ts);
+    if (rf && rf.rule && !isNoRule(rf.rule) && !isExampleRule(rf.rule)) push('rule', where + ' rule', e.project || null, rf.rule, e.ts);
     if (rf && rf.obstacle_fact) push('obstacle', `${where} obstacle${rf.obstacle ? ' ' + rf.obstacle : ''}`, e.project || null, rf.obstacle_fact, e.ts);
   }
   for (const t of loadTasks().tasks) {

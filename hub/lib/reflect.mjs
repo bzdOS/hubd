@@ -15,6 +15,12 @@ export const OBSTACLES = ['permissions', 'path', 'unclear-dispatch', 'environmen
  * `fleet` the orchestrator's over the heads (FLEET-REFLECT). */
 export const LEVELS = ['turn', 'head', 'fleet'];
 export const VERDICTS = ['accepted', 'rejected', 'needs-owner'];
+/* The rule of the fragment's own example. On one hub, two roles put it in 86 of 2768 reflections:
+ * 45 times alone, 40 of those with obstacle none, and 41 times after the fragment's own lines
+ * restated. A model fills the field with the nearest text that fits. A rule that holds it is not
+ * the turn's, so the field refuses it, the text names it a problem, and the digest counts it
+ * apart from the rules. */
+export const EXAMPLE_RULE = "keep build recipes only inside the role's allowed paths";
 const MARK = { turn: 'REFLECT', head: 'HEAD-REFLECT', fleet: 'FLEET-REFLECT' };
 const FIELDS = ['level', 'goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule', 'decisions'];
 const TEXT_KEYS = new Set(['goal', 'result', 'obstacle', 'instead', 'rule', 'decision']);
@@ -61,6 +67,7 @@ export function checkReflect(r) {
   for (const k of ['goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule']) out[k] = str(r, k);
   for (const k of ['goal', 'instead', 'rule'])
     if (!out[k]) throw new Error(`reflect: ${k} is required${k === 'rule' ? ' ("none" when the turn taught none)' : ''}`);
+  if (isExampleRule(out.rule)) throw new Error(`reflect: rule holds the example's rule ("${EXAMPLE_RULE}"), not this turn's; write what this turn taught, or "none"`);
   oneOf('result', out.result || null, RESULTS);
   oneOf('obstacle', out.obstacle || null, OBSTACLES);
   if (out.obstacle === 'none' && out.obstacle_fact) throw new Error('reflect: obstacle "none" takes no obstacle_fact');
@@ -118,6 +125,7 @@ export function readReflect(text) {
   }
   const problems = [];
   for (const k of ['goal', 'instead', 'rule']) if (!raw[k]) problems.push(`no ${k}`);
+  if (isExampleRule(raw.rule)) problems.push("rule holds the example's rule, not this turn's");
   const res = (/^[a-z-]+/i.exec(raw.result || '') || [''])[0].toLowerCase();
   if (!RESULTS.includes(res)) problems.push(raw.result == null ? 'no result' : `result ${JSON.stringify(raw.result)} is not one of ${RESULTS.join(' | ')}`);
   const ob = raw.obstacle;
@@ -157,16 +165,21 @@ const NO_RULE = new Set(['none', 'n/a', '-', '']);
 /** A rule as compared for repeats: case, punctuation and spacing are not what a rule says. */
 export const ruleKey = (s) => String(s || '').toLowerCase().replace(/[\p{P}\p{S}]+/gu, ' ').replace(/\s+/g, ' ').trim();
 export const isNoRule = (s) => NO_RULE.has(ruleKey(s));
+/** A rule that holds the example's, alone or with other lines around it; "only", "the" and "a"
+ *  dropped, since the copies drop them too. */
+const exampleKey = (s) => ruleKey(s).replace(/\b(?:only|the|an?)\b/g, ' ').replace(/\s+/g, ' ').trim();
+export const isExampleRule = (s) => exampleKey(s).includes(exampleKey(EXAMPLE_RULE));
 
 /** The digest a head reads instead of the reports (prompts/meta/fragments/head-cycle.md): per role,
  *  how turns ended and what got in the way; per obstacle class, how often and the latest facts;
- *  the rules proposed more than once; the verdicts given. `entries` are journal entries in time
+ *  the rules proposed more than once; how many rules held the example's (`exampleRule`, never
+ *  among the rules); the verdicts given. `entries` are journal entries in time
  *  order, already narrowed to the project and the window. Every count lists every value of its
  *  enum, zeros included, plus the bucket for what was off the list, so the shape never depends
  *  on the data: `other` for a result, `unclassified` for an obstacle class. */
 export function reflectDigest(entries, { level = null, facts = 3 } = {}) {
   const zero = (list, extra) => Object.fromEntries([...list, extra].map(k => [k, 0]));
-  const roles = {}, obstacles = {}, rules = new Map(), decisions = [];
+  const roles = {}, obstacles = {}, rules = new Map(), decisions = [], exampleRule = { count: 0, roles: [] };
   for (const k of [...OBSTACLES, 'unclassified']) obstacles[k] = { count: 0, facts: [] };
   let total = 0;
   for (const e of entries) {
@@ -181,7 +194,10 @@ export function reflectDigest(entries, { level = null, facts = 3 } = {}) {
     p.obstacle[cls]++;
     obstacles[cls].count++;
     if (cls !== 'none' && r.obstacle_fact) obstacles[cls].facts.push({ ts: e.ts, role, fact: r.obstacle_fact });
-    if (!isNoRule(r.rule)) {
+    if (isExampleRule(r.rule)) {
+      exampleRule.count++;
+      if (!exampleRule.roles.includes(role)) exampleRule.roles.push(role);
+    } else if (!isNoRule(r.rule)) {
       const k = ruleKey(r.rule);
       const g = rules.get(k) || { rule: r.rule, count: 0, roles: [], last: e.ts };
       g.count++; g.rule = r.rule; g.last = e.ts;
@@ -197,6 +213,7 @@ export function reflectDigest(entries, { level = null, facts = 3 } = {}) {
     roles,
     obstacles,
     rules: [...rules.values()].filter(g => g.count > 1).sort((a, b) => b.count - a.count || (a.last < b.last ? 1 : -1)),
+    exampleRule,
     decisions: decisions.reverse(),
   };
 }

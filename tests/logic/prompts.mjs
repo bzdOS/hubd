@@ -35,7 +35,7 @@ ok(/^## FLEET-REFLECT/m.test(P.renderPrompt('orchestrator', VARS)), 'prompts: th
     !/(a|the|one) (separate|second) hub_report/.test(w.replace(/not a hub_report of its own/, '')),
     'prompts: the worker is told to end its one report with the reflection, not to file it separately');
   const sense = await import(path.join(REPO, 'hub/lib/sense.mjs'));
-  const example = (fs.readFileSync(path.join(REPO, 'prompts/meta/fragments/reflect.md'), 'utf8').split('Example, the end of a report:')[1] || '').match(/```\n([\s\S]*?)```/);
+  const example = (fs.readFileSync(path.join(REPO, 'prompts/meta/fragments/reflect.md'), 'utf8').split('Example, the end of a report')[1] || '').match(/```\n([\s\S]*?)```/);
   const sp = example ? sense.splitReflect(example[1]) : { body: '', reflect: '' };
   ok(/^NEXT: /m.test(sp.body) && /^REFLECT\ngoal: .*\nresult: partial\nobstacle: permissions — .*\ninstead: .*\nrule: .*$/.test(sp.reflect),
     'prompts: the fragment\'s own example report is split by hub sense into its body and a trailing reflection');
@@ -80,8 +80,9 @@ ok(/^## FLEET-REFLECT/m.test(P.renderPrompt('orchestrator', VARS)), 'prompts: th
   const wishes = fs.readdirSync(path.join(REPO, 'prompts/meta'), { recursive: true }).filter(f => f.endsWith('.md'))
     .flatMap(f => fs.readFileSync(path.join(REPO, 'prompts/meta', f), 'utf8').split('\n').filter(l => l.startsWith('<!-- wish:')).map(() => f.replace(/^fragments\/|\.md$/g, '')));
   const per = (f) => wishes.filter(w => w === f).length;
-  ok(wishes.length === 9 && per('head-cycle') === 3 && per('turn') === 3 && per('report') === 1 && per('boundaries') === 1 && per('orch-reflect') === 1,
-    `prompts: each of the nine lessons is marked as a wish, on a line of its own (got ${JSON.stringify(wishes)})`);
+  // The tenth: reflect's "a rule is not this block's lines restated", the copy no check can tell.
+  ok(wishes.length === 10 && per('head-cycle') === 3 && per('turn') === 3 && per('report') === 1 && per('boundaries') === 1 && per('orch-reflect') === 1 &&
+    per('reflect') === 1, `prompts: each of the nine lessons is marked as a wish, on a line of its own, and reflect's one (got ${JSON.stringify(wishes)})`);
   // The lessons extend existing lines; a repeated line would cost every role on every step.
   for (const [t, n] of [['worker', 2], ['head', 2], ['orchestrator', 3]]) {
     const s = P.renderPrompt(t, VARS);

@@ -17,9 +17,15 @@ rule: <one rule for the prompt, or "none">
   then " — " and the fact with a number or a quote (exit code, seconds, refusal text). The class `none` takes no fact.
 - `result: done` is allowed only if this report named an artifact. Otherwise `partial`.
 - Do not invent measurements; with no measurement, write "not measured" and say in `instead` what you would measure it with.
+- `rule`: what this turn taught, in your own words, or `none`. Not the lines of this block restated.
+<!-- wish: a rule is not this block's lines restated; no check -->
 - Nothing follows the block. The loop counts a report without it as "a turn without reflection"; the head sees it.
+- The same lines can go as hub_report's `reflect` field instead of the block, never both:
+  `{goal, result, obstacle, obstacle_fact, instead, rule}` (`hub report --reflect '<json>'`). The field is checked
+  when the report is written: a value off a list or a missing field refuses the whole report, with the reason.
 
-Example, the end of a report:
+Example, the end of a report. It shows the form; its rule is not yours: a `rule` that holds it is refused
+in the field and named a problem in the text.
 ```
 checked the build: make pkg, exit 2; build.log line 41: permission denied on the recipe's directory
 NEXT: ask the head to move the recipe into the role's tree

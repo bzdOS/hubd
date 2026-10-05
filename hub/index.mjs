@@ -10,7 +10,7 @@ import {
   runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, runTrajectory, requireAuthor,
-  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting,
+  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runRecall } from './lib/recall.mjs';
@@ -171,6 +171,14 @@ const TOOLS = [
       limit: { type: 'integer', description: 'default 20' },
       staleDays: { type: 'integer', description: 'a hit older than this is flagged stale, default 30' },
     }, required: ['query'] } },
+
+  { name: 'hub_reflect',
+    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. Read-only.',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string', description: 'the project; its aliases count as it' },
+      since: { type: 'string', description: 'the window: a duration (7d, 12h, 30m) or a time (2026-10-01, 2026-10-01 14:00); default 7d' },
+      level: { type: 'string', enum: LEVELS, description: 'only one level: turn (every role\'s own turn), head (a head\'s over its workers), fleet (the orchestrator\'s over the heads); default all' },
+    }, required: ['project'] } },
 
   { name: 'hub_usage_add',
     description: 'Record what only YOU can see about a piece of work: seconds, tokens, cost, model. The hub cannot observe any of these, so they arrive here explicitly and are reported back as SUPPLIED, never mixed with what the hub measured itself. At least one number is required — an empty entry would record a $0 session.',
@@ -378,6 +386,8 @@ const OUTPUT_PLANS = {
   hub_presence:   [['agents', 60], ['coverage', 12]],
   hub_audit:      [['findings', 40]],
   hub_recall:     [['hits', 20]],
+  // decisions first: what was already decided matters less to a head than what is proposed again.
+  hub_reflect:    [['decisions', 30], ['rules', 30]],
   hub_agenda:     [['blocked', 40], ['agentReady', 40], ['dueSoon', 20], ['overdue', 20], ['ownerButtons', 20]],
   hub_lint:       [['findings', 40]],
   hub_resource_list: [['resources', 100]],
@@ -425,7 +435,7 @@ const DISPATCH = {
   // itself without closing an import cycle (see runAudit).
   hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }) }),
   hub_lint: runLint,
-  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall,
+  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall, hub_reflect: runReflect,
   hub_usage: runUsage, hub_usage_add: runUsageAdd,
   hub_rules: (a) => runRules({ ...a, teamRoot: teamRoot() }), hub_operator: () => runOperatorGet(),
   hub_kanban: runKanban, hub_claim: runClaim, hub_claim_check: runClaimCheck, hub_release: runRelease,

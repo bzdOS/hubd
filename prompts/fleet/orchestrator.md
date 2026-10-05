@@ -226,9 +226,9 @@ card. Appending today to the card instead of reporting it turns the one
 artifact people open under time pressure into an archive nobody can open at
 all.
 
-> **Scar.** The `kestrel` card reached 70753 characters — 313 lines, 79 dated
+> **Scar.** The `chat` card reached 70753 characters — 313 lines, 79 dated
 > entries going back three weeks — while that project's journal held ZERO
-> entries. `hub_get kestrel` then blew past the caller's context budget and
+> entries. `hub_get chat` then blew past the caller's context budget and
 > returned nothing usable: the card had grown until the tool could no longer
 > deliver it. Every dated line in it was a `hub_report` that was never written.
 

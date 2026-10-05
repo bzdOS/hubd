@@ -83,6 +83,7 @@ of the four cases above changes that key.
 hub watch --as pager --json                   # one pass: what is new since the last run
 hub watch --as pager --follow --json          # keep going; a pass when a journal file changes
 hub watch --as pager -p hubd --since 1h       # a new cursor that starts an hour back
+hub watch --as pager --follow --exec 'notify' # each entry to a command, marked when it exits 0
 ```
 
 - A new cursor shows nothing on its first pass unless `--since` places it
@@ -97,9 +98,23 @@ hub watch --as pager -p hubd --since 1h       # a new cursor that starts an hour
   marked once it is written to stdout. A reader that goes away ends the pass,
   and what it did not get is new on the next run. Two processes on one cursor
   name share it: each entry goes to one of them.
+- `--exec <command>` hands each entry to the command (run by `sh -c`) as one
+  JSON line on stdin, and marks it only when the command exits 0: an entry is
+  delivered at least once. A command that exits non-zero, or runs past 20 s
+  and is killed, stops the pass at its entry; that entry and the ones after it
+  are handed over again on the next pass. One pass then exits 1; `--follow`
+  says so once, retries each interval, and says when the command exits 0
+  again. The cursor is saved after every entry, so a watch killed in the middle
+  of a backlog hands over again only the entry it held. On SIGINT, SIGTERM or
+  SIGHUP the command in flight finishes, and the watch exits 0.
+- The command's environment has `HUBD_WATCH_KEY`, the entry's key, the same on
+  every attempt. A receiver that drops repeats by it (a Matrix transaction id,
+  an idempotency key) shows a retried entry once. The command's own stdout and
+  stderr are the watch's.
 
 [contrib/watch-to-matrix.sh](../contrib/watch-to-matrix.sh) is a complete
-bridge to a Matrix room in about a dozen lines of shell over `--follow --json`.
+bridge to a Matrix room in a dozen lines of shell over `--follow --exec`: jq
+shapes the message, curl posts it, and `HUBD_WATCH_KEY` is the transaction id.
 
 ## Transport: how a queue crosses machines
 

@@ -157,6 +157,8 @@ hub brief           # morning brief: tasks by deadline, journal, locks, queues
 hub inbox           # only what needs a DECISION: blocked/overdue/unassigned
 hub board           # every track: roles, done this week, next, what waits for you
 hub serve           # read-only board on localhost:7777 (Tracks, Live, History)
+hub reflect --project <slug>   # the turns' reflections: obstacles by class, rules proposed again
+hub watch --as me --follow     # new journal entries as they arrive, each once
 ```
 
 The board's only button is ⚙ Rules, and it opens AGENTS.md. Cards move because
@@ -255,8 +257,9 @@ history instead of appending to it, and syncing would spread the damage to every
 peer. It tries the merge outside the hub first, so a conflicted one never reaches it: no
 conflict markers, and no reader sees files change and change back (an older git than 2.38
 merges in place and aborts). A failed push is just a retry next run, because the commit is already
-local. Exit codes: `2` merge, `3` push, `4` append-only refusal (a log that lost lines, or one
-that was deleted outright).
+local. Exit codes: `2` merge conflict, `3` push, `4` append-only refusal (a log that lost lines,
+or one that was deleted outright), `5` a merge git refused before merging (local changes to a
+tracked file, or two paths that differ only by case): nothing conflicted, run `hub doctor`.
 
 Project cards are the one file several nodes rewrite. Run `hub card merge-driver` once on each
 node, and git merges them by `##` section instead of stopping on them
