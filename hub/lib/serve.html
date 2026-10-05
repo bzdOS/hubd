@@ -16,7 +16,8 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 #mode-bar{display:flex;align-items:center;gap:0;padding:8px 20px;border-bottom:1px solid #E3E3DE}
 .btn-mode{background:none;border:1px solid #D0D0C8;color:#6B6B66;font-family:inherit;font-size:11px;padding:5px 14px;cursor:pointer;letter-spacing:.04em}
 .btn-mode:first-child{border-radius:3px 0 0 3px}
-.btn-mode:last-child{border-radius:0 3px 3px 0;border-left:none}
+.btn-mode:last-child{border-radius:0 3px 3px 0}
+.btn-mode+.btn-mode{border-left:none}
 .btn-mode.active{background:#E8590C;color:#FAFAF8;border-color:#E8590C}
 /* live board */
 .board{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #E3E3DE}
@@ -109,6 +110,11 @@ details.item>summary .meta{font-weight:400}
 .t-col{border-right:1px solid #E3E3DE;min-width:0;padding-bottom:6px}
 .t-col:last-child{border-right:none}
 .more{padding:6px 14px;font-size:11px;color:#6B6B66;cursor:pointer;text-decoration:underline}
+/* summary */
+.goal{padding:0 20px 10px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.verdict{margin-top:4px}
+.verdict .full{margin-top:2px}
+.stalled{border-top:1px solid #E3E3DE;padding-bottom:6px}
 @media(max-width:900px){.t-grid,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
 @media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
 </style>
@@ -122,10 +128,12 @@ details.item>summary .meta{font-weight:400}
   </div>
 </header>
 <div id="mode-bar">
+  <button class="btn-mode" data-mode="summary">Summary</button>
   <button class="btn-mode" data-mode="tracks">Tracks</button>
   <button class="btn-mode active" data-mode="live">Live</button>
   <button class="btn-mode" data-mode="history">History</button>
 </div>
+<div id="summary-view" class="hide"><div id="summary"></div></div>
 <div id="tracks-view" class="hide">
   <details id="waiting" open><summary id="waiting-sum">Waiting for you</summary><div class="w-grid" id="waiting-body"></div></details>
   <div id="track-filter"></div>
@@ -387,6 +395,54 @@ document.getElementById('tracks-view').addEventListener('click',function(e){
   if(m){bdMore[m.dataset.more]=!bdMore[m.dataset.more];renderTracks()}
 });
 
+/* ── Summary: where each track stands, as /api/summary states it (no ranking, no cut text) ── */
+var smData=null, smTimer=null;
+function ago(m){if(m==null)return '?';if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d'}
+function verdictEl(v){
+  if(!v)return '<div class="meta">no verdict</div>';
+  return '<details class="verdict"><summary class="meta" style="cursor:pointer"><span class="'+(v.verdict==='accept'?'st-turn':'warn')+'">'+esc(String(v.verdict||'').toUpperCase())+'</span> &middot; '+
+    esc(v.agent)+' &middot; '+hm(v.ts)+'</summary><div class="full">'+esc(v.text)+'</div></details>';
+}
+function sumTask(x,when){
+  return '<div class="item"><div class="clamp2">#'+esc(x.id)+' '+esc(x.title)+'</div><div class="meta">'+
+    meta([x.assignee?'@'+esc(x.assignee):'',when,x.waitingOn&&x.waitingOn.length?'waits on #'+x.waitingOn.map(esc).join(', #'):''])+'</div>'+verdictEl(x.verdict)+'</div>';
+}
+function stalledEl(s){
+  return '<div class="item"><div>'+esc(s.role)+(s.task?' &middot; #'+esc(s.task):'')+' <span class="meta">'+hm(s.ts)+', '+ago(s.ageMin)+' ago</span></div><div class="full">'+esc(s.text)+'</div></div>';
+}
+function summaryEl(t,d){
+  var k='s:'+t.project+':';
+  var goal=t.goal?'<div class="goal">'+esc(t.goal.text)+(t.goal.from==='digest'?' <span class="meta">(first line of the digest: the card has no Goal section)</span>':'')+'</div>':
+    '<div class="goal meta">no goal: hub section add '+esc(t.project)+' goal "&hellip;" --by &lt;you&gt; --set</div>';
+  return '<section class="track"><div class="track-head"><span class="track-name">'+esc(t.project)+'</span><span class="meta">'+
+    meta([t.heads.length?'head '+esc(t.heads.join(', ')):'',t.roles.length?'roles '+esc(t.roles.join(', ')):''])+'</span></div>'+goal+
+    '<div class="t-grid"><div class="t-col">'+
+      listBlock(k+'w','In work',t.working,function(x){return sumTask(x,'open '+ago(x.ageMin))})+
+    '</div><div class="t-col">'+
+      listBlock(k+'b','Blocked',t.blocked,function(x){return sumTask(x,'open '+ago(x.ageMin))})+
+    '</div><div class="t-col">'+
+      listBlock(k+'c','Closed, '+esc(d.closedHours)+'h',t.closed,function(x){return sumTask(x,'closed '+hm(x.closed))})+
+    '</div></div>'+
+    (t.stalled.length?'<div class="stalled">'+listBlock(k+'s','Stalled',t.stalled,stalledEl)+'</div>':'')+'</section>';
+}
+function renderSummary(){
+  var d=smData; if(!d)return;
+  document.getElementById('summary').innerHTML=d.tracks.length?d.tracks.map(function(t){return summaryEl(t,d)}).join(''):
+    '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>';
+}
+function loadSummary(){
+  return fetch('/api/summary'+location.search).then(function(r){return r.json()}).then(function(d){
+    if(d.error)throw new Error(d.error);
+    smData=d; renderSummary();
+    document.getElementById('updated').textContent='as of '+d.asOf+' UTC';
+    return d;
+  }).catch(function(e){document.getElementById('updated').textContent='error: '+e.message});
+}
+document.getElementById('summary-view').addEventListener('click',function(e){
+  var m=e.target.closest('[data-more]');
+  if(m){bdMore[m.dataset.more]=!bdMore[m.dataset.more];renderSummary()}
+});
+
 var liveTimer=null;
 function setMode(mode){
   spMode=mode;
@@ -394,6 +450,8 @@ function setMode(mode){
   stopPlayback();
   if(liveTimer){clearInterval(liveTimer);liveTimer=null}
   if(bdTimer){clearInterval(bdTimer);bdTimer=null}
+  if(smTimer){clearInterval(smTimer);smTimer=null}
+  document.getElementById('summary-view').classList.toggle('hide',mode!=='summary');
   document.getElementById('live-view').classList.toggle('hide',mode!=='live');
   document.getElementById('tracks-view').classList.toggle('hide',mode!=='tracks');
   document.getElementById('hist-wrap').classList.toggle('show',mode==='history');
@@ -401,6 +459,7 @@ function setMode(mode){
   try{localStorage.setItem('hubd-mode',mode)}catch(e){}
   if(mode==='live'){loadLive();liveTimer=setInterval(loadLive,3000)}
   else if(mode==='tracks'){loadTracks();bdTimer=setInterval(loadTracks,30000)}
+  else if(mode==='summary'){loadSummary();smTimer=setInterval(loadSummary,30000)}
   else if(!spMonths.length){
     fetch('/api/sparkline'+location.search).then(function(r){return r.json()}).then(function(d){
       spMonths=d.months||[];
@@ -419,12 +478,12 @@ document.getElementById('btn-rules').onclick=function(){
 };
 document.getElementById('modal-close').onclick=function(){document.getElementById('modal').classList.remove('open')};
 document.getElementById('modal').onclick=function(e){if(e.target===this)this.classList.remove('open')};
-/* First screen: the mode last used here; else Tracks when the hub declares heads, Live when not. */
+/* First screen: the mode last used here; else Summary when the hub declares heads, Live when not. */
 (function(){
   var saved=null; try{saved=localStorage.getItem('hubd-mode')}catch(e){}
-  if(saved==='live'||saved==='history'||saved==='tracks'){setMode(saved);return}
+  if(saved==='live'||saved==='history'||saved==='tracks'||saved==='summary'){setMode(saved);return}
   if(bdTrack){setMode('tracks');return}
-  loadTracks().then(function(d){setMode(d&&d.registry&&d.registry.heads?'tracks':'live')});
+  loadTracks().then(function(d){setMode(d&&d.registry&&d.registry.heads?'summary':'live')});
 })();
 </script>
 </body>

@@ -26,6 +26,33 @@ const firstLine = (s, n) => {
   return l.length > n ? l.slice(0, n - 1) + '…' : l;
 };
 
+/** The tracks and who is on each: the heads, the roles that answer to them, and every project those
+ *  roles file under. One definition, read by the board and by the summary. With `project`, that one
+ *  track; with no heads declared, or with `all`, each project with open work, busiest first. */
+export function trackLayout({ roles = roleRegistry(), tasks = loadTasks().tasks, project, all } = {}) {
+  const heads = [...roles.values()].filter(r => r.rank === 'head' && r.project);
+  let names;
+  if (project) names = [slugify(project)];
+  else if (heads.length && !all) names = [...new Set(heads.map(h => h.project))];
+  else {
+    const n = new Map();
+    for (const t of tasks) if (t.status === 'open' && t.project) n.set(t.project, (n.get(t.project) || 0) + 1);
+    names = [...n.keys()].sort((x, y) => n.get(y) - n.get(x) || (x < y ? -1 : 1));
+  }
+  return names.map(name => {
+    const own = projectSlugSet(name);
+    const myHeads = heads.filter(h => own.has(h.project));
+    const headNames = new Set(myHeads.map(h => h.role));
+    const workers = [...roles.values()].filter(r => r.rank !== 'head' && (headNames.has(r.head) || (!r.head && r.project && own.has(r.project))))
+      .sort((x, y) => (x.role < y.role ? -1 : 1));
+    // A worker may file under a project of its own (a sub-repo, an older slug); its work is still
+    // this track's, so the track reads every project its rows serve.
+    const set = new Set(own);
+    for (const w of workers) if (w.project) for (const s of projectSlugSet(w.project)) set.add(s);
+    return { project: name, heads: myHeads, workers, set };
+  });
+}
+
 export function runBoard(a = {}) {
   const nowMs = Date.now();
   const days = Math.max(1, Math.min(90, parseInt(a.days, 10) || 7));
@@ -68,15 +95,6 @@ export function runBoard(a = {}) {
 
   /* ── tracks ── */
   const heads = [...roles.values()].filter(r => r.rank === 'head' && r.project);
-  let trackNames;
-  if (a.project) trackNames = [slugify(a.project)];
-  else if (heads.length && !a.all) trackNames = [...new Set(heads.map(h => h.project))];
-  else {
-    // no heads declared, or every track asked for: each project with open work, busiest first
-    const n = new Map();
-    for (const t of tasks) if (t.status === 'open' && t.project) n.set(t.project, (n.get(t.project) || 0) + 1);
-    trackNames = [...n.keys()].sort((x, y) => n.get(y) - n.get(x) || (x < y ? -1 : 1));
-  }
 
   const roleRow = (r, card) => {
     const p = presence.get(r.role);
@@ -104,17 +122,10 @@ export function runBoard(a = {}) {
     return row;
   };
 
-  const tracks = trackNames.map(project => {
-    const own = projectSlugSet(project);
+  const tracks = trackLayout({ roles, tasks, project: a.project, all: a.all }).map(({ project, heads: myHeads, workers, set }) => {
     const card = readCard(project);
-    const myHeads = heads.filter(h => own.has(h.project));
     const headNames = new Set(myHeads.map(h => h.role));
-    const workers = [...roles.values()].filter(r => r.rank !== 'head' && (headNames.has(r.head) || (!r.head && r.project && own.has(r.project))));
-    // A worker may file under a project of its own (a sub-repo, an older slug); its work is still
-    // this track's, so the track reads every project its rows serve.
-    const set = new Set(own);
-    for (const w of workers) if (w.project) for (const s of projectSlugSet(w.project)) set.add(s);
-    const rows = [...myHeads, ...workers.sort((x, y) => (x.role < y.role ? -1 : 1))].map(r => roleRow(r, card));
+    const rows = [...myHeads, ...workers].map(r => roleRow(r, card));
 
     const inWindow = journal.filter(e => set.has(e.project) && parseTs(e.ts).getTime() >= sinceMs);
     const decisions = [];
