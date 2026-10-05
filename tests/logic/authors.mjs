@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
-import { REPO, ok, mktmp, run, freePort, T0, core, queueLib, done } from './_h.mjs';
+import { REPO, ok, mktmp, run, freePort, T0, core, queueLib, done, reap } from './_h.mjs';
 
 // ── presence: hub_heartbeat/hub_presence — TTL freshness like activeClaims ──
 
@@ -364,10 +364,10 @@ ok(!stAfter.sessions.old && !!stAfter.sessions.fresh,
 // checkpoint for the whole team. Driven over the real HTTP transport.
 const HT = mktmp();
 const httpPort = await freePort();
-const srv = spawn('node', [path.join(REPO, 'hub/index.mjs'), '--http', String(httpPort)], {
+const srv = reap(spawn('node', [path.join(REPO, 'hub/index.mjs'), '--http', String(httpPort)], {
   env: { ...process.env, HUBD_DIR: HT, HUBD_TEAM_DIR: HT, HUBD_TOKEN: 'secret-token-0123456789', HUBD_AGENT: 'dev-hubd' },
   stdio: ['ignore', 'ignore', 'pipe'],
-});
+}));
 await new Promise((resolve, reject) => {
   const to = setTimeout(() => reject(new Error('http server did not start')), 8000);
   srv.stderr.on('data', (d) => { if (String(d).includes('serving MCP over HTTP')) { clearTimeout(to); resolve(); } });
@@ -423,9 +423,9 @@ fs.rmSync(HT, { recursive: true, force: true });
   const tid = 'a'.repeat(40);
   fs.mkdirSync(path.join(SB, 'tenants', tid, 'projects'), { recursive: true });
   const boardPort = await freePort();
-  const board = spawn('node', [path.join(REPO, 'hub/cli.mjs'), 'serve', '-p', String(boardPort)], {
+  const board = reap(spawn('node', [path.join(REPO, 'hub/cli.mjs'), 'serve', '-p', String(boardPort)], {
     env: { ...process.env, HUBD_DIR: SB, HUBD_TEAM_DIR: SB, HUBD_MULTITENANT: '1' }, stdio: ['ignore', 'pipe', 'ignore'],
-  });
+  }));
   await new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error('board did not start')), 8000);
     board.stdout.on('data', (d) => { if (String(d).includes('hubd kanban')) { clearTimeout(to); resolve(); } });
