@@ -311,7 +311,8 @@ is a folder you own. They are two separate things — and that is the whole poin
   script (goal, work in hand, blocked, closed today, the head's verdict on each
   task, what each role reports blocked; the escalations to the fleet still waiting
   for your answer; each node's sessions, disks and relays from its snapshot,
-  what is wrong in red), Tracks, a Live kanban, and a History of
+  what is wrong in red; the artifacts delivered to the track's roles), Tracks, a
+  Live kanban with the mail relay's deliveries in a row of their own, and a History of
   the journal to play back. Cards move because agents move them. The only
   button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
   agents — you manage the rules.

@@ -39,6 +39,8 @@ h1{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .e-proj{font-weight:600}
 .e-kind{color:#6B6B66}
 .e-text{overflow:hidden;text-overflow:ellipsis}
+.entry.m{grid-template-columns:90px minmax(0,1fr) minmax(0,2fr) 160px}
+.entry.m .e-text,.entry.m .e-kind{overflow-wrap:anywhere}
 /* ── History: sparkline hero + single card ── */
 #hist-wrap{display:none;flex-direction:column;align-items:center;padding:40px 20px 30px}
 #hist-wrap.show{display:flex}
@@ -121,7 +123,7 @@ details.item>summary .meta{font-weight:400}
 .roles th{padding:5px 8px;text-align:left;font-weight:400;color:#6B6B66;border-top:1px solid #ECECE8}
 .roles th:first-child{padding-left:20px}
 @media(max-width:900px){.t-grid,.t-grid.two,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
-@media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
+@media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}.entry.m{grid-template-columns:90px minmax(0,1fr)}}
 </style>
 </head>
 <body>
@@ -150,6 +152,7 @@ details.item>summary .meta{font-weight:400}
     <div class="col"><div class="col-head"><span class="col-title">In progress</span><span class="col-count" id="cnt-p">0</span></div><div id="col-p"></div></div>
     <div class="col"><div class="col-head"><span class="col-title">Done today</span><span class="col-count" id="cnt-d">0</span></div><div id="col-d"></div></div>
   </div>
+  <div><div class="act-head">Mail</div><div id="mail"></div></div>
   <div><div class="act-head">Activity</div><div id="activity"></div></div>
 </div>
 <div id="hist-wrap">
@@ -186,6 +189,14 @@ function taskEl(t){
   if(meta.length)h+='<div class="task-meta">'+meta.join(' &middot; ')+'</div>';
   return h+'</div>';
 }
+/* A delivery the mail relay recorded (kind delivery); one whose text did not read is shown whole. */
+function bytes(n){return n==null?'':n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB'}
+function mailEl(m){
+  var ts='<span class="e-ts">'+esc(String(m.ts||'').slice(5,16))+'</span>';
+  if(m.from==null)return '<div class="entry m">'+ts+'<span class="e-text" style="grid-column:2/-1">'+esc(m.agent)+': '+esc(m.text)+'</span></div>';
+  return '<div class="entry m">'+ts+'<span class="e-proj">'+esc(m.from)+' &rarr; '+esc(m.to)+'</span><span class="e-text">'+esc(m.name)+'</span>'+
+    '<span class="e-kind" title="'+esc(m.bytes)+' bytes, sha256 '+esc(m.sha256)+'">'+bytes(m.bytes)+' &middot; '+esc(m.sha256)+'</span></div>';
+}
 function renderCol(id,cntId,tasks){
   document.getElementById(cntId).textContent=tasks.length;
   document.getElementById(id).innerHTML=tasks.length?tasks.map(taskEl).join(''):'<div class="empty">no tasks</div>';
@@ -196,6 +207,8 @@ async function loadLive(){
     renderCol('col-q','cnt-q',d.queued);
     renderCol('col-p','cnt-p',d.inProgress);
     renderCol('col-d','cnt-d',d.doneToday);
+    var mail=d.mail||[];
+    document.getElementById('mail').innerHTML=mail.length?mail.map(mailEl).join(''):'<div class="empty">no deliveries</div>';
     document.getElementById('activity').innerHTML=d.inbox.length?d.inbox.map(function(e){
       return '<div class="entry"><span class="e-ts">'+esc(e.ts.slice(5,16))+'</span><span class="e-proj">'+esc(e.project)+'</span><span class="e-kind">'+esc(e.kind)+'</span><span class="e-text">'+esc((e.text||'').slice(0,120))+'</span></div>';
     }).join(''):'<div class="empty">no activity</div>';
@@ -420,6 +433,11 @@ function sumTask(x,when){
 function stalledEl(s){
   return '<div class="item"><div>'+esc(s.role)+(s.task?' &middot; #'+esc(s.task):'')+' <span class="meta">'+hm(s.ts)+', '+ago(s.ageMin)+' ago</span></div><div class="full">'+esc(s.text)+'</div></div>';
 }
+function sumMailEl(m){
+  if(m.from==null)return '<div class="item"><div>'+esc(m.agent)+' <span class="meta">'+hm(m.ts)+'</span></div><div class="full">'+esc(m.text)+'</div></div>';
+  return '<div class="item"><div>'+esc(m.from)+' &rarr; '+esc(m.to)+' <span class="meta">'+hm(m.ts)+'</span></div><div class="meta">'+
+    meta([esc(m.name),'<span title="'+esc(m.bytes)+' bytes">'+bytes(m.bytes)+'</span>','sha256 '+esc(m.sha256)])+'</div></div>';
+}
 function summaryEl(t,d){
   var k='s:'+t.project+':';
   var goal=t.goal?'<div class="goal">'+esc(t.goal.text)+(t.goal.from==='digest'?' <span class="meta">(first line of the digest: the card has no Goal section)</span>':'')+'</div>':
@@ -433,7 +451,8 @@ function summaryEl(t,d){
     '</div><div class="t-col">'+
       listBlock(k+'c','Closed, '+esc(d.closedHours)+'h',t.closed,function(x){return sumTask(x,'closed '+hm(x.closed))})+
     '</div></div>'+
-    (t.stalled.length?'<div class="stalled">'+listBlock(k+'s','Stalled',t.stalled,stalledEl)+'</div>':'')+'</section>';
+    (t.stalled.length?'<div class="stalled">'+listBlock(k+'s','Stalled',t.stalled,stalledEl)+'</div>':'')+
+    (t.mail&&t.mail.length?'<div class="stalled">'+listBlock(k+'m','Mail',t.mail,sumMailEl)+'</div>':'')+'</section>';
 }
 function escalationsEl(e,d){
   if(!e||!e.fleet.length)return '';

@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
 import { LEVELS, checkReflect, readReflect, reflectDigest, renderReflect, splitReflect } from './reflect.mjs';
+import { deliveries, DELIVERY, MAIL_LIMIT } from './mail.mjs';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
 // materialised protocol matches the code actually running there).
@@ -4594,11 +4595,13 @@ export function runKanban({ doneWindowHours = 24 } = {}) {
     .sort((a, b) => b.done > a.done ? 1 : -1)
     .map(mapTask);
 
-  const inbox = [...journalEntries()]
-    .sort((a, b) => b.ts > a.ts ? 1 : -1)
+  // newest first; of one minute, the later line first. A delivery is mail, a row of its own (mail.mjs).
+  const journal = [...journalEntries()].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)).reverse();
+  const inbox = journal.filter(e => e.kind !== DELIVERY)
     .slice(0, 30)
     .map(e => ({ ts: e.ts, project: e.project, agent: e.agent, kind: e.kind, text: e.text }));
+  const mail = deliveries(journal).slice(0, MAIL_LIMIT);
 
-  return { queued, inProgress, doneToday, inbox, generated: now() };
+  return { queued, inProgress, doneToday, inbox, mail, generated: now() };
 }
 
