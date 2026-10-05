@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.50 — 2026-10-05
+
+- **`mesh-sync` packs the hub itself, once a run, in the foreground.** git packs after a commit,
+  a fetch or a merge, in a process it forks into the background. On macOS that process crashed
+  after the fork and left `.git/gc.log.lock`, and every background gc after it stopped on that
+  lock without a word: one hub went seven weeks unpacked, 86000 loose objects and 3.75 GiB, and
+  every run redid the part of gc that comes before the fork, once for each command that started
+  one. git's own gc is now off for the script's commands (`maintenance.auto=false`, read by git
+  2.31+), and one `git gc --auto` runs after the push, its errors in the sync's log. A failed
+  push still packs. A foreground gc never takes the lock, so a hub that has one needs nothing
+  done to it; its first run packs the backlog, which `git -C <hub> gc` by hand does ahead of time.
+
 ## 0.9.49 — 2026-10-05
 
 - **A queue read on another node no longer counts full there.** The send limit took a block as

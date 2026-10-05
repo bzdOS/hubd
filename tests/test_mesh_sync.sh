@@ -281,6 +281,35 @@ git -C "$TMP/origin3" add -A && git -C "$TMP/origin3" -c user.name=t -c user.ema
 HUBD_DIR="$TMP/p" sh "$SCRIPT" >"$TMP/out8" 2>&1
 ok "$([ "$(gw "$TMP/p")" = 0 ] && echo 1 || echo 0)" "private hub: modes are not touched"
 
+# ── packing: one gc a run, in the foreground ──────────────────────────────────
+# git's own gc forks into the background. On macOS the forked process crashed and left
+# .git/gc.log.lock, and every background gc after it stopped on that lock without a word: one hub
+# went seven weeks unpacked. Two packs and gc.autoPackLimit=1 make a gc due here; the stale lock is
+# the one that hub had. The origin packs on its own after a push (receive.autogc); that is the
+# peer's housekeeping, not this node's, so it is off here and the trace counts only the node.
+mkhub "$TMP/origin5"; git -C "$TMP/origin5" config receive.denyCurrentBranch ignore
+git -C "$TMP/origin5" config receive.autogc false
+git clone -q "$TMP/origin5" "$TMP/h" && git -C "$TMP/h" repack -q
+printf 'more\n' > "$TMP/h/notes.md"
+git -C "$TMP/h" add -A && git -C "$TMP/h" -c user.name=t -c user.email=t@t commit -q -m more
+git -C "$TMP/h" repack -q && git -C "$TMP/h" config gc.autoPackLimit 1
+: > "$TMP/h/.git/gc.log.lock"
+printf '{"ts":"2026-09-01 13:00","kind":"note","text":"h"}\n' >> "$TMP/h/journal.h.jsonl"
+GIT_TRACE="$TMP/trace" HUBD_DIR="$TMP/h" sh "$SCRIPT" >"$TMP/out9" 2>&1; rc=$?
+packs=$(ls "$TMP/h/.git/objects/pack" | grep -c '\.pack$')
+ok "$([ $rc -eq 0 ] && [ "$packs" = 1 ] && echo 1 || echo 0)" "gc: a gc that is due packs, past a stale gc.log.lock (got $rc, $packs packs)"
+gcs=$(grep -c 'built-in: git gc ' "$TMP/trace"); mnt=$(grep -c 'maintenance run' "$TMP/trace")
+ok "$([ "$gcs" = 1 ] && [ "$mnt" = 0 ] && echo 1 || echo 0)" \
+  "gc: one gc a run, none started by the commit, fetch or merge (got $gcs gc, $mnt maintenance)"
+# A failed push still packs: a peer down for days must not leave the node unpacked for days.
+git -C "$TMP/h" config remote.origin.pushurl "$TMP/nowhere"
+printf '{"ts":"2026-09-01 13:01","kind":"note","text":"h2"}\n' >> "$TMP/h/journal.h.jsonl"
+: > "$TMP/trace"
+GIT_TRACE="$TMP/trace" HUBD_DIR="$TMP/h" sh "$SCRIPT" >"$TMP/out10" 2>&1; rc=$?
+gcs=$(grep -c 'built-in: git gc ' "$TMP/trace")
+ok "$([ $rc -eq 3 ] && [ "$gcs" = 1 ] && grep -q 'push failed' "$TMP/out10" && echo 1 || echo 0)" \
+  "gc: a failed push still packs, and still exits 3 and says so (got $rc, $gcs gc)"
+
 echo ""
 echo "$pass pass, $fail fail"
 [ "$fail" -eq 0 ] || exit 1

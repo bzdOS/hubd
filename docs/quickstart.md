@@ -259,7 +259,7 @@ a plain pull/push loop is a working mesh. No GitHub required.
 Don't write that loop yourself — the package ships it:
 
 ```bash
-sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"   # commit, fetch, merge, push; exits in ms when idle
+sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"   # commit, fetch, merge, push, pack; exits in ms when idle
 ```
 
 Schedule it every minute (`launchd`, a systemd user timer, cron). It refuses to
@@ -268,7 +268,9 @@ history instead of appending to it, and syncing would spread the damage to every
 peer. It tries the merge outside the hub first, so a conflicted one never reaches it: no
 conflict markers, and no reader sees files change and change back (an older git than 2.38
 merges in place and aborts). A failed push is just a retry next run, because the commit is already
-local. Exit codes: `2` merge conflict, `3` push, `4` append-only refusal (a log that lost lines,
+local. It packs the hub's git objects itself, once a run, in the foreground, and keeps git's own
+background gc off for its commands: on macOS that gc can crash and leave a lock that silently stops
+every gc after it. Exit codes: `2` merge conflict, `3` push, `4` append-only refusal (a log that lost lines,
 or one that was deleted outright), `5` a merge git refused before merging (local changes to a
 tracked file, or two paths that differ only by case): nothing conflicted, run `hub doctor`.
 
