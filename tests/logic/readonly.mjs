@@ -63,7 +63,7 @@ const READS = [
   ['version'], ['help'], ['status'], ['brief'], ['inbox'], ['plan'], ['trajectory', 'alpha'], ['whereami', H], ['log'], ['log', '--json'],
   ['task', 'list'], ['task', 'list', '--json'], ['task', 'get', 'cedar-1'], ['claim', 'check', '-p', 'alpha', 'src'],
   ['presence'], ['presence', '--json'], ['graph'], ['now'], ['agenda'], ['board'], ['board', '--json'],
-  ['recall', 'thing'], ['usage'], ['rules'], ['operator'], ['audit'], ['lint'], ['sections'], ['harvest'], ['prompts', 'render', 'worker'],
+  ['recall', 'thing'], ['reflect', '--project', 'alpha'], ['reflect', '--project', 'alpha', '--json'], ['usage'], ['rules'], ['operator'], ['audit'], ['lint'], ['sections'], ['harvest'], ['prompts', 'render', 'worker'],
   ['gc'], ['gc', '--json'], ['resource', 'list'], ['resource', 'get', 'box'],
   ['cards', 'compact'], ['cards', 'merge-sections'], ['queue', 'status'], ['queue', 'gc'], ['doctor'],
 ];

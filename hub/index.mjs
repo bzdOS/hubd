@@ -17,6 +17,7 @@ import { runRecall } from './lib/recall.mjs';
 import { queueWait, queueWaitAll, queueSummaryForBrief, queueAck, briefWithQueues, queueSendChecked } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
 import { promptList, renderPrompt, templateNames } from './lib/prompts.mjs';
+import { LEVELS, OBSTACLES, RESULTS, VERDICTS } from './lib/reflect.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -60,6 +61,18 @@ const TOOLS = [
       force: { type: 'boolean', description: 'NEXT: replaces the card\'s next step. If the current step was set by an owner role, a non-owner NEXT: is refused with the step\'s text unless force is true. The response always carries nextReplaced {text, by, at} when a step was replaced, and the card keeps one dated `prev` line.' },
       staleDays: { type: 'integer', description: 'the reply carries digestAgeDays, and digestStale + a hint once the digest trails the project journal by this many days (default 7) — you are the one holding the facts that would fix it' },
       to: { type: 'string', description: 'addressee: a role ("orchestrator") or "fleet" — the entry stays public but readers filter by it. A TO: prefix inside the text body appends to this; the parameter and the prefix are merged.' },
+      reflect: { type: 'object', description: 'the turn\'s reflection as fields, instead of the REFLECT block at the end of text (not with it). Checked: a value off a list or a missing field refuses the whole report. Stored on the journal entry, written into its text as the block, and counted by `hub reflect`. A REFLECT block in text is still read, not checked; the reply\'s reflect.problems says what a digest could not use.',
+        properties: {
+          level: { type: 'string', enum: LEVELS, description: 'turn (default): this turn, any role; head: a head\'s over its workers; fleet: the orchestrator\'s over the heads' },
+          goal: { type: 'string', description: 'what the turn was meant to deliver' },
+          result: { type: 'string', enum: RESULTS, description: 'done only if this report names an artifact' },
+          obstacle: { type: 'string', enum: OBSTACLES },
+          obstacle_fact: { type: 'string', description: 'the fact with a number or a quote (exit code, seconds, refusal text), or "not measured"; required unless obstacle is none, refused with none' },
+          instead: { type: 'string', description: 'what you would do differently' },
+          rule: { type: 'string', description: 'one rule for the prompt, or "none"' },
+          decisions: { type: 'array', description: 'head and fleet only: the verdict on each proposal from below',
+            items: { type: 'object', properties: { rule: { type: 'string' }, verdict: { type: 'string', enum: VERDICTS }, reason: { type: 'string' } }, required: ['rule', 'verdict'] } },
+        }, required: ['goal', 'result', 'obstacle', 'instead', 'rule'] },
     }, required: ['project', 'agent', 'text'] } },
 
   { name: 'hub_status', description: 'Snapshot of every project at once: the latest digest of each, when it was last synced, and its open-task count, plus the most recent shared-journal entries. A project whose card has fallen behind its OWN journal carries digestStale {daysBehind, lastJournal} — the card still reads fresh while the work moved on. Best for orienting at the start of a session. For a deadline-sorted to-do list use hub_brief; for one project in depth use hub_get.',

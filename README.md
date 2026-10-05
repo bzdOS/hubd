@@ -282,6 +282,15 @@ is a folder you own. They are two separate things — and that is the whole poin
   without a model and wakes the head only on an event; with no private patterns
   declared it passes no branch. A loop reports its state as heartbeat fields
   (`--state`, `--turn`, `--empty` ...), so nothing parses its wording.
+- **Reflections** — a turn's report ends with a reflection: goal, result,
+  obstacle (a class from a fixed list, plus the fact), what to do instead, and
+  a proposed rule. It goes as the report's `reflect` field, checked against
+  the lists, or as the `REFLECT` block in the text, read as written with what
+  is off the lists named in the reply. `hub reflect --project <p>` counts them
+  per role and per obstacle class, shows the latest facts and the rules more
+  than one turn proposed, and lists a head's decisions on rules; `--json`
+  keeps every key, so a script can read it. `hub recall` finds a rule or an
+  obstacle as a hit of its own.
 - **Resources & relationships** — infra is a card too: hosts, vms, services,
   endpoints, providers under `resources/`, with structured frontmatter
   (type, address, os, provider, status) and **typed `[[wikilink]]` edges**
