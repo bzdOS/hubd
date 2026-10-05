@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execSync } from 'node:child_process';
-import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done } from './_h.mjs';
+import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done, reap } from './_h.mjs';
 
 // ── queue-depth peek: non-consuming, mesh-safe ──
 const qRoot1 = mktmp();
@@ -876,7 +876,7 @@ const AK = mktmp();
   fs.writeFileSync(path.join(hub, 'limits.json'), JSON.stringify({ queue: { exempt: ['smoketest'] } }));
   ok(/send limit not applied to smoketest \(limits\.json queue\.exempt/.test(q(['doctor']).out), 'doctor: a role exempt from the send limit is named');
   fs.rmSync(path.join(hub, 'limits.json'));
-  const bg = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'queue', 'wait', 'smoketest', '--timeout', '6'], { env: { ...process.env, ...env }, cwd: team, stdio: 'ignore' });
+  const bg = reap(spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'queue', 'wait', 'smoketest', '--timeout', '6'], { env: { ...process.env, ...env }, cwd: team, stdio: 'ignore' }));
   const marker = path.join(team, '.qstate', 'smoketest.waiter');
   for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await new Promise(r => setTimeout(r, 50));
   ok(new RegExp(`live waiter: pid ${bg.pid}\\b`).test(q(['doctor']).out), 'doctor: a live waiter is shown with its pid');

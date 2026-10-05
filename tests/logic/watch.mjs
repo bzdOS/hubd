@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { REPO, T0, ok, cli, done, mktmp } from './_h.mjs';
+import { REPO, T0, ok, cli, done, mktmp, reap } from './_h.mjs';
 
 const W = await import(path.join(REPO, 'hub/lib/watch.mjs'));
 const throws = (f, re) => { try { f(); return false; } catch (e) { return re.test(e.message); } };
@@ -138,7 +138,7 @@ append('journal.pine.jsonl', entry('one'), entry('two'));
   // --follow: a report written while it runs is printed; a signal ends it with the entry marked
   const env = { ...process.env, HUBD_DIR: T0 };
   delete env.HUBD_SUBSCRIBER;
-  const child = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'follower', '--follow', '--interval', '0.2', '--json'], { env });
+  const child = reap(spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'follower', '--follow', '--interval', '0.2', '--json'], { env }));
   let out = '', err = '';
   child.stdout.on('data', d => { out += d; });
   child.stderr.on('data', d => { err += d; });
@@ -216,7 +216,7 @@ const until = async (f, ms = 8000) => { const t = Date.now(); while (!f() && Dat
   delete env.HUBD_SUBSCRIBER;
   const gate = XF('gate');
   const cmd = `test -e '${gate}' || exit 1; cat >> '${XF('followed')}'`;
-  const child = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-follow', '--follow', '--interval', '0.2', '--exec', cmd], { env });
+  const child = reap(spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-follow', '--follow', '--interval', '0.2', '--exec', cmd], { env }));
   let err = '';
   child.stderr.on('data', d => { err += d; });
   await until(() => /a new cursor/.test(err));
@@ -230,7 +230,7 @@ const until = async (f, ms = 8000) => { const t = Date.now(); while (!f() && Dat
 
   // a signal while a command runs: it finishes, the entry is marked, the rest waits
   const slow = `cat >/dev/null; touch '${XF('started')}'; sleep 1; echo "$HUBD_WATCH_KEY" >> '${XF('slow')}'`;
-  const c2 = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-sig', '--follow', '--interval', '0.2', '--exec', slow], { env });
+  const c2 = reap(spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-sig', '--follow', '--interval', '0.2', '--exec', slow], { env }));
   let err2 = '';
   c2.stderr.on('data', d => { err2 += d; });
   await until(() => /a new cursor/.test(err2));
@@ -257,7 +257,7 @@ else {
   fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n{ for a in "$@"; do echo "arg $a"; done; echo "data $(cat)"; } >> '${seen}'\ntest -e '${seen}.once' && exit 0\ntouch '${seen}.once'; exit 22\n`, { mode: 0o755 });
   const env = { ...process.env, HUBD_DIR: T0, PATH: `${bin}:${process.env.PATH}`, MATRIX_HS: 'https://matrix.example.org', MATRIX_ROOM: '!room:example.org', MATRIX_TOKEN: 'tok' };
   delete env.HUBD_SUBSCRIBER;
-  const child = spawn('/bin/sh', [path.join(REPO, 'contrib/watch-to-matrix.sh'), '-p', 'alpha', '--interval', '0.2'], { env });
+  const child = reap(spawn('/bin/sh', [path.join(REPO, 'contrib/watch-to-matrix.sh'), '-p', 'alpha', '--interval', '0.2'], { env }));
   let err = '';
   child.stderr.on('data', d => { err += d; });
   await until(() => /a new cursor/.test(err));

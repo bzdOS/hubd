@@ -1,5 +1,5 @@
 // _h.mjs — what every file in tests/logic shares: the engine loaded against a throwaway hub,
-// the CLI runner, ok(), and temp dirs that are removed when the file exits, pass or fail.
+// the CLI runner, ok(), and temp dirs and background processes, gone when the file exits, pass or fail.
 // A file runs alone (node tests/logic/queue.mjs) or with the rest (node tests/run.mjs).
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,7 +16,15 @@ export const ok = (c, m) => { c ? pass++ : fail++; console.log((c ? 'PASS ' : 'F
 
 const temps = [];
 export const mktmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'hubd-t-')); temps.push(d); return d; };
-process.on('exit', () => { for (const d of temps) fs.rmSync(d, { recursive: true, force: true }); });
+// A process a file starts in the background (a server, a follower) is ended when the file exits,
+// pass or fail, before its temp dirs go: one that outlived a failed run kept polling a hub that
+// was gone, for hours.
+const kids = [];
+export const reap = (child) => { kids.push(child); return child; };
+process.on('exit', () => {
+  for (const c of kids) if (c.exitCode === null && c.signalCode === null) c.kill('SIGTERM');
+  for (const d of temps) fs.rmSync(d, { recursive: true, force: true });
+});
 
 // run the CLI, never throw — capture non-zero exits (doctor exits 1 on warnings)
 export function run(args, env) {
