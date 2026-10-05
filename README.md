@@ -119,7 +119,8 @@ the always-current protocol.
 worker, a head and an orchestrator run by, as one template per kind of role with
 shared fragments; everything specific to a role comes in as a variable.
 `hub prompts render worker --vars vars.json --out rules.md` writes a role's rules,
-and `--check rules.md` exits 1 once that file no longer matches the render.
+and `--check rules.md` exits 1 once that file no longer matches the render. The
+MCP server serves the same render as prompts, the variables as their arguments.
 
 **Running it for a team?** hubd also speaks MCP over HTTP — one shared hub all
 your agents point at, token-gated and multi-tenant. See

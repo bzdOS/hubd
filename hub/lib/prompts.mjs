@@ -29,22 +29,58 @@ export function templateNames(dir = META_DIR) {
 
 const lineAt = (text, offset) => text.slice(0, offset).split('\n').length;
 
-export function renderPrompt(name, vars = {}, dir = META_DIR) {
+/* The variables a template declares on its first line, in their order. */
+export function templateVars(name, dir = META_DIR) {
   const file = path.join(dir, name + '.md');
   if (!NAME.test(String(name)) || !fs.existsSync(file))
     throw new Error(`no template "${name}" in ${dir} — have: ${templateNames(dir).join(', ') || '(none)'}`);
-  if (!vars || typeof vars !== 'object' || Array.isArray(vars)) throw new Error('vars must be a JSON object');
-  const top = fs.readFileSync(file, 'utf8');
-  const m = top.match(DECL);
+  const m = fs.readFileSync(file, 'utf8').match(DECL);
   if (!m) throw new Error(`${name}.md declares no variables: its first line must be <!-- vars: a, b, c -->`);
   const declared = m[1].split(',').map(s => s.trim()).filter(Boolean);
   const bad = declared.filter(v => !/^[a-z_]+$/.test(v));
   if (bad.length) throw new Error(`${name}.md:1: not a variable name: ${bad.join(', ')} (lower case and _ only)`);
+  return declared;
+}
+
+/* What prompts/meta/README.md says of each template and each variable, from its two tables. The
+ * README is where an author documents a variable, so the MCP prompt list reads it there, and a
+ * variable without a row goes out with no description. */
+export function promptDocs(dir = META_DIR) {
+  const templates = {}, vars = {};
+  let md = '';
+  try { md = fs.readFileSync(path.join(dir, 'README.md'), 'utf8'); } catch {}
+  for (const l of md.split('\n')) {
+    let m = l.match(/^\| \[([\w-]+)\.md\]\([^)]*\) \| (.+?) \|$/);
+    if (m) { templates[m[1]] = m[2]; continue; }
+    m = l.match(/^\| `([a-z_]+)` \| (.+?) \|$/);
+    if (m) vars[m[1]] = m[2];
+  }
+  return { templates, vars };
+}
+
+/* The templates as MCP prompts: every declared variable is a required argument. */
+export function promptList(dir = META_DIR) {
+  const docs = promptDocs(dir);
+  return templateNames(dir).map(name => ({
+    name,
+    description: `The rules a role runs by, rendered from this hubd's prompts/meta/${name}.md` + (docs.templates[name] ? ` — ${docs.templates[name]}.` : '.'),
+    arguments: templateVars(name, dir).map(v => ({ name: v, ...(docs.vars[v] ? { description: docs.vars[v] } : {}), required: true })),
+  }));
+}
+
+/* A render error carries `args` when the caller's variables are at fault (missing, blank, not
+ * text), so the MCP server can answer "invalid params" there and "internal error" for a broken
+ * template. */
+const argError = (message, args) => Object.assign(new Error(message), { args });
+
+export function renderPrompt(name, vars = {}, dir = META_DIR) {
+  const declared = templateVars(name, dir);
+  if (!vars || typeof vars !== 'object' || Array.isArray(vars)) throw argError('vars must be a JSON object', []);
 
   const known = new Set(declared), used = new Set(), unknown = [], missing = new Set();
   const value = (k) => {
     const v = vars[k];
-    if (v !== undefined && v !== null && typeof v === 'object') throw new Error(`variable ${k} must be text, not ${Array.isArray(v) ? 'a list' : 'an object'}`);
+    if (v !== undefined && v !== null && typeof v === 'object') throw argError(`variable ${k} must be text, not ${Array.isArray(v) ? 'a list' : 'an object'}`, [k]);
     const s = v === undefined || v === null ? '' : String(v);
     if (!s.trim()) { missing.add(k); return ''; }
     return s.replace(/^\n+|\n+$/g, '').trimEnd();
@@ -78,7 +114,7 @@ export function renderPrompt(name, vars = {}, dir = META_DIR) {
   const unused = declared.filter(v => !used.has(v));
   if (unused.length) errors.push(`declared in ${name}.md but never used: ${unused.join(', ')}`);
   if (missing.size) errors.push(`missing or blank variable${missing.size > 1 ? 's' : ''} for ${name}: ${[...missing].join(', ')}`);
-  if (errors.length) throw new Error(errors.join('; '));
+  if (errors.length) throw Object.assign(new Error(errors.join('; ')), missing.size ? { args: [...missing] } : {});
   return out;
 }
 
