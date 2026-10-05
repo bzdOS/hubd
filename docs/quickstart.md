@@ -209,9 +209,13 @@ file.
 
 A message is prose: over 16 KB, or carrying a long base64/hex run, a diff, a git
 bundle or a PEM block, it is refused — put the artifact in a file and send its
-path, size and sha256. A role already holding 50 unread messages or 256 KB takes
-no more until its reader catches up (`HUBD_MSG_MAX`, `HUBD_QUEUE_MAX_MSGS`,
-`HUBD_QUEUE_MAX_BYTES`; 0 turns a limit off). `hub doctor` warns at 80%.
+path, size and sha256 (`HUBD_MSG_MAX`). A role already holding 50 unread messages
+or 256 KB takes no more until its reader catches up. The hub sets these in
+`limits.json`, `{"queue": {"msgs": 50, "bytes": 262144}}`; `HUBD_QUEUE_MAX_MSGS`
+and `HUBD_QUEUE_MAX_BYTES` set on a node win there, and 0 turns a limit off.
+`hub doctor` warns at 80%. A role whose reader reads its queue file itself, not
+through `hub queue wait`, leaves hubd nothing to count its reads by: list it in
+`queue.exempt` of the same file.
 
 Experiments leave roles behind — a queue file is created by the first send and
 never removed, so old test roles keep showing pending work for a consumer that

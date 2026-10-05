@@ -335,6 +335,20 @@ function recordRead(qdir, reader, f, off, mark) {
   });
 }
 
+/* A reader with nothing new still says how far it got, once per wait. A reader on a hubd from
+ * before marks left none, and its cursor never leaves its node: until the next message arrived,
+ * every other node counted a queue it had read to the end as unread — and a queue counted full
+ * refuses that next message from every node but the reader's own. The cursor's watermark is the
+ * header of the last block handed out, what a delivery publishes; written only where it differs. */
+function publishPositions(qdir, stateDir, files, reader) {
+  const have = readJson(markFile(qdir, reader.role, nodeName()), {}) || {};
+  const slot = (reader.sub ? (have.subs || {})[reader.sub] : have.files) || {};
+  for (const f of files) {
+    const { off, mark } = readCursor(path.join(stateDir, `${f}.offset`));
+    if (mark && !(slot[f] && slot[f].mark === mark)) recordRead(qdir, reader, f, off, mark);
+  }
+}
+
 /** Every node's read marks for `role`, as [{ node, files, subs }]. */
 function readMarks(qdir, role) {
   let names = [];
@@ -613,17 +627,30 @@ export function parseTaskRefs(text) {
  * gets everything at once when it comes back, and a role loop that is handed more than it can
  * hold drops it: the message that mattered is buried under the ones sent after it. So a send is
  * refused once the role already holds HUBD_QUEUE_MAX_MSGS unread messages (default 50) or
- * HUBD_QUEUE_MAX_BYTES unread bytes (default 256 KB); 0 turns either off. An owner role is
- * exempt: a human reads the file, not a loop. */
+ * HUBD_QUEUE_MAX_BYTES unread bytes (default 256 KB); 0 turns either off. The hub sets its own
+ * in <hub>/limits.json, {"queue": {"msgs": N, "bytes": N, "exempt": [role, ...]}}, which travels
+ * with the mesh; a variable set on a node wins over it there. An owner role is exempt: a human
+ * reads the file, not a loop. So is a role listed in `exempt`: one whose reader reads the file
+ * itself rather than through `hub queue wait`, and so leaves no cursor, mark or ack — hubd sees
+ * none of its reads, and would count its whole queue unread for ever. */
 export function queueLimits() {
-  return { msgs: envLimit('HUBD_QUEUE_MAX_MSGS', 50), bytes: envLimit('HUBD_QUEUE_MAX_BYTES', 262144) };
+  let q = {};
+  try { q = JSON.parse(fs.readFileSync(path.join(HUB, 'limits.json'), 'utf8')).queue || {}; } catch {}
+  const own = (v, dflt) => (Number.isInteger(v) && v >= 0 ? v : dflt);
+  return {
+    msgs: envLimit('HUBD_QUEUE_MAX_MSGS', own(q.msgs, 50)),
+    bytes: envLimit('HUBD_QUEUE_MAX_BYTES', own(q.bytes, 262144)),
+    exempt: Array.isArray(q.exempt) ? q.exempt.filter(r => typeof r === 'string' && r) : [],
+  };
 }
 
 /* What waits unread in `role`'s queue, as { msgs, bytes }: the blocks past the furthest read
  * position — this node's cursor and every node's read mark; for a broadcast role, the reader
- * furthest ahead in each file — less every block the ack log says was handed out. A reader on a
- * hubd from before read marks leaves no mark, but its acks travel with the mesh. Every doubt is
- * counted as read: the cap refuses on this number, and a refusal must not be wrong. */
+ * furthest ahead in each file — and past the last block the ack log says was handed out. A reader
+ * on a hubd from before read marks leaves no mark, but its acks travel with the mesh, and a reader
+ * hands a file out in order: a block it acknowledged was reached past every block above it,
+ * including those written before blocks had ids, which no ack can name. Every doubt is counted as
+ * read: the cap refuses on this number, and a refusal must not be wrong. */
 export function unreadLoad(role, { root } = {}) {
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
@@ -648,8 +675,10 @@ export function unreadLoad(role, { root } = {}) {
     let tail; try { tail = readTail(full, off, size); } catch { continue; }
     const handed = new Set(readAcks(acksPath(full)).map(a => a.id));
     const heads = [...tail.matchAll(BLOCK_RE)];
+    let last = -1;
+    heads.forEach((m, i) => { if (m[3] && handed.has(Number(m[3]))) last = i; });
     heads.forEach((m, i) => {
-      if (m[3] && handed.has(Number(m[3]))) return;
+      if (i <= last) return;
       msgs++;
       bytes += Buffer.byteLength(tail.slice(m.index, i + 1 < heads.length ? heads[i + 1].index : tail.length), 'utf8');
     });
@@ -659,12 +688,12 @@ export function unreadLoad(role, { root } = {}) {
 
 /* The roles whose unread load has reached `ratio` of either limit, counted the way a send counts
  * it, as [{ role, msgs, bytes, full }] fullest first: the ones a send will soon be refused for, or
- * already is (`full`). An owner role is never refused, so never listed. */
+ * already is (`full`). An owner role or an exempt one is never refused, so never listed. */
 export function queuesNearFull({ root, ratio = 0.8 } = {}) {
   const r = root ?? resolveQueueRoot();
   const lim = queueLimits();
   if (!lim.msgs && !lim.bytes) return [];
-  const owners = new Set(ownerRoles());
+  const owners = new Set([...ownerRoles(), ...lim.exempt]);
   const out = [];
   for (const role of new Set(listShards(path.join(r, 'queues')).map(s => s.role))) {
     if (owners.has(role)) continue;
@@ -678,11 +707,11 @@ export function queuesNearFull({ root, ratio = 0.8 } = {}) {
 /** Refuse a send of `add` bytes to `role` when its queue is already at the limit. */
 function assertRoom(role, root, add) {
   const lim = queueLimits();
-  if ((!lim.msgs && !lim.bytes) || ownerRoles().includes(role)) return;
+  if ((!lim.msgs && !lim.bytes) || ownerRoles().includes(role) || lim.exempt.includes(role)) return;
   const u = unreadLoad(role, { root });
   if ((lim.msgs && u.msgs + 1 > lim.msgs) || (lim.bytes && u.bytes + add > lim.bytes))
     throw new Error(`queue full: ${role} already holds ${u.msgs} unread message(s), ${u.bytes} bytes; the limit is ` +
-      `${lim.msgs || 'no'} messages / ${lim.bytes || 'no'} bytes (HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES). Its reader is ` +
+      `${lim.msgs || 'no'} messages / ${lim.bytes || 'no'} bytes (HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES, or queue in <hub>/limits.json). Its reader is ` +
       `behind or stopped, and more messages only bury the first ones: check it (hub queue status ${role}) before sending again.`);
 }
 
@@ -906,6 +935,9 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
     const bad = cursorStalls(stateDir, sourceFiles());
     if (bad.length) throw new QueueStalled(bad[0].file, { code: bad[0].code });
   }
+  const reader = { role, sub: fanout ? subscriber : null };
+  // Never fatal: a mark that could not be written only leaves the other nodes' counts behind.
+  try { publishPositions(qdir, stateDir, sourceFiles(), reader); } catch {}
 
   writeWaiter();
   try {
@@ -918,7 +950,7 @@ export async function queueWait(role, { timeout = 540, root, subscriber, fromNow
         let t = null;
         // One unreadable cursor must not hide the files that ARE deliverable — but it is
         // reported either way, never swallowed.
-        try { t = drainFile(qdir, stateDir, f, { role, sub: fanout ? subscriber : null }); }
+        try { t = drainFile(qdir, stateDir, f, reader); }
         catch (e) { if (e && e.name === 'QueueStalled') { stalled.push(e); continue; } throw e; }
         if (t) parts.push(t);
       }

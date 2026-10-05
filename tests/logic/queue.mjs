@@ -795,6 +795,30 @@ const AK = mktmp();
     Array.from({ length: 50 }, (_, i) => JSON.stringify({ id: i + 1, status: 'delivered', ts: '2026-10-03 10:00' })).join('\n') + '\n');
   ok(queueLib.unreadLoad('da', { root: D }).msgs === 0 && send('da') === '', 'depth: a block the ack log says was handed out is not unread');
 
+  // blocks from before ids sit above the first acknowledged one, and a reader hands a file out in order
+  const dl = path.join(D, 'queues', 'dl.cedar.queue.md');
+  fs.writeFileSync(dl, Array.from({ length: 50 }, (_, i) => `\n## 2026-09-20 10:${String(i).padStart(2, '0')} · from dev-t\nold order ${i}\n`).join('') +
+    '\n## 2026-10-01 10:00 · from dev-t · id 1\nthe first order with an id\n\n## 2026-10-01 10:05 · from dev-t\nappended by hand, never handed out\n');
+  ok(queueLib.unreadLoad('dl', { root: D }).msgs === 52 && /^queue full: dl/.test(send('dl')), 'depth: with no position and no ack, every block is unread');
+  fs.writeFileSync(path.join(D, 'queues', 'dl.cedar.acks'), JSON.stringify({ id: 1, status: 'delivered', ts: '2026-10-01 10:01' }) + '\n');
+  ok(queueLib.unreadLoad('dl', { root: D }).msgs === 1 && send('dl') === '',
+    'depth: a block the ack log names was reached past every block above it, those without an id too; only what follows it is unread');
+
+  // a reader from before read marks: its cursor at the end with a watermark, no mark, no ack
+  for (let i = 1; i <= 50; i++) send('dm', 'order ' + i);
+  const dmText = fs.readFileSync(path.join(D, 'queues', 'dm.cedar.queue.md'), 'utf8');
+  fs.writeFileSync(path.join(D, '.qstate', 'dm.cedar.queue.md.offset'), `${Buffer.byteLength(dmText)}\n${dmText.match(/^## .*$/gm).pop()}\n`);
+  const elsewhere = (f) => {   // what a node without this cursor counts
+    fs.renameSync(path.join(D, '.qstate'), path.join(D, '.qstate-away'));
+    try { return f(); } finally { fs.renameSync(path.join(D, '.qstate-away'), path.join(D, '.qstate')); }
+  };
+  ok(queueLib.unreadLoad('dm', { root: D }).msgs === 0 && elsewhere(() => queueLib.unreadLoad('dm', { root: D }).msgs) === 50,
+    'depth: a queue read to its end by a reader from before marks is empty on its node and full on every other');
+  const idle = await queueLib.queueWait('dm', { root: D, timeout: 0 });
+  const dmMark = (core.readJson(path.join(D, 'queues', 'read', 'dm.cedar.json'), {}).files || {})['dm.cedar.queue.md'] || {};
+  ok(!idle.changed && dmMark.mark === dmText.match(/^## .*$/gm).pop() && elsewhere(() => queueLib.unreadLoad('dm', { root: D }).msgs) === 0,
+    'depth: a wait with nothing new publishes the reader\'s position, and every node counts the queue read');
+
   // a broadcast role counts its furthest reader
   fs.writeFileSync(path.join(D, 'subscriber-roles.json'), '["db"]');
   for (let i = 1; i <= 50; i++) send('db', 'news ' + i);
@@ -818,6 +842,18 @@ const AK = mktmp();
   ok(queueLib.unreadLoad('doff', { root: D }).msgs === 51, 'depth: HUBD_QUEUE_MAX_MSGS=0 turns the count limit off');
   delete process.env.HUBD_QUEUE_MAX_MSGS;
 
+  // the hub's own limit, and a role whose reader reads the file itself
+  fs.writeFileSync(path.join(T0, 'limits.json'), JSON.stringify({ queue: { msgs: 5, exempt: ['dfile'] } }));
+  for (let i = 1; i <= 5; i++) send('dcfg', 'order ' + i);
+  ok(/^queue full: dcfg already holds 5 unread/.test(send('dcfg', 'order 6')), 'depth: queue.msgs in the hub\'s limits.json sets the limit');
+  process.env.HUBD_QUEUE_MAX_MSGS = '6';
+  ok(send('dcfg', 'order 6') === '', 'depth: a variable set on the node wins over the hub\'s limit');
+  delete process.env.HUBD_QUEUE_MAX_MSGS;
+  for (let i = 1; i <= 8; i++) send('dfile', 'order ' + i);
+  ok(queueLib.unreadLoad('dfile', { root: D }).msgs === 8 && queueLib.queuesNearFull({ root: D }).some(q => q.role === 'dcfg') &&
+    !queueLib.queuesNearFull({ root: D }).some(q => q.role === 'dfile'), 'depth: a role in queue.exempt is never refused and never listed');
+  fs.rmSync(path.join(T0, 'limits.json'));
+
   // what doctor lists: 80% of a limit and up, fullest first
   const E = mktmp();
   for (const [role, n] of [['e39', 39], ['e40', 40], ['e50', 50]]) for (let i = 1; i <= n; i++) send(role, 'order ' + i, E);
@@ -837,6 +873,9 @@ const AK = mktmp();
   ok(w2.code === 2 && /NO_CHANGES/.test(w2.out), 'queue wait: a second wait finds nothing, exit 2 and NO_CHANGES');
   // doctor reads the cursor the consumer really writes: a path it never wrote showed the full size
   ok(/smoketest.*pending 0B/.test(q(['doctor']).out), 'doctor: a consumed queue shows pending 0B');
+  fs.writeFileSync(path.join(hub, 'limits.json'), JSON.stringify({ queue: { exempt: ['smoketest'] } }));
+  ok(/send limit not applied to smoketest \(limits\.json queue\.exempt/.test(q(['doctor']).out), 'doctor: a role exempt from the send limit is named');
+  fs.rmSync(path.join(hub, 'limits.json'));
   const bg = spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'queue', 'wait', 'smoketest', '--timeout', '6'], { env: { ...process.env, ...env }, cwd: team, stdio: 'ignore' });
   const marker = path.join(team, '.qstate', 'smoketest.waiter');
   for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await new Promise(r => setTimeout(r, 50));

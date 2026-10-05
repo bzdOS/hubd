@@ -229,5 +229,14 @@ id in the ack log, so a file emptied by hand does not start a second id 1 that t
 old log would answer for. Archiving a queue file moves its ack log with it, so the
 next file starts clean.
 
-A reader on a hubd from before read marks leaves none, and stays invisible from
-other nodes. `hub doctor` says so where it reports queues no node has read.
+A reader on a hubd from before read marks leaves none, and two things cover it.
+Once upgraded, a reader publishes its cursor's watermark at the start of every
+wait where it differs from the published mark, so a queue it read to the end
+before the upgrade shows as read without waiting for the next message — which a
+queue counted full would refuse from every node but the reader's own. And the
+send limit counts a file as read up to the last block its ack log names: a
+reader hands a file out in order, so every block above that one was handed out
+too, including blocks written before ids, which no ack can name. A reader that
+leaves neither — one that reads the file itself — stays invisible; `hub doctor`
+says so where it reports queues no node has read, and the hub lists such a role
+in `queue.exempt` of `limits.json`.

@@ -625,6 +625,10 @@ export function runDoctor() {
         if (nearFull.length > 6) console.log('    ... and ' + (nearFull.length - 6) + ' more');
         console.log('    their readers are behind or stopped: hub queue status <role>, then look on the node that runs it');
       }
+      // An exemption hides a queue from the limit for good, so it is said, not silent.
+      const exempt = queueLimits().exempt;
+      if (exempt.length)
+        console.log('  send limit not applied to ' + exempt.join(', ') + ' (limits.json queue.exempt: a reader that reads the file itself, which hubd cannot see)');
       // Reader namespaces nobody has used in a week: dead sessions of a broadcast role, each one
       // listed as a reader "behind" in `hub queue status` forever. Housekeeping, not a fault — no
       // message is at risk — so it is stated with its remedy and not counted as a warning.
