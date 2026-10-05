@@ -894,7 +894,7 @@ export function journalAppend(entry) {
  * after that never needs to open it: the board asked for seven days every 30 seconds and read and
  * parsed every archive since the hub began, then threw all but a week away. The live log and any
  * file not named like an archive can hold anything, so they are always read. */
-function journalFileEndMs(base) {
+export function journalFileEndMs(base) {
   const m = /^journal\..+-(\d{4})-(\d{2})(?:\.\d+)?\.jsonl$/.exec(base);
   return m ? Date.UTC(+m[1], +m[2], 1) : Infinity;    // month m[2] is 1-based: as an index, the next month
 }
@@ -2170,7 +2170,7 @@ export function staleEnvSessions({ days = 7, apply = false } = {}) {
  * rollout two nodes appended different lines to the same end of the file, a content conflict that
  * stops both syncs. Locks, tmp files and the task cache are here because `git add -A` would
  * otherwise commit a live lock with everything else. */
-export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/',
+export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/', '.watch/',
   'journal.life.jsonl', 'tasks.json', 'claims.json', '*.lock', '*.tmp.*'];
 
 /* `hub freeze`: the node-local marker scripts/mesh-sync.sh checks before every run. */
@@ -2180,7 +2180,7 @@ export function readFreeze() {
   if (!fs.existsSync(freezeFile())) return null;
   return readJson(freezeFile(), {});
 }
-function ensureGitignored(entry) {
+export function ensureGitignored(entry) {
   const gi = path.join(HUB, '.gitignore');
   let g = ''; try { g = fs.readFileSync(gi, 'utf8'); } catch {}
   if (new RegExp('^' + escRe(entry) + '$', 'm').test(g)) return false;

@@ -22,6 +22,7 @@ import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './l
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/cards.mjs';
 import { runRecall } from './lib/recall.mjs';
+import { WINDOW_DAYS, journalStamp, watchPass } from './lib/watch.mjs';
 import { runAbsorb } from './lib/absorb.mjs';
 import { runBoard } from './lib/board.mjs';
 import { startServer } from './lib/serve.mjs';
@@ -50,14 +51,16 @@ function pad(s, n) { s = String(s ?? ''); return s.length >= n ? s.slice(0, n - 
  * would make every `done()` return to its caller and let the code after it run (it did —
  * `task list --json` then printed the human table right after the JSON). So stdout and
  * stderr are written synchronously here, and exiting stays instantaneous everywhere. */
-function writeAllSync(fd, text) {
+function writeAllSync(fd, text, strict = false) {
   const buf = Buffer.from(String(text));
   let off = 0;
   while (off < buf.length) {
     try { off += fs.writeSync(fd, buf, off, buf.length - off); }
     catch (e) {
       if (e.code === 'EAGAIN') { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); continue; }  // pipe full, slow reader
-      if (e.code === 'EPIPE') return;   // reader went away — writing more is pointless, not an error
+      // The reader went away — writing more is pointless, not an error. Unless the caller has to
+      // know what reached it: hub watch marks an entry seen only once it was written.
+      if (e.code === 'EPIPE' && !strict) return;
       throw e;
     }
   }
@@ -66,7 +69,13 @@ console.log = (...a) => writeAllSync(1, a.join(' ') + '\n');
 console.error = (...a) => writeAllSync(2, a.join(' ') + '\n');
 console.warn = console.error;
 function done(code = 0) {
-  if (code === 0 && knownFlags) {
+  if (code === 0) checkFlags();
+  process.exit(code);
+}
+/* Unknown flags are reported on exit; a command that does not exit soon (hub watch --follow)
+ * checks them before it settles in, or a typo would run for days unreported. */
+function checkFlags() {
+  if (knownFlags) {
     const unknowns = [];
     for (const a of args) {
       // Only flag patterns: --foo or -x (single letter). Values like "- starts with"
@@ -82,7 +91,6 @@ function done(code = 0) {
       process.exit(1);
     }
   }
-  process.exit(code);
 }
 function die(msg) { console.error('Error: ' + msg); done(1); }
 
@@ -108,7 +116,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level',
+  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--follow', '--interval',
 );
 
 function getFlag(name) {
@@ -581,6 +589,49 @@ command('log', () => {
     console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}`);
   }
   done(0);
+});
+
+/* hub watch: the journal's new entries, each once, to a named cursor (lib/watch.mjs says why a
+ * byte offset cannot do this on a synced hub). One pass and exit, or --follow. */
+command('watch', () => {
+  const usage = 'Usage: hub watch --as <name> [-p <project>] [--since 1h|<time>] [--follow [--interval <s>]] [--private] [--json]';
+  const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
+  const name = flag('--as') || process.env.HUBD_SUBSCRIBER;
+  if (!name) die('hub watch needs a cursor name: --as <name> (or HUBD_SUBSCRIBER). The same name on the next run goes on where this one stopped.\n' + usage);
+  const project = flag('--project') ?? flag('-p');
+  const since = flag('--since');
+  const json = args.includes('--json'), follow = args.includes('--follow');
+  const iv = flag('--interval');
+  const interval = iv == null ? 5 : Number(iv);
+  if (!(interval > 0)) die(`--interval: "${iv}" is not a number of seconds above 0`);
+  if (iv != null && !follow) die('--interval paces --follow; one pass has nothing to pace');
+  const line = (e) => json ? JSON.stringify(e) : `${e.ts} [${e.project}/${e.agent}] ${e.kind}${e.to ? ' → ' + e.to : ''}: ${e.text}`;
+  const emit = (e) => writeAllSync(1, line(e) + '\n', true);
+  const memo = {};
+  const pass = (first) => {
+    let r;
+    try { r = watchPass({ name, project, since: first ? since : null, includePrivate: args.includes('--private'), emit, memo }); }
+    catch (e) { if (e.code === 'EPIPE') process.exit(0); die(e.message); }
+    if (r.created) console.error(since
+      ? `watch ${r.name}: a new cursor, from ${r.from} (at most ${WINDOW_DAYS} days back)`
+      : `watch ${r.name}: a new cursor; entries written from now on are shown. --since 1h on a new cursor starts earlier.`);
+    return r;
+  };
+  // A pass is synchronous, so a handled signal lands between passes, after the pass marked what
+  // it wrote. Unhandled, it would end the process mid-pass and the next run would show those again.
+  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(0));
+  if (!follow) { pass(true); done(0); }
+  checkFlags();
+  // A pass reads every journal file in the window, so a follower passes again only when one of
+  // them changed.
+  let stamp = journalStamp();
+  pass(true);
+  const tick = () => {
+    const now = journalStamp();
+    if (now !== stamp) { stamp = now; pass(false); }
+    setTimeout(tick, interval * 1000);
+  };
+  setTimeout(tick, interval * 1000);
 });
 
 command('report', () => {
@@ -1879,6 +1930,8 @@ const HELP = [
   ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
   ['log [project] [-n 20] [--json]', 'journal tail'],
+  ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json]', 'new journal entries, each shown once to the cursor <name>',
+    'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
   ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
     'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],

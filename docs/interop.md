@@ -59,6 +59,48 @@ of truth. You should never need a particular program to read your own work.
 > most portable rule (resolve by file name / slug), so Obsidian, Logseq and Foam
 > all agree.
 
+## Following the journal: `hub watch`
+
+A notifier (a chat bridge, a pager, a dashboard) wants each new journal entry
+once. Reading the `journal.*.jsonl` files by byte offset, the way `tail -f`
+does, gets that wrong on a synced hub:
+
+- a union merge keeps a line both sides hold twice, and the offset reads the
+  copy as new;
+- a merge can put lines this node has not seen before lines it has, and the
+  offset is already past them;
+- a reset that shortens a file, followed by a pull that grows it back, replays
+  the file from the reset point;
+- at 2 MB the live file is renamed into a month archive, and the lines written
+  after the last read are in a file the offset no longer follows.
+
+`hub watch` keeps no offset. Its cursor, `.watch/<name>.json`, is local to the
+node and never synced. It holds a short hash of each entry it passed: the
+node's log and the line, the key the hub's own readers drop repeats by. None
+of the four cases above changes that key.
+
+```bash
+hub watch --as pager --json                   # one pass: what is new since the last run
+hub watch --as pager --follow --json          # keep going; a pass when a journal file changes
+hub watch --as pager -p hubd --since 1h       # a new cursor that starts an hour back
+```
+
+- A new cursor shows nothing on its first pass unless `--since` places it
+  earlier, at most 7 days back. On a cursor that already exists, `--since` is
+  an error. To start a cursor again, delete its file.
+- Hashes are kept for 7 days. An entry more than 7 days old when it first
+  reaches this node is not shown; `hub log` still has it.
+- `-p` narrows what is shown. Every entry passed is marked, shown or not, so a
+  filter dropped later replays nothing. The private braid
+  (`journal.life.jsonl`) is shown only with `--private`.
+- `--json` prints one entry per line, as the journal holds it. An entry is
+  marked once it is written to stdout. A reader that goes away ends the pass,
+  and what it did not get is new on the next run. Two processes on one cursor
+  name share it: each entry goes to one of them.
+
+[contrib/watch-to-matrix.sh](../contrib/watch-to-matrix.sh) is a complete
+bridge to a Matrix room in about a dozen lines of shell over `--follow --json`.
+
 ## Transport: how a queue crosses machines
 
 The folder is the interface; moving it between nodes is a separate, replaceable
