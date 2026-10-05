@@ -524,6 +524,14 @@ at 90% or more, a relay failed or not active; a file that does not parse or is n
 "snapshot unreadable" naming its node. Every list is ordered by its own fields, so one hub state
 gives one answer.
 
+MAIL is what a relay delivered: one journal entry of kind `delivery` per artifact that arrived,
+its text `<sender> → <recipient>: <name> <bytes> B sha256 <hex>` (the Cyrillic byte unit and
+`->` read too). Live (`/api/kanban`, `hub_kanban`: `mail`) shows the newest 20 apart from the
+activity feed; the Summary gives each track the newest 20 whose recipient is one of its roles,
+from the same 30 days of journal. Each is read into `from, to, name, bytes, sha256` beside its
+whole text; an entry whose text does not read keeps the text with those null, and belongs to no
+track.
+
 **`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
 never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat
 in the fleet into git history), so from any one node it describes THAT machine. From 0.9.13 each

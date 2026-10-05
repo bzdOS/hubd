@@ -4,6 +4,19 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.48 — 2026-10-05
+
+- **Artifact deliveries are mail, a row of their own.** A mail relay (a fleet tool) records each
+  delivery that succeeded as a journal entry of kind `delivery`, through `hub report -k
+  delivery`: `<sender> → <recipient>: <name> <bytes> B sha256 <hex>` (the byte unit may be the
+  Cyrillic one, the arrow `->`). Live shows the newest 20 in a Mail row above Activity, which no
+  longer lists them; `/api/kanban` and `hub_kanban` gain `mail`, each delivery read into
+  `from, to, name, bytes, sha256` beside its whole text. On the Summary each track has the newest
+  20 whose recipient is one of its roles (`/api/summary` gains `mail` per track, and
+  `mailLimit`). An entry of the kind whose text does not read so is kept whole with the parts
+  null: Live shows it, and no track claims it. `hub report` takes any kind, so the relay needs
+  no change.
+
 ## 0.9.47 — 2026-10-05
 
 - **The Summary shows each node as its own snapshot states it.** A node's fleet tool writes

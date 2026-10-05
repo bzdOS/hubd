@@ -14,7 +14,8 @@
  *   working  open tasks with an assignee and no open dependency;
  *   blocked  open tasks that wait on an open dependency;
  *   closed   tasks closed in the last 24 hours, the window of the Live column "Done today";
- *   stalled  each role's newest `blocked` journal entry, unless the role handed the work in after it.
+ *   stalled  each role's newest `blocked` journal entry, unless the role handed the work in after it;
+ *   mail     the newest 20 deliveries whose recipient is one of the track's roles (mail.mjs).
  * A task's age counts from its creation, a closed task's from its close. Each task carries its
  * head's newest verdict on it.
  *
@@ -51,8 +52,9 @@ import {
 import { trackLayout } from './board.mjs';
 import { escalationState, ANSWERED_HOURS } from './escalations.mjs';
 import { nodeSnapshots, SNAPSHOT_STALE_MIN, DISK_FULL_PCT } from './nodes.mjs';
+import { deliveries, MAIL_LIMIT } from './mail.mjs';
 
-const JOURNAL_DAYS = 30;   // how far back verdicts and blocked entries are read, as on the board
+const JOURNAL_DAYS = 30;   // how far back verdicts, blocked entries and mail are read, as on the board
 const CLOSED_HOURS = 24;
 const DEFAULT_WORDS = { accept: ['ACCEPT', 'ACCEPTED'], reject: ['REJECT', 'REJECTED'] };
 
@@ -83,7 +85,7 @@ function firstTaskNamed(text, byId) {
 
 const head = (nowMs) => ({ v: 1, asOf: new Date(nowMs).toISOString().slice(0, 16).replace('T', ' '),
   journalDays: JOURNAL_DAYS, closedHours: CLOSED_HOURS, answeredHours: ANSWERED_HOURS,
-  snapshotStaleMin: SNAPSHOT_STALE_MIN, diskFullPct: DISK_FULL_PCT });
+  snapshotStaleMin: SNAPSHOT_STALE_MIN, diskFullPct: DISK_FULL_PCT, mailLimit: MAIL_LIMIT });
 /** The answer for a hub with nothing in it (a tenant that has not written yet). */
 export function emptySummary(nowMs = Date.now()) { return { ...head(nowMs), tracks: [], escalations: { fleet: [], waiting: [], answered: [] }, nodes: [] }; }
 
@@ -112,6 +114,7 @@ export function runSummary(a = {}) {
   const byId = new Map(tasks.map(t => [String(t.id), t]));
   const { list: ready, blocked } = eligibleOpen(tasks);
   const journal = journalSinceMs(nowMs - JOURNAL_DAYS * 86400000);   // newest first
+  const mail = deliveries(journal);
   const closedSince = nowMs - CLOSED_HOURS * 3600000;
   const oldestFirst = (x, y) => (String(x.created || '') < String(y.created || '') ? -1 : String(x.created || '') > String(y.created || '') ? 1 : String(x.id) < String(y.id) ? -1 : 1);
 
@@ -156,6 +159,9 @@ export function runSummary(a = {}) {
       if (!handedIn && !closedAfter) stalled.push({ role: r.role, ts: b.ts, ageMin: ageMin(b.ts), task, text: String(b.text || '') });
     }
 
+    const mine = new Set([...heads, ...workers].map(r => r.role));
+    const delivered = mail.filter(m => mine.has(m.to)).slice(0, MAIL_LIMIT);
+
     let goal = null;
     if (card) {
       const h = liveHeading(card, 'goal');
@@ -166,7 +172,7 @@ export function runSummary(a = {}) {
     }
     return {
       project, heads: heads.map(h => h.role), roles: workers.map(w => w.role), goal,
-      working, blocked: stuck, closed, stalled,
+      working, blocked: stuck, closed, stalled, mail: delivered,
     };
   });
   return { ...head(nowMs), tracks, escalations: escalationState({ roles, root: a.queueRoot, nowMs }), nodes: nodeSnapshots({ nowMs }) };

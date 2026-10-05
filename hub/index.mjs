@@ -214,7 +214,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_kanban',
-    description: 'The board as data: open tasks split into queued (unassigned) and in-progress (assigned), plus done-in-the-last-day and recent journal — the same view the read-only web kanban renders. Each task carries blocked and overdue flags.',
+    description: 'The board as data: open tasks split into queued (unassigned) and in-progress (assigned), plus done-in-the-last-day, recent journal (inbox) and the newest 20 artifact deliveries apart from it (mail: kind delivery, read into from, to, name, bytes, sha256) — the same view the read-only web kanban renders. Each task carries blocked and overdue flags.',
     inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_claim',
@@ -379,7 +379,7 @@ const OUTPUT_PLANS = {
   hub_whatsnew:   [['entries', 20, { textMax: 240 }]],
   hub_search:     [['hits', 40]],
   hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25], ['addressed', 25]],
-  hub_kanban:     [['inbox', 30], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
+  hub_kanban:     [['inbox', 30], ['mail', 20], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
   hub_task_list:  [['tasks', 50, { textMax: 160, drop: ['_origin'], dropEmpty: true }]],
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
   hub_graph:      [['edges', 200], ['dangling', 50]],

@@ -55,7 +55,7 @@ export function startServer(port) {
         const dir = tenantDir(url);
         if (!dir) { res.writeHead(401); return res.end(JSON.stringify({ error: 'open with ?t=<token>' })); }
         if (!fs.existsSync(dir)) {
-          if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], generated: now() }));
+          if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], mail: [], generated: now() }));
           if (url.pathname === '/api/sparkline') return res.end(JSON.stringify({ months: [] }));
           if (url.pathname === '/api/journal-since') return res.end(JSON.stringify({ entries: [] }));
           if (url.pathname === '/api/board') return res.end(JSON.stringify({ days: 7, registry: { roles: 0, heads: 0, fleet: [] }, tracks: [], allTracks: [],

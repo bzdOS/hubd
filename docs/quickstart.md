@@ -169,6 +169,9 @@ A block with an id in the queue of a `fleet` role is an escalation; it waits for
 until the fleet card's Owner decisions quote its key: `hub section add <slug> owner-decisions
 "<date> · from <role> · id N — <answer>" --by <you>`. A node whose fleet tool writes
 `snapshot.<node>.json` into the hub shows on the Summary with its sessions, disks and relays.
+A mail relay that reports each delivery — `hub report "<sender> → <recipient>: <name> <bytes> B
+sha256 <hex>" -k delivery -p <slug> --agent <relay>` — fills the Mail row of Live, and the
+recipient track's Mail on the Summary.
 
 ## 7. Queues — make an agent addressable
 
