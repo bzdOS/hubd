@@ -18,6 +18,8 @@ import {
 } from './core.mjs';
 import { conflictedFiles } from './conflicts.mjs';
 import { cardSectionIssues } from './cards.mjs';
+import { CARD_ATTR, CARD_DRIVER, driverStatus } from './cardmerge.mjs';
+import { STATE_ATTRS, STATE_DRIVER } from './statemerge.mjs';
 import {
   resolveQueueRoot, resolveQueueRootInfo, subscriberRoles, subscriberNamespaces, queueInventory, strandedQueues, outOfBandTrims,
   listShards, readCursor, pidAlive, queuesNearFull, queueLimits,
@@ -164,6 +166,28 @@ export function meshStatus() {
     ahead: Number.isFinite(ahead) ? ahead : null,
     lastError,
   };
+}
+
+/* Whether this node's merge drivers would run. They live in .git/config and .git/info/attributes,
+ * which never travel, and nothing fails when one is missing or names a file that has gone: the
+ * merge falls back without a word. A node that never ran `hub card merge-driver` merges cards as
+ * the hub's .gitattributes says, and a snapshot rewritten on two nodes stops its sync; one whose
+ * node or hubd moved merges cards by union and keeps ours of such a file. Each driver that will not
+ * run comes back with what is wrong and what a merge does instead. */
+export function mergeDriverIssues(hub = HUB) {
+  const out = [];
+  for (const [name, attrs, instead, stale] of [
+    [CARD_DRIVER, [CARD_ATTR], 'cards merge as the hub\'s .gitattributes says', 'cards fall back to a union merge'],
+    [STATE_DRIVER, STATE_ATTRS, 'a snapshot, presence, sense or read-mark file rewritten on two nodes stops the sync',
+      'such a file keeps the side git calls ours'],
+  ]) {
+    const s = driverStatus(hub, { name, attrs });
+    if (!s.command && s.missing.length === attrs.length) out.push({ name, what: 'not installed', instead });
+    else if (!s.command) out.push({ name, what: 'no command in .git/config', instead });
+    else if (s.missing.length) out.push({ name, what: 'not in .git/info/attributes for ' + s.missing.map(a => a.split(' ')[0]).join(', '), instead });
+    else if (s.gone.length) out.push({ name, what: 'names a file that is gone: ' + s.gone.join(', '), instead: stale });
+  }
+  return out;
 }
 
 /* Which PEER has gone quiet in the mesh.
@@ -388,6 +412,13 @@ export function runDoctor() {
       console.log('            this hub is not receiving the other nodes\' work - the sync is not completing');
       if (mesh.lastError) console.log('            sync says: ' + mesh.lastError);
     }
+    const drivers = mergeDriverIssues();
+    if (drivers.length) {
+      warnings++;
+      console.log('  drivers:  ' + drivers.length + ' merge driver(s) will not run on this node  WARNING');
+      for (const d of drivers) console.log('            ' + d.name + ': ' + d.what + ' - ' + d.instead);
+      console.log('            on this node: hub card merge-driver (nothing it sets travels with the mesh)');
+    } else console.log('  drivers:  ' + CARD_DRIVER + ', ' + STATE_DRIVER + ': in place');
     /* The half only a PEER can see. A node whose pull keeps aborting knows it — its own doctor says
      * so — and nobody is running its doctor; from here it simply stops appearing in the shared
      * history. One node sat 77 commits behind on a single card conflict that way. */

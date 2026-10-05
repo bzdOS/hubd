@@ -25,7 +25,7 @@
  *
  * Nothing here imports the hub (cardmerge.mjs says why). */
 import fs from 'node:fs';
-import { installDriver, removeDriver, shq } from './cardmerge.mjs';
+import { installDriver, removeDriver, shq, stableNode } from './cardmerge.mjs';
 
 export const STATE_DRIVER = 'hubd-state';
 export const STATE_ATTRS = ['/snapshot.*.json', '/presence.*.json', '/sense.*.json', '/queues/read/*.json']
@@ -75,7 +75,7 @@ export function runStateDriver([base, ours, theirs]) {
 }
 
 /** Install (or refresh) the driver in the hub's own repository. `script` is scripts/state-merge.mjs. */
-export function installStateDriver(hub, { node = process.execPath, script }) {
+export function installStateDriver(hub, { node = stableNode(), script }) {
   return installDriver(hub, { name: STATE_DRIVER, label: 'hubd: files one node rewrites whole, the newer version taken',
     command: `${shq(node)} ${shq(script)} %O %A %B || true`, attrs: STATE_ATTRS });
 }

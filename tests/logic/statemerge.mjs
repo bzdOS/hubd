@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { ok, mktmp, run, REPO, done } from './_h.mjs';
+import { ok, mktmp, run, REPO, doc, done } from './_h.mjs';
 
 const { mergeState, stampOf, STATE_ATTRS } = await import(path.join(REPO, 'hub/lib/statemerge.mjs'));
 
@@ -80,5 +80,52 @@ r = run('card merge-driver', env);
 ok(r.code === 0 && STATE_ATTRS.every(a => attrs().split(a).length === 2), 'install: a second run adds no line twice');
 r = run('card merge-driver --remove', env);
 ok(r.code === 0 && !drv() && !STATE_ATTRS.some(a => attrs().includes(a)), 'install: --remove takes it out with the card driver');
+
+// ── the node a command names: the link on PATH, not the versioned binary behind it ──
+const { stableNode } = await import(path.join(REPO, 'hub/lib/cardmerge.mjs'));
+{
+  const real = fs.realpathSync(process.execPath), other = mktmp(), link = mktmp();
+  fs.writeFileSync(path.join(other, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  fs.symlinkSync(real, path.join(link, 'node'));
+  ok(stableNode(real, [other, link].join(path.delimiter)) === path.join(link, 'node'),
+    'node: the first `node` on PATH that is this same binary, past one that is not');
+  ok(stableNode(real, other) === real && stableNode(real, '') === real, 'node: and the binary itself when PATH has no such link');
+  r = run('card merge-driver', { ...env, PATH: link + path.delimiter + process.env.PATH });
+  ok(r.code === 0 && drv().startsWith(`'${path.join(link, 'node')}' `), `install: the command names that link (${drv().split(' ')[0]})`);
+}
+
+// ── doctor: a driver that will not run, on a node that syncs ──
+{
+  const issues = () => doc.mergeDriverIssues(H);
+  ok(issues().length === 0, 'doctor: both drivers installed and their files there - nothing to say');
+  fs.writeFileSync(path.join(H, '.git', 'info', 'attributes'), attrs().replace('/presence.*.json merge=hubd-state\n', ''));
+  ok(issues().length === 1 && issues()[0].name === 'hubd-state' && /attributes for \/presence\.\*\.json$/.test(issues()[0].what),
+    'doctor: an attribute line gone - that pattern merges as text');
+  const old = path.join(mktmp(), 'scripts');
+  fs.mkdirSync(old);
+  fs.copyFileSync(path.join(REPO, 'scripts/state-merge.mjs'), path.join(old, 'state-merge.mjs'));
+  const { installStateDriver } = await import(path.join(REPO, 'hub/lib/statemerge.mjs'));
+  installStateDriver(H, { script: path.join(old, 'state-merge.mjs') });
+  fs.rmSync(old, { recursive: true });
+  ok(issues().length === 1 && issues()[0].what === 'names a file that is gone: ' + path.join(old, 'state-merge.mjs') && /ours/.test(issues()[0].instead),
+    'doctor: hubd moved - the command names a file that is gone, and ours is kept');
+  execFileSync('git', ['-C', H, 'config', 'merge.hubd-state.driver', 'my-merge %O %A %B']);
+  ok(issues().length === 0, 'doctor: a command set by hand is left to whoever set it');
+  run('card merge-driver --remove', env);
+  ok(issues().length === 2 && issues().every(i => i.what === 'not installed'), 'doctor: neither installed - both named');
+
+  const O = mktmp(), C = mktmp();
+  execFileSync('git', ['init', '-q', '-b', 'main', O]);
+  execFileSync('git', ['-C', O, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'seed']);
+  execFileSync('git', ['clone', '-q', O, C]);
+  const cenv = { HUBD_DIR: C, HUBD_TEAM_DIR: C };
+  let d = run('doctor', cenv);
+  ok(/drivers: +2 merge driver\(s\) will not run on this node {2}WARNING/.test(d.out) && /hubd-state: not installed - a snapshot/.test(d.out)
+    && /on this node: hub card merge-driver/.test(d.out), 'doctor: a mesh node without the drivers is warned, with what merges instead and the fix');
+  run('card merge-driver', cenv);
+  d = run('doctor', cenv);
+  ok(/drivers: +hubd-card, hubd-state: in place/.test(d.out), 'doctor: and says so once they are in place');
+  ok(!/drivers:/.test(run('doctor', env).out), 'doctor: a hub with no origin syncs with nobody and is not asked for them');
+}
 
 done();
