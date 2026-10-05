@@ -255,6 +255,10 @@ is a folder you own. They are two separate things — and that is the whole poin
   scaffold and the report router — so they never drift. A write reaches the
   section a card already has under any of its headings, so re-localising a hub
   never grows a second copy; `hub cards merge-sections` folds old doubles.
+  A notifier follows the journal with `hub watch --as <name> --follow --json`:
+  each new entry once, by a cursor that a mesh merge, a reset or a log
+  rotation does not throw off ([docs/interop.md](docs/interop.md#following-the-journal-hub-watch);
+  [contrib/watch-to-matrix.sh](contrib/watch-to-matrix.sh) posts to a Matrix room).
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
   prodding them. A queue has one live consumer by default — run a single waiting

@@ -4,6 +4,24 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.43 — 2026-10-05
+
+- **`hub watch --as <name>`: the journal's new entries, each once.** For a notifier that follows
+  the journal. Reading the files by byte offset shows an entry twice after a union merge doubles
+  it, and misses one a merge puts before lines already read. It replays a file that a reset
+  shortened and a pull grew back, and it loses the lines cut into a month archive by rotation.
+  The cursor (`.watch/<name>.json`, node-local, never synced) holds no offset. It holds a short
+  hash of each entry it passed, keyed by node log and line, as the hub's readers drop repeats.
+  One pass and exit, or `--follow` (a pass when a journal file changed, `--interval`, default
+  5 s). `--json` prints one entry per line. A new cursor starts at its first run, or earlier with
+  `--since`. Hashes are kept for 7 days. `-p` narrows what is shown, and the private braid is
+  shown only with `--private`. An entry is marked once it is written, so a reader that goes away
+  misses nothing on the next run. Measured on a week of one hub's journal, 11593 entries: the
+  first pass took 1.7 s, a pass after that 0.7 s, and the cursor holds 154 KB.
+- **`contrib/watch-to-matrix.sh`**, a bridge to a Matrix room over `hub watch --follow --json`.
+  It retries a post that fails, and it is now in the package.
+- `.watch/` joins the node-local lines a writing command puts in `.git/info/exclude`.
+
 ## 0.9.42 — 2026-10-05
 
 - **A reflection is data.** `hub_report` takes a `reflect` field: `goal`, `result`
