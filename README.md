@@ -195,7 +195,7 @@ is a folder you own. They are two separate things — and that is the whole poin
   and one section changed on both keeps both versions under a line asking a person to
   look. A node's snapshot, presence, sense and read-mark files take the version with the
   later time, in a merge and a rebase alike. It lives in the node's own `.git`, so a node
-  without it merges as before.
+  without it merges as before, and `hub doctor` says so.
 - **When a card does conflict** — the only shared file that can, being the one
   mutable one — `hub card resolve` unions the bullet-list hunks (two nodes appending
   facts have not disagreed) and leaves prose hunks for you, named by section. It

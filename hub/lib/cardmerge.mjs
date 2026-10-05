@@ -159,6 +159,37 @@ const git = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'u
 const attrFile = (hub) => path.join(hub, '.git', 'info', 'attributes');
 const ownRepo = (hub) => { try { return fs.statSync(path.join(hub, '.git')).isDirectory(); } catch { return false; } };
 
+/* The node a driver command names. process.execPath is the binary with every link resolved, and a
+ * distribution's `node` is often a link to a versioned name: on one node the command read
+ * /usr/bin/node-22, which goes away with the next major version while /usr/bin/node stays. So the
+ * first `node` on PATH that is this same binary is named; failing that, execPath. */
+export function stableNode(execPath = process.execPath, envPath = process.env.PATH || '') {
+  let real;
+  try { real = fs.realpathSync(execPath); } catch { return execPath; }
+  for (const dir of envPath.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const p = path.join(dir, 'node');
+    try { if (fs.realpathSync(p) === real) return p; } catch {}
+  }
+  return execPath;
+}
+
+/** How driver `name` stands in the hub's own repository, for doctor: its command (null if none),
+ *  the `attrs` lines .git/info/attributes lacks, the files its command names that are gone, and
+ *  whether the command is one hubd did not write (then its files are not checked). */
+export function driverStatus(hub, { name, attrs }) {
+  let command = '';
+  try { command = git(hub, 'config', '--get', `merge.${name}.driver`).trim(); } catch {}
+  let cur = '';
+  try { cur = fs.readFileSync(attrFile(hub), 'utf8'); } catch {}
+  const have = new Set(cur.split('\n').map(l => l.trim()));
+  const q = "'((?:[^']|'\\\\'')*)'";                     // one shq() word
+  const m = new RegExp(`^${q} ${q} %O %A %B `).exec(command);
+  const files = m ? [m[1], m[2]].map(s => s.replace(/'\\''/g, "'")) : [];
+  return { command: command || null, missing: attrs.filter(a => !have.has(a)),
+    gone: files.filter(f => !fs.existsSync(f)), custom: !!command && !m };
+}
+
 /** Install (or refresh) merge driver `name` in the hub's own repository: its command in .git/config,
  *  its `attrs` lines in .git/info/attributes. Returns what was there before and the lines added. */
 export function installDriver(hub, { name, label, command, attrs }) {
@@ -193,7 +224,7 @@ export function removeDriver(hub, { name, attrs }) {
 }
 
 /** Install (or refresh) the card driver. `script` is scripts/card-merge.mjs. */
-export function installCardDriver(hub, { node = process.execPath, script }) {
+export function installCardDriver(hub, { node = stableNode(), script }) {
   const r = installDriver(hub, { name: CARD_DRIVER, label: 'hubd: project cards, merged by ## section',
     command: `${shq(node)} ${shq(script)} %O %A %B || git merge-file --union %A %O %B`, attrs: [CARD_ATTR] });
   return { ...r, attrAdded: r.added.length > 0 };

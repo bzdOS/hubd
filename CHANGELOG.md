@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.52 — 2026-10-06
+
+- **`hub doctor` says when a merge driver will not run.** The drivers live in the node's own
+  `.git`, and a missing one or one whose path went stale fails without a word: the merge just
+  falls back. On a node that syncs, doctor now names each driver that is not installed, lacks an
+  attribute line, or names a file that is gone, says what a merge does instead, and counts it as
+  a warning. A command set by hand is not checked.
+- **The driver command names `node` as PATH has it.** It named the binary with every link
+  resolved, which on one node was `/usr/bin/node-22`: gone with the next major version, while
+  `/usr/bin/node` stays. Now the first `node` on PATH that is the same binary is named. Run
+  `hub card merge-driver` again on each node to repoint it.
+
 ## 0.9.51 — 2026-10-05
 
 - **A file one node rewrites whole no longer stops the mesh.** `snapshot.<node>.json`,

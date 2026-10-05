@@ -278,6 +278,10 @@ version with the later time (`ts`, `written`, or the latest `at` among the read
 marks) is taken whole, in a merge and in a `pull --rebase` alike. If its path goes
 stale, the file keeps the side git calls ours.
 
+Neither fallback says a word, so `hub doctor` does: on a node that syncs, it warns
+about each driver that is not installed or names a file that has gone, and what a
+merge does there instead.
+
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.
 
