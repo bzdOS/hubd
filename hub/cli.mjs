@@ -1404,8 +1404,11 @@ command('board', () => {
   list('owner queue', w.queue, x => `${x.role}  ${x.ageDays ?? '?'}d  from ${x.from}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
   list('your tasks', w.tasks, x => `#${x.id} [${x.project}]${x.deadline ? ' ⏰' + x.deadline : ''}${x.ready ? '' : ' (blocked)'}  ${cut(x.title, 70)}`);
   list('owner-go', w.ownerGo, x => `#${x.id} [${x.project}]  ${cut(x.title, 70)}${who(x)}`);
-  list(`escalations to ${r.registry.fleet.join(', ') || 'the fleet'} (${r.days}d)`, [...w.escalations].reverse(), x => `${hm(x.ts)}  ${x.from}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
-  list('answers', [...w.answers].reverse(), x => `${hm(x.ts)}  → ${x.role}${x.task ? ' #' + x.task : ''}  ${cut(x.subject, 80)}`);
+  const waited = (m) => m == null ? '?' : m < 120 ? m + 'm' : m < 2880 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd';
+  list(`escalations to ${r.registry.fleet.join(', ') || 'the fleet'}, unanswered`, [...w.escalations].reverse(), x => `${x.key}  waiting ${waited(x.waitedMin)}${x.task ? '  #' + x.task : ''}  ${cut(x.subject, 70)}`);
+  // what the answer says: the text after the key it quotes, else the entry without its stamp
+  const said = (x) => { const t = x.answer.text, i = t.indexOf(x.key); return (i >= 0 && t.slice(i + x.key.length).replace(/^[\s:·—-]+/, '')) || t.replace(/^[-*+] \d{4}-\d{2}-\d{2} \d{2}:\d{2}:? */, ''); };
+  list('answered in the last 24h', [...w.answered].reverse(), x => `${x.key}  answered ${hm(x.answer.ts)} after ${waited(x.waitedMin)}  ${cut(said(x), 70)}`);
   if (!w.queue.length && !w.tasks.length && !w.ownerGo.length && !w.escalations.length) console.log('  nothing');
   if (r.unknownAssignees.length) console.log(`\n  ⚠ open work on names that are not roles: ${r.unknownAssignees.join(', ')}  (hub lint)`);
   done(0);
@@ -2016,7 +2019,7 @@ const HELP = [
   ['queue gc [--days 30] [--apply]', 'archive queue files nobody ever read'],
   ['board [<project>] [--days 7] [--limit 8] [--all] [--json]', 'every track: roles, done, next, blocked, and what waits for you'],
   ['sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]', "a head's sensor: exit 0 = wake with this text, 1 = nothing"],
-  ['serve [-p 7777]', 'read-only dashboard: tracks, kanban, history'],
+  ['serve [-p 7777]', 'read-only dashboard: summary, tracks, kanban, history'],
 ];
 const helpName = (usage) => usage.split(/[\s|]/)[0];
 

@@ -1849,6 +1849,8 @@ const SECTIONS_DEFAULT = [
   { key: 'communication', heading: 'Communication',      hint: 'what has gone out externally vs what is still queued' },
   // Read, not scaffolded: a card has it when someone writes it (hub section add <slug> goal "..." --by <you> --set).
   { key: 'goal',          heading: 'Goal',               hint: 'what the track is for, in a line the summary quotes', scaffold: false },
+  // On a fleet role's card: an entry quoting an escalation's "<date> · from <role> · id N" answers it (escalations.mjs).
+  { key: 'owner-decisions', heading: 'Owner decisions',  hint: 'the owner\'s answers to escalations, each quoting the escalation\'s "<date> · from <role> · id N"', scaffold: false },
 ];
 export function sectionsConfig() {
   // `defaultHeading` survives the override: a card written before sections.json existed (or on a

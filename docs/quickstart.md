@@ -165,6 +165,9 @@ The board's only button is ⚙ Rules, and it opens AGENTS.md. Cards move because
 agents move them; you manage the rules, not the agents. Tracks and the Summary
 appear once roles are declared as cards — `hub resource set <role> --type role --attr rank=head
 --attr project=<slug> --by <you>`, and `--link head:<head>` for a worker.
+A block with an id in the queue of a `fleet` role is an escalation; it waits for you on the board
+until the fleet card's Owner decisions quote its key: `hub section add <slug> owner-decisions
+"<date> · from <role> · id N — <answer>" --by <you>`.
 
 ## 7. Queues — make an agent addressable
 

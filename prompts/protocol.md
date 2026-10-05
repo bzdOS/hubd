@@ -106,7 +106,8 @@ decisions/facts = many lines (one per line):
 One card per project at `projects/<slug>.md`: `## Digest` plus the sections reports
 route into — Next step / Gates / Metrics / Market / Facts & hypotheses / Decisions /
 Communication. `## Goal` (key `goal`) is not in a new card: a head writes it, and the Summary
-quotes it. Section headings localise (any language) in ONE file, `sections.json`;
+quotes it. Neither is `## Owner decisions` (key `owner-decisions`): on a fleet role's card, the
+owner's answers to escalations (see the board). Section headings localise (any language) in ONE file, `sections.json`;
 see `hub sections`. A write finds the section the card ALREADY has for that key — under the
 configured heading, the English default, or an alias declared as `{"heading": ..., "aliases":
 [...]}`, case-insensitively — before it creates one, so a card never grows a second copy of a
@@ -492,8 +493,17 @@ load exits 3 for `hub sense`, never 1.
 `hub board` (and the Tracks view of `hub serve`) is the owner's screen: per track, each role's state,
 current task, last journal step and handoff; what got done in the window (`--days`, default 7) with
 the line that accepted it; what is next, with blockers; the branch verdicts. Above the tracks, what
-waits for the owner: the owner queue, the owner's tasks, `owner-go` tasks, and what was escalated to
-a `fleet` role and answered. Titles are a task's first line, at most 80 characters.
+waits for the owner: the owner queue, the owner's tasks, `owner-go` tasks, and the escalations to
+a `fleet` role. Titles are a task's first line, at most 80 characters.
+
+An ESCALATION is a block with an id in a `fleet` role's queue; its key is its header without the
+`## `: `<date> · from <role> · id N`. It is ANSWERED when an entry of the Owner decisions section of
+that role's project card quotes the key — `hub section add <fleet project> owner-decisions "<key> —
+<answer>" --by <you>` — and the entry's stamp is the time of the answer. The key is all that is
+matched: "id 3" is not "id 32", and no author or wording counts as an answer. Entries the section
+cap moved to the project's history still answer; of two answers to one key, the later stands. The
+board lists every escalation still waiting, however old, with how long it has waited, and those
+answered in the last 24 hours with the answer.
 
 The Summary view of `hub serve` (`/api/summary`, the first screen of a hub with heads) answers
 "where is each track" from the files, so nobody retells the board. Per track: the goal (the
@@ -504,7 +514,8 @@ each role's newest `blocked` entry, until the role hands that task in or it clos
 head's journal entry that names the task (`#<id>`, or the bare id when it has a letter) and holds
 ACCEPT, ACCEPTED, REJECT or REJECTED in capitals. Heads who write in another language list their
 words in `<hub>/verdicts.json`, `{"accept": [...], "reject": [...]}`, negated forms under reject.
-Every list is ordered by its own fields, so one hub state gives one answer.
+Beside the tracks, the escalations to the fleet, as the board defines them, with their text and
+answers whole. Every list is ordered by its own fields, so one hub state gives one answer.
 
 **`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
 never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat

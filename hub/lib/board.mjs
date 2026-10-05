@@ -18,7 +18,8 @@ import {
 } from './core.mjs';
 
 export { taskTitle, parseVerdict };
-import { ownerQueueItems, recentBlocks } from './queue.mjs';
+import { ownerQueueItems } from './queue.mjs';
+import { escalationState } from './escalations.mjs';
 import { senseSnapshots } from './sense.mjs';
 
 const firstLine = (s, n) => {
@@ -56,7 +57,6 @@ export function trackLayout({ roles = roleRegistry(), tasks = loadTasks().tasks,
 export function runBoard(a = {}) {
   const nowMs = Date.now();
   const days = Math.max(1, Math.min(90, parseInt(a.days, 10) || 7));
-  const limitMsgs = Math.max(1, parseInt(a.messages, 10) || 30);   // newest escalations / answers kept
   const sinceMs = nowMs - days * 86400000;
   const today3 = new Date(nowMs + 3 * 86400000).toISOString().slice(0, 10);
   const today = new Date(nowMs).toISOString().slice(0, 10);
@@ -171,21 +171,22 @@ export function runBoard(a = {}) {
    * Four sources, each named, because "why is this here" is the first thing asked of a list:
    * blocks in an owner queue this node has not consumed; open tasks that are the owner's to press;
    * tasks tagged owner-go; and, when a fleet-level coordinator is declared (a role of rank
-   * `fleet`), what was escalated to it in the window and what it answered. */
-  const fleet = [...roles.values()].filter(r => r.rank === 'fleet').map(r => r.role);
+   * `fleet`), what was escalated to it: every escalation not yet answered, however old, and those
+   * answered in the last day with their answers (see escalations.mjs). */
+  const esc = escalationState({ roles, root: a.queueRoot, nowMs, textChars: 1200 });
   const waiting = {
     queue: ownerQueueItems({ root: a.queueRoot, limit: 0, subjectChars: 160 }),
     tasks: tasks.filter(t => t.status === 'open' && isOwner(t)).sort(byUrgency(today3)).map(t => ({ ...taskView(t), ready: readyIds.has(String(t.id)) })),
     ownerGo: tasks.filter(t => t.status === 'open' && Array.isArray(t.tags) && t.tags.includes('owner-go') && !isOwner(t)).map(taskView),
-    escalations: fleet.length ? recentBlocks({ root: a.queueRoot, to: fleet, sinceMs, textChars: 600 }).slice(-limitMsgs) : [],
-    answers: fleet.length ? recentBlocks({ root: a.queueRoot, from: fleet, sinceMs, textChars: 600 }).filter(b => !fleet.includes(b.role)).slice(-limitMsgs) : [],
+    escalations: esc.waiting,
+    answered: esc.answered,
   };
 
   const unknownAssignees = roles.size
     ? [...new Set(tasks.filter(t => t.status === 'open' && t.assignee && !known(t.assignee) && t.owner_kind !== 'human').map(t => t.assignee))].sort()
     : [];
   return {
-    days, journalDays, all: !!a.all, registry: { roles: roles.size, heads: heads.length, fleet },
+    days, journalDays, all: !!a.all, registry: { roles: roles.size, heads: heads.length, fleet: esc.fleet },
     tracks, allTracks: [...new Set([...heads.map(h => h.project)])].sort(),
     waiting, unknownAssignees, generated: now(),
   };
