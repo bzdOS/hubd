@@ -257,6 +257,18 @@ then commit. It unions the bullet-list hunks and leaves prose ones for you — a
 `hub doctor` shouts if a card is still carrying markers, because a reader hands
 those to an agent as content, not as an error.
 
+Or let git merge cards the way they are written: run `hub card merge-driver` once
+on each node. A card then merges by `##` section. A section changed on one side
+takes that side; changed on both, it gets a line merge of its own, and if that
+clashes too, both versions are kept, the node's own first, under a line that asks
+a person to look. Two writes of one card keep the later `- set:` stamp. Nothing
+stops and nothing is guessed. Measured on a mesh, 72 card merges in nine days:
+42 would have stopped the sync, 38 still need a look, none lost a line. The
+driver lives in `.git/config` and `.git/info/attributes`, which never travel, so
+a node that has not run the command merges as it did before. If hubd moves and the
+driver's path goes stale, the merge falls back to git's union merge rather than
+stopping; run the command again to point it at the new place.
+
 **You get:** a mesh with no server. GitHub optional; an SSH box you own is
 enough.
 

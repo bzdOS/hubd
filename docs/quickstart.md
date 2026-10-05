@@ -258,6 +258,10 @@ merges in place and aborts). A failed push is just a retry next run, because the
 local. Exit codes: `2` merge, `3` push, `4` append-only refusal (a log that lost lines, or one
 that was deleted outright).
 
+Project cards are the one file several nodes rewrite. Run `hub card merge-driver` once on each
+node, and git merges them by `##` section instead of stopping on them
+([recipes](recipes.md#7-two-machines-one-hub)).
+
 Before you touch the hub folder itself — a purge, a restore, an `absorb`, anything that rewrites —
 stop the sync on that machine, so a tick mid-operation cannot hand a half-finished state to every
 peer. You do not need to remember whether this node runs launchd, cron or a systemd timer:
@@ -274,8 +278,8 @@ exists to prevent.
 If several users share one hub folder (a fleet: agents under one account, the sync under root),
 keep the directory group-writable. Whatever a pull creates belongs to whoever ran it, and a user
 who cannot write a cursor gets a queue that answers "nothing new" forever. mesh-sync restores group
-write after every pull on a hub that is already group-writable, and `hub doctor` names any cursor
-this user cannot advance.
+write after every pull on a hub that is already group-writable, and after every one that stops, and
+`hub doctor` names any cursor this user cannot advance.
 
 If a machine (or a set of agents) turns out to have been writing to a folder that
 was never the shared hub, do not copy files across by hand — task ids from the same

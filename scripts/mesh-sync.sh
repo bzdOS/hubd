@@ -31,6 +31,9 @@
 #     conflict, and telling a human to "resolve it by hand" sends them to fix nothing. Exit
 #     5 is that case — local changes, or two paths differing only by case, which no
 #     case-insensitive filesystem can hold. Exit 2 stays for a genuine content clash.
+#   * GIT SPEAKS ENGLISH HERE (LC_ALL=C). The failure is told apart by git's own words, and git
+#     translates them. On a node with a Russian locale a card conflict was reported as a failed
+#     pull, not as a conflict, and that node's mesh stood for 2.5 and 4.5 hours.
 #   * A DELETED LOG IS ALSO NOT APPEND-ONLY (exit 4). The guard above reads diffs, and a file
 #     that is gone has no diff to read. Removing journal.<node>.jsonl or a queue file deletes
 #     history for every peer on the next push, which is the same damage by a different route.
@@ -42,7 +45,9 @@
 #     new directories and out of .git. The symptom is not an error: a role reads everything,
 #     writes nothing, and its queue answers "nothing new" forever (task maple-98). So when
 #     the hub dir is itself group-writable — the mark of a shared hub — group write is restored
-#     over the tree after any merge that changed something. A private hub is left untouched.
+#     over the tree after any merge that changed something, and after every failed fetch or
+#     merge: a fetch writes into .git, and an in-place merge writes the tree before it aborts.
+#     A private hub is left untouched.
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
@@ -64,6 +69,7 @@
 set -u
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
+export LC_ALL=C   # the case below reads git's messages; a translated one fell through to "merge failed"
 
 # Bound the network steps. This runs unattended on a timer, and a git that blocks forever -- a
 # wedged fetch, an unresponsive peer, a filesystem that stops answering -- leaves a process nothing
@@ -159,7 +165,7 @@ if git remote | grep -qx origin; then
   if ! FETCH_OUT="$(g fetch -q origin "$BR" 2>&1)"; then
     [ -n "$FETCH_OUT" ] && printf '%s\n' "$FETCH_OUT" >&2
     echo "mesh-sync: fetch failed on $BR (output above) — nothing was merged." >&2
-    exit 2
+    share_perms; exit 2
   fi
   # The trial merge, outside the working tree: exit 0 clean, 1 conflicted. Anything else is a git
   # without --write-tree (before 2.38), which merges in place below as it always did.
@@ -167,7 +173,7 @@ if git remote | grep -qx origin; then
   if [ "$MT" -eq 1 ]; then
     printf '%s\n' "$MT_OUT" | sed 1d >&2   # line 1 is the tree; then the paths and git's messages
     echo "mesh-sync: real content conflict on $BR — nothing was merged, the hub was not touched; resolve by hand in $DIR" >&2
-    exit 2
+    share_perms; exit 2
   fi
   # identity injected on the merge too: the merge commit needs a committer, and a
   # node may have no global git user set (fir hit exactly this — reported as a
@@ -175,6 +181,7 @@ if git remote | grep -qx origin; then
   # Not under the timeout: it is local, and a merge killed halfway is the half-merged hub.
   if ! MERGE_OUT="$(git -c user.name="$NODE" -c user.email="hubd-mesh@$NODE" merge --no-edit -q FETCH_HEAD 2>&1)"; then
     git merge --abort 2>/dev/null
+    share_perms
     [ -n "$MERGE_OUT" ] && printf '%s\n' "$MERGE_OUT" >&2
     # SAY WHAT ACTUALLY HAPPENED. This message used to read "(real content conflict)"
     # unconditionally, and it was wrong twice. Once for a missing git identity — the scar the

@@ -19,6 +19,12 @@ trap 'rm -rf "$TMP"' EXIT
 export GIT_CONFIG_NOSYSTEM=1 HOME="$TMP/home"
 mkdir -p "$HOME"
 
+# A node whose git answers in Russian. Where this git has no Russian messages, the locale cases
+# cannot fail here, and the run says so.
+RU='LANG=ru_RU.UTF-8 LC_ALL=ru_RU.UTF-8'
+[ "$(env $RU git -C "$HOME" rev-parse 2>&1)" != "$(LC_ALL=C git -C "$HOME" rev-parse 2>&1)" ] ||
+  echo "NOTE: git here has no Russian messages; the locale cases pass without testing anything"
+
 mkhub() {    # mkhub <dir> — a hub-shaped git repo with the union attributes the mesh uses
   mkdir -p "$1" && git -C "$1" init -q -b main
   printf 'journal.*.jsonl   merge=union\ntasks.*.events.jsonl merge=union\n' > "$1/.gitattributes"
@@ -113,6 +119,10 @@ if [ -e "$TMP/caseprobe" ]; then
     "case: and does not tell a human to resolve a conflict that does not exist"
   ok "$(grep -q 'differing only by case' "$TMP/out5" && echo 1 || echo 0)" "case: it names the actual cause"
   ok "$(grep -q 'hub doctor' "$TMP/out5" && echo 1 || echo 0)" "case: and where to see which paths collide"
+  # This failure is told apart by git's own words, and on a node whose git speaks Russian those
+  # words are translated: the refusal fell through to "merge failed".
+  env $RU HUBD_DIR="$TMP/c" sh "$SCRIPT" >"$TMP/out5r" 2>&1; rc=$?
+  ok "$([ $rc -eq 5 ] && grep -q 'REFUSED' "$TMP/out5r" && echo 1 || echo 0)" "locale: under a Russian locale the refusal is still exit 5 (got $rc)"
 
   # doctor is the other half: it must name the pair even though this hub cannot check it out.
   coll=$(HUBD_DIR="$TMP/c" HUBD_TEAM_DIR="$TMP/c" node hub/cli.mjs doctor 2>&1 | grep -c 'r.Node.queue.md')
@@ -179,6 +189,66 @@ HUBD_DIR="$TMP/nb" sh "$SCRIPT" >"$TMP/out14" 2>&1; rcb2=$?
 ok "$([ $rcb -eq 0 ] && [ $rca -eq 0 ] && [ $rcb2 -eq 0 ] && echo 1 || echo 0)" "gc two nodes: both sync cleanly across the archive and the append (got B $rcb, A $rca, B $rcb2)"
 ok "$(grep -q 'new order to w on nb' "$TMP/na/queues/w.nb.queue.md" && [ ! -e "$TMP/nb/queues/w.na.queue.md" ] && [ -f "$TMP/nb/queues/archive/w.na.queue.md" ] && echo 1 || echo 0)" "gc two nodes: A has B's append, B has A's archive"
 
+# ── project cards: a conflict in any locale, and a merge by section ───────────
+# A card is the file several nodes rewrite within the same minute. One node appends to the card's
+# last section, the other adds a section after it: for git's text merge that is one clash.
+card() { printf -- '---\nslug: p\n---\n# p\n\n- slug: p\n- set: 2026-09-01 10:00 by t\n\n## Digest\n\nwhat p is\n\n## Facts\n\n- one\n- two\n\n## Next step\n\n- ship it\n'; }
+mkcards() {   # mkcards <origin> <node1> <node2> — one card in the mesh, two nodes holding it
+  mkhub "$1"; git -C "$1" config receive.denyCurrentBranch ignore
+  mkdir -p "$1/projects"; card > "$1/projects/p.md"
+  git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -q -m card
+  git clone -q "$1" "$2"; git clone -q "$1" "$3"
+}
+edit_sections() {   # edit_sections <node1> <node2> — two different sections, both at the end of the card
+  printf -- '- later, from the first node\n' >> "$1/projects/p.md"
+  printf -- '\n## Notes\n\n- from the second node\n' >> "$2/projects/p.md"
+}
+subst() { node -e 'const fs = require("fs"), [f, a, b] = process.argv.slice(1); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(a, b))' "$@"; }
+markers() { grep -cE '^(<<<<<<<|=======|>>>>>>>)' "$1"; }
+
+# Without the driver, and with no union attribute for cards: a real conflict, named as one in
+# Russian too. The measured node said "pull failed" here, and its mesh stood for 2.5 and 4.5 hours.
+mkcards "$TMP/oc" "$TMP/c1" "$TMP/c2"
+edit_sections "$TMP/c1" "$TMP/c2"
+HUBD_DIR="$TMP/c1" sh "$SCRIPT" >/dev/null 2>&1
+env $RU HUBD_DIR="$TMP/c2" sh "$SCRIPT" >"$TMP/out15" 2>&1; rc=$?
+ok "$([ $rc -eq 2 ] && echo 1 || echo 0)" "locale: a card conflict under a Russian locale exits 2 (got $rc)"
+ok "$(grep -q 'real content conflict' "$TMP/out15" && echo 1 || echo 0)" "locale: and is named a content conflict, not a failed pull"
+
+# With the driver, installed on each node by hubd: the same two edits converge.
+mkcards "$TMP/od" "$TMP/d1" "$TMP/d2"
+for n in d1 d2; do HUBD_DIR="$TMP/$n" HUBD_TEAM_DIR="$TMP/$n" HUBD_NODE=$n $CLI card merge-driver >"$TMP/out-$n" 2>&1; done
+ok "$(grep -qx 'projects/\*.md merge=hubd-card' "$TMP/d2/.git/info/attributes" && ! grep -q hubd-card "$TMP/d2/.gitattributes" && echo 1 || echo 0)" \
+  "driver: hub card merge-driver installs it in the node's own .git, not in the shared attributes"
+edit_sections "$TMP/d1" "$TMP/d2"
+HUBD_DIR="$TMP/d1" sh "$SCRIPT" >/dev/null 2>&1; r1=$?
+HUBD_DIR="$TMP/d2" sh "$SCRIPT" >"$TMP/out16" 2>&1; r2=$?
+HUBD_DIR="$TMP/d1" sh "$SCRIPT" >/dev/null 2>&1; r3=$?
+ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ $r3 -eq 0 ] && echo 1 || echo 0)" "driver: two nodes editing different sections of one card both sync cleanly (got $r1 $r2 $r3)"
+ok "$(cmp -s "$TMP/d1/projects/p.md" "$TMP/d2/projects/p.md" && grep -q 'later, from the first node' "$TMP/d1/projects/p.md" && grep -q 'from the second node' "$TMP/d1/projects/p.md" && ! grep -q '<!-- hubd:' "$TMP/d1/projects/p.md" && echo 1 || echo 0)" \
+  "driver: and converge on one card holding both edits, nothing marked"
+ok "$([ "$(git -C "$TMP/d1" rev-parse 'HEAD^{tree}')" = "$(git -C "$TMP/d2" rev-parse 'HEAD^{tree}')" ] && echo 1 || echo 0)" "driver: the two nodes hold the same tree"
+
+# One section, changed on both nodes: both versions are kept and marked, and nothing stops.
+subst "$TMP/d1/projects/p.md" '- ship it' '- ship it today'
+subst "$TMP/d2/projects/p.md" '- ship it' '- wait for review'
+HUBD_DIR="$TMP/d1" sh "$SCRIPT" >/dev/null 2>&1; r1=$?
+HUBD_DIR="$TMP/d2" sh "$SCRIPT" >"$TMP/out17" 2>&1; r2=$?
+ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && grep -q 'ship it today' "$TMP/d2/projects/p.md" && grep -q 'wait for review' "$TMP/d2/projects/p.md" && echo 1 || echo 0)" \
+  "driver: the same section changed on both nodes keeps both versions (got $r1 $r2)"
+ok "$(grep -q '<!-- hubd: two nodes changed this section' "$TMP/d2/projects/p.md" && [ "$(markers "$TMP/d2/projects/p.md")" = 0 ] && echo 1 || echo 0)" \
+  "driver: marked for a person to look at, with no conflict markers in the card"
+
+# hubd moved and the driver's path went stale: the merge falls back to a union, and goes on.
+for n in d1 d2; do git -C "$TMP/$n" config merge.hubd-card.driver "$(git -C "$TMP/$n" config merge.hubd-card.driver | sed 's#card-merge\.mjs#card-merge-moved.mjs#')"; done
+HUBD_DIR="$TMP/d1" sh "$SCRIPT" >/dev/null 2>&1
+subst "$TMP/d1/projects/p.md" '- one' '- one, from the first node'
+subst "$TMP/d2/projects/p.md" '- one' '- one, from the second node'
+HUBD_DIR="$TMP/d1" sh "$SCRIPT" >/dev/null 2>&1; r1=$?
+HUBD_DIR="$TMP/d2" sh "$SCRIPT" >"$TMP/out18" 2>&1; r2=$?
+ok "$([ $r1 -eq 0 ] && [ $r2 -eq 0 ] && grep -q 'one, from the first node' "$TMP/d2/projects/p.md" && grep -q 'one, from the second node' "$TMP/d2/projects/p.md" && [ "$(markers "$TMP/d2/projects/p.md")" = 0 ] && echo 1 || echo 0)" \
+  "driver: a stale driver path falls back to a union merge; the mesh does not stop (got $r1 $r2)"
+
 # ── a shared hub stays group-writable after a pull ────────────────────────────
 # The fleet case: this script runs as root, the roles run as another user in the group. Anything
 # a pull creates is the puller's, and a role then reads everything and writes nothing.
@@ -196,6 +266,14 @@ gw() {   # gw <path> -> 1 when the group-write bit is set
 perm=$(ls -ld "$TMP/s/queues" | cut -c1-10)
 ok "$(gw "$TMP/s/queues")" "shared hub: a directory the pull created is group-writable ($perm)"
 ok "$(gw "$TMP/s/queues/r.n.queue.md")" "shared hub: so is the file in it"
+# A sync that stops still wrote: the commit and the fetch put objects into .git.
+git clone -q "$TMP/origin3" "$TMP/s2"; chmod 2775 "$TMP/s2"
+printf 'mesh side\n' > "$TMP/origin3/notes.md"
+git -C "$TMP/origin3" add -A && git -C "$TMP/origin3" -c user.name=t -c user.email=t@t commit -q -m notes
+printf 'node side\n' > "$TMP/s2/notes.md"
+(umask 022; HUBD_DIR="$TMP/s2" sh "$SCRIPT" >"$TMP/out19" 2>&1); rc=$?
+nw=$(find "$TMP/s2/.git" -type d ! -perm -g+w | wc -l | tr -d ' ')
+ok "$([ $rc -eq 2 ] && [ "$nw" = 0 ] && echo 1 || echo 0)" "shared hub: a sync that stops on a conflict still leaves .git group-writable (got $rc, $nw dirs without g+w)"
 # A private hub is left exactly as it was.
 git clone -q "$TMP/origin3" "$TMP/p"; chmod 700 "$TMP/p"
 printf 'y\n' > "$TMP/origin3/queues/r2.n.queue.md"
