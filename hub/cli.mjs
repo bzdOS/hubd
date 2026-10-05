@@ -10,7 +10,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, JOURNAL_NODE, VERSION, now, parseTs, slugify, sh, cardPath, digestOf, requireAuthor, runSync,
-  runCardSet, runReport, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
+  runCardSet, runReport, runReflect, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
   runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
@@ -108,7 +108,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check', '--remove',
+  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level',
 );
 
 function getFlag(name) {
@@ -592,12 +592,23 @@ command('report', () => {
   if ((!text || text === true) && !process.stdin.isTTY) {           // batch piped via stdin (heredoc)
     try { text = fs.readFileSync(0, 'utf8'); } catch {}
   }
-  if (!text || typeof text !== 'string' || !text.trim()) {           // no input → print the skeleton
+  // --reflect: the turn's reflection as fields, inline JSON (when it starts with `{`) or a file.
+  const rfArg = getFlag('--reflect');
+  if (rfArg === true) die('--reflect needs a value: {"goal": …} or a file holding it');
+  let reflect;
+  if (rfArg) {
+    const inline = rfArg.trimStart().startsWith('{');
+    let src = rfArg;
+    if (!inline) { try { src = fs.readFileSync(rfArg, 'utf8'); } catch (e) { die(`--reflect ${rfArg}: ${e.code === 'ENOENT' ? 'no such file' : e.message}`); } }
+    try { reflect = JSON.parse(src); } catch (e) { die(`--reflect${inline ? '' : ' ' + rfArg}: not JSON (${e.message})`); }
+  }
+  if (typeof text !== 'string') text = '';
+  if (!text.trim() && !reflect) {                                    // no input → print the skeleton
     console.log(REPORT_TEMPLATE);
     done(0);
   }
   let r;
-  try { r = runReport({ project: proj, agent, text, kind, private: args.includes('--private'), force: args.includes('--force') }); }
+  try { r = runReport({ project: proj, agent, text, kind, reflect, private: args.includes('--private'), force: args.includes('--force') }); }
   catch (e) { die(e.message); }   // a strict refusal is a message to read, not a stack trace
   const parts = [];
   if (r.nextReplaced) console.error(`  next step replaced — was${r.nextReplaced.by ? ' (' + r.nextReplaced.by + (r.nextReplaced.at ? ', ' + r.nextReplaced.at : '') + ')' : ''}: ${r.nextReplaced.text}`);
@@ -611,9 +622,11 @@ command('report', () => {
   if (r.private) parts.push('PRIVATE (journal.life.jsonl, local only, never synced)');
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
+  if (r.reflect) parts.push(`reflection (${r.reflect.level}${r.reflect.source === 'text' ? ', read from the text' : ''})`);
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
+  if (r.reflect && r.reflect.problems) console.error('  reflection filed, off the rules: ' + r.reflect.problems.join('; ') + ' (the lists: prompts/meta/fragments/reflect.md)');
   if (r.doneMissed && r.doneMissed.length) console.error('  warning: NOT closed (no such task): #' + r.doneMissed.join(' #') + ' — check the id with `hub task list`');
-  const onlyNote = r.note && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
+  const onlyNote = r.note && !r.reflect && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   done(0);
 });
@@ -1335,6 +1348,36 @@ command('recall', () => {
   done(0);
 });
 
+command('reflect', () => {
+  const usage = 'Usage: hub reflect --project <project> [--since 7d|12h|<time>] [--level turn|head|fleet] [--json]';
+  const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
+  const project = flag('--project') ?? flag('-p');
+  if (!project) die(usage);
+  let r;
+  try { r = runReflect({ project, since: flag('--since') ?? undefined, level: flag('--level') ?? undefined }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  const nz = (o) => Object.entries(o).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ');
+  const roles = Object.keys(r.roles);
+  console.log(`${r.project}: ${r.reflections} reflection(s) since ${r.since}${r.level ? ', level ' + r.level : ''}` +
+    (roles.length ? `, from ${roles.length} role(s)` : ''));
+  for (const role of roles) {
+    const p = r.roles[role];
+    console.log(`  ${role}  ${p.reflections}: ${nz(p.result)} · obstacles: ${nz(p.obstacle)}`);
+  }
+  const obs = Object.entries(r.obstacles).filter(([k, o]) => o.count && k !== 'none');
+  if (obs.length) console.log('\nobstacles');
+  for (const [k, o] of obs) {
+    console.log(`  ${k} ${o.count}`);
+    for (const f of o.facts) console.log(`    ${f.ts} ${f.role}: ${f.fact.slice(0, 200)}`);
+  }
+  if (r.rules.length) console.log('\nrules proposed more than once');
+  for (const g of r.rules) console.log(`  ×${g.count} ${g.rule.slice(0, 200)}  (${g.roles.join(', ')}; last ${g.last})`);
+  if (r.decisions.length) console.log('\ndecisions');
+  for (const d of r.decisions) console.log(`  ${d.ts} ${d.role} ${d.verdict}${d.reason ? ' (' + d.reason + ')' : ''}: ${d.rule.slice(0, 200)}`);
+  done(0);
+});
+
 command('usage', () => {
   if (args[1] === 'add') {
     let r;
@@ -1837,8 +1880,9 @@ const HELP = [
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
   ['log [project] [-n 20] [--json]', 'journal tail'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
-  ['report [-p <proj>]', 'structured report → card sections (no input prints the template)',
-    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m'],
+  ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
+    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
+  ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
@@ -1915,7 +1959,7 @@ function readOnlyRun() {
   switch (cmd) {
     case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
     case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
-    case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
+    case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall': case 'reflect':
     case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts':
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;

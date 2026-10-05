@@ -4,6 +4,27 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.42 — 2026-10-05
+
+- **A reflection is data.** `hub_report` takes a `reflect` field: `goal`, `result`
+  (done | partial | no), `obstacle` (permissions | path | unclear-dispatch | environment | model
+  | none) with `obstacle_fact`, `instead`, `rule`, and a `level`: `turn`, or `head` and `fleet`,
+  which may carry `decisions` on proposed rules (accepted | rejected | needs-owner). A value off
+  a list is refused before anything is written, and so is a reflection given both as the field
+  and in the text. The journal entry keeps the field and the same block as text, so a reader of
+  the journal sees what it saw before. The CLI takes it as `hub report --reflect <json|file>`.
+- **The `REFLECT` block in a report's text is read, not refused.** Reports written to the
+  fragment keep working. The reply says the reflection was read and names what is off the lists:
+  measured on one hub's journal, 24% of 2691 reflections had something, most often a fact after
+  `none`.
+- **`hub reflect --project <p> [--since 7d] [--level turn|head|fleet] [--json]`.** Per role, the
+  reflections and their results; per obstacle class, the count and the latest three facts; the
+  rules proposed more than once, compared without case and punctuation; the decisions a head or
+  the fleet took. A result or class off the lists is counted as `other` or `unclassified`. The
+  `--json` keys are always there, at zero when empty.
+- **`hub recall` finds a reflection's rule and obstacle as hits of their own.** They end the
+  entry, so inside the journal hit they sat past the 300 characters a hit shows.
+
 ## 0.9.41 — 2026-10-05
 
 - **A role's rules over MCP.** `prompts/list` now names the worker, head and orchestrator

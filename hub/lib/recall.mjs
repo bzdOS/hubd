@@ -4,6 +4,7 @@ import {
   cardStamp, digestOf, escRe, isPlaceholder, journalTail, loadTasks, now, parseTs, projectCards, projectFilter,
   sectionBody, sectionsConfig, slugify,
 } from './core.mjs';
+import { entryReflect, isNoRule, splitReflect } from './reflect.mjs';
 
 /* ── Recall: what do we know about X, and was it still true when we learned it ──
  * hub_search is exact and flat: every line that contains the substring, in file order, a decision
@@ -19,7 +20,7 @@ import {
  * And every hit carries its own date plus a staleness verdict, because the failure mode of recall
  * is not missing a fact — it is handing over a two-month-old fact with the same confidence as
  * this morning's. A stale hit says so, in the words a reader needs: it was true THEN, check it. */
-const RECALL_WEIGHT = { decision: 5, digest: 4, section: 3, task: 2, journal: 1 };
+const RECALL_WEIGHT = { decision: 5, digest: 4, section: 3, rule: 3, task: 2, obstacle: 2, journal: 1 };
 
 /* Words that carry no topic. "IMM not established attention overlap" returned eight hits and
  * none from the project the question was about: the first was scored on "not" and "overlap",
@@ -99,9 +100,18 @@ export function runRecall(a = {}) {
       }
     }
   }
+  /* A reflection's rule and obstacle are hits of their own. They end the report, so inside the
+   * journal hit they sat past the 300 characters a hit shows: a recall on a rule found the entry
+   * and showed its first lines. The journal hit keeps the rest of the text, goal and instead
+   * included, so no word stops being found. */
   for (const e of journalTail(null, 4000)) {
-    push(e.kind === 'decision' ? 'decision' : 'journal',
-      `journal ${e.ts} [${e.project || '?'}/${e.agent || '?'}]`, e.project || null, e.text || '', e.ts);
+    const where = `journal ${e.ts} [${e.project || '?'}/${e.agent || '?'}]`;
+    const rf = entryReflect(e);
+    const text = !rf ? e.text || '' : [splitReflect(e.text).body, rf.goal && 'goal: ' + rf.goal, rf.instead && 'instead: ' + rf.instead,
+      ...(rf.decisions || []).map(d => `${d.verdict}: ${d.rule}`)].filter(Boolean).join(' · ');
+    if (text) push(e.kind === 'decision' ? 'decision' : 'journal', where, e.project || null, text, e.ts);
+    if (rf && rf.rule && !isNoRule(rf.rule)) push('rule', where + ' rule', e.project || null, rf.rule, e.ts);
+    if (rf && rf.obstacle_fact) push('obstacle', `${where} obstacle${rf.obstacle ? ' ' + rf.obstacle : ''}`, e.project || null, rf.obstacle_fact, e.ts);
   }
   for (const t of loadTasks().tasks) {
     push('task', `task #${t.id} (${t.status})`, t.project, t.text || '', t.done || t.created);

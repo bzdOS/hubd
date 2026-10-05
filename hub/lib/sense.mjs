@@ -43,6 +43,7 @@ import {
   runReport, atomicWrite, withLock, parseVerdict, shareMode, readJson,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
+import { splitReflect } from './reflect.mjs';
 
 export const SENSE_DEFAULTS = {
   idleMinEmpty: 3,      // consecutive empty polls (about 5 min each) before a worker reads as idle
@@ -134,24 +135,8 @@ export function isTwin(e, qmsgs, cfg = SENSE_DEFAULTS) {
   return (qmsgs || []).some(([qt, body]) => Math.abs(t - qt) <= cfg.queueTwinS && body.includes(head));
 }
 
-/* A role's reflection ends its turn's one report (prompts/meta/fragments/reflect.md): a line that
- * is exactly REFLECT, then five `key: value` lines; the journal joins a report's lines with " · ".
- * It used to be a report of its own, which cost a role one more call at the point where a call
- * costs the most — the whole turn re-read. At the end of a long report it fell past the cut the
- * head's order makes, and it is the part the head is told to review. Both forms are read: a
- * reflection that starts the text is all of it. A REFLECT with neither `result:` nor `obstacle:`
- * after it is a word in prose, not a reflection; of several, the last one is the block. */
-const REFLECT_AT = /(^|\n|\s·\s)[ \t#·]*((?:HEAD-|FLEET-)?REFLECT)\b/g;
-export function splitReflect(text) {
-  const s = String(text ?? '');
-  let cut = null;
-  for (const m of s.matchAll(REFLECT_AT)) {
-    const at = m.index + m[0].length - m[2].length;
-    if (/\b(?:result|obstacle)\s*:/i.test(s.slice(at))) cut = { body: m.index, at };   // the last one: the block ends the report
-  }
-  if (!cut) return { body: s, reflect: '' };
-  return { body: s.slice(0, cut.body).replace(/[\s·]+$/, ''), reflect: s.slice(cut.at).trim() };
-}
+// The reflection block is split off where its fields are read (reflect.mjs); the excerpt below keeps it.
+export { splitReflect };
 
 /** A worker's report as the head's order quotes it: `max` characters, the reflection kept whole
  *  (up to 500) and the body cut to make room for it. */

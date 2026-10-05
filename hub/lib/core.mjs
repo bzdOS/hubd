@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
+import { LEVELS, checkReflect, readReflect, reflectDigest, renderReflect, splitReflect } from './reflect.mjs';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
 // materialised protocol matches the code actually running there).
@@ -2757,6 +2758,12 @@ export function runReport(a) {
   const slug = slugify(project);
   const by = requireAuthor(a.by ?? a.agent, 'by');
   assertProse(a.text, 'report');
+  // Checked before anything is written: a refused reflection must not leave half a report behind.
+  const rf = a.reflect != null ? checkReflect(a.reflect) : null;
+  if (rf) {
+    if (splitReflect(a.text).reflect) throw new Error('reflect: given twice, as the field and as a REFLECT block in the text. Send one of them.');
+    assertProse(renderReflect(rf), 'reflect');
+  }
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
@@ -2774,7 +2781,7 @@ export function runReport(a) {
   // a session that files prose leaves the card exactly as uninformative as it found it. Off by
   // default, because refusing a write is the harshest thing this engine can do and an upgrade
   // must never start doing it uninvited.
-  const noteOnly = b.note.length && !explicitNote && !b.decide.length && !b.fact.length && !b.hypo.length &&
+  const noteOnly = b.note.length && !explicitNote && !rf && !b.decide.length && !b.fact.length && !b.hypo.length &&
     !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.to.length;
   if (noteOnly && rulesConfig().strict.rejectNoteOnlyReport) {
     throw new Error('strict: this report is prose only. Use a prefix so it lands somewhere a later reader will find it — ' +
@@ -2847,13 +2854,24 @@ export function runReport(a) {
     }
   }
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
-  if (b.note.length) {
+  /* A reflection field rides on the report's own entry, and its block is written into the text as
+   * well: the field is what a digest counts, the text what the head's order and every grep read. */
+  if (b.note.length || rf) {
     const to = b.to.length ? b.to.join(',') : (a.to || undefined);
-    const entry = { ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: b.note.join(' · ') };
+    const lines = rf ? [...b.note, ...renderReflect(rf).split('\n')] : b.note;
+    const entry = { ts: now(), project: slug, agent: by, kind: a.kind || 'note', text: lines.join(' · ') };
     if (to) entry.to = to;
+    if (rf) entry.reflect = rf;
     if (a.private) { journalAppendPrivate(entry); summary.private = true; }
     else journalAppend(entry);
     summary.note = true;
+  }
+  /* The writer hears at once what a digest would make of its reflection: a block off the list is
+   * still filed (a refusal would lose the report), and the reply says what was off. */
+  if (rf) summary.reflect = { level: rf.level, source: 'field' };
+  else {
+    const t = readReflect(a.text);
+    if (t) summary.reflect = { level: t.level, source: 'text', ...(t.problems.length ? { problems: t.problems } : {}) };
   }
   // A report of pure FACT:/COMM:/NEXT: lines writes the CARD and never touches the journal, so the
   // choke point inside journalAppend misses it — and filing one is unmistakably somebody acting.
@@ -2878,6 +2896,30 @@ export function runReport(a) {
     }
   }
   return summary;
+}
+
+/** `since` for a reader: a duration back from now (`7d`, `12h`, `30m`) or a time (`2026-10-01`,
+ *  `2026-10-01 14:00`, ISO). Anything else is an error, never a silent "everything". */
+export function sinceToMs(since, nowMs = Date.now()) {
+  const s = String(since).trim();
+  const d = /^(\d+)([dhm])$/.exec(s);
+  if (d) return nowMs - d[1] * { d: 86400000, h: 3600000, m: 60000 }[d[2]];
+  const t = /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([zZ]|[+-]\d\d:?\d\d)?)?$/.test(s) ? parseTs(s).getTime() : NaN;
+  if (Number.isNaN(t)) throw new Error(`since: "${s}" is neither a duration (7d, 12h, 30m) nor a time (2026-10-01, 2026-10-01 14:00)`);
+  return t;
+}
+
+/** The reflection digest of one project (reflect.mjs → reflectDigest), over a window. */
+export function runReflect(a = {}) {
+  if (!a.project || typeof a.project !== 'string') throw new Error('project required: hub reflect --project <project>');
+  if (a.level != null && !LEVELS.includes(a.level)) throw new Error(`level "${a.level}" is not one of ${LEVELS.join(' | ')}`);
+  const sinceMs = sinceToMs(a.since ?? '7d');
+  const set = projectSlugSet(a.project);
+  const entries = [];
+  for (const e of journalEntries(sinceMs)) if (set.has(e.project) && parseTs(e.ts).getTime() >= sinceMs) entries.push(e);
+  entries.sort((x, y) => parseTs(x.ts) - parseTs(y.ts));
+  return { project: canonProject(a.project), since: new Date(sinceMs).toISOString().slice(0, 16).replace('T', ' '),
+    ...reflectDigest(entries, { level: a.level ?? null }) };
 }
 
 /** Where else this name exists — the pointer a "no card" error owes its caller. */
