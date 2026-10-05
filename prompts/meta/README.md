@@ -27,6 +27,12 @@ here reaches every role on its next render.
 lines on stderr. A broken template or a missing variable exits 2 and writes
 nothing, so a loop can tell stale rules from a render that cannot happen.
 
+The MCP server serves the same render. `prompts/list` names each template with
+its variables as required arguments, described from the tables in this file;
+`prompts/get` with all of them returns exactly what `hub prompts render`
+prints. A missing or blank argument is an invalid-params error naming it. A
+client with no rules file gets the rules of the installed hubd, not a copy.
+
 ## Format
 
 - The first line of a template declares every variable it and its fragments

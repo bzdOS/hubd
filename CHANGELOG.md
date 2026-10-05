@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.41 — 2026-10-05
+
+- **A role's rules over MCP.** `prompts/list` now names the worker, head and orchestrator
+  templates next to `harvest`, each with its declared variables as required arguments, described
+  from the tables in `prompts/meta/README.md`. `prompts/get` with all of them returns byte for
+  byte what `hub prompts render` prints, rendered by the same code from the installed package, so
+  a client with no rules file gets the current rules, not a copy. A missing or blank argument is
+  an invalid-params error (-32602) that names it; a broken template is an internal error, and
+  `prompts/list` then lists `harvest` alone and says why on stderr.
+- A template variable without a row in `prompts/meta/README.md` now fails a test: the MCP argument
+  would go out without a description.
+
 ## 0.9.40 — 2026-10-05
 
 - **A conflict is named as one in any locale.** `mesh-sync` tells a refused merge (exit 5) from a

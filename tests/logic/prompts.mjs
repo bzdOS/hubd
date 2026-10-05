@@ -1,7 +1,7 @@
 // prompts.mjs — a role's rules rendered from prompts/meta: one template, the specifics as variables
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { REPO, ok, mktmp, cli, done } from './_h.mjs';
 
 const P = await import(path.join(REPO, 'hub/lib/prompts.mjs'));
@@ -160,6 +160,65 @@ ok(/declares no variables/.test(err(() => P.renderPrompt('nodecl', { x: '1' }, F
   ok(cli(['prompts', 'render', 'head', '--vars', vf, '--out', out, '--check', out]).code === 2, 'prompts: --out and --check together are refused');
 }
 ok(JSON.stringify(P.lineDiff('a\nb\nc', 'a\nx\nc')) === JSON.stringify(['+2: x', '-2: b']), 'prompts: lineDiff numbers each side in its own text');
+
+// ── over MCP: prompts/list and prompts/get, rendered by the same code ──
+{
+  const { private_check, ...noCheck } = VARS;
+  const reqs = [
+    { id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
+    { id: 2, method: 'prompts/list', params: {} },
+    ...['worker', 'head', 'orchestrator'].map((t, i) => ({ id: 10 + i, method: 'prompts/get', params: { name: t, arguments: VARS } })),
+    { id: 20, method: 'prompts/get', params: { name: 'worker', arguments: noCheck } },
+    { id: 21, method: 'prompts/get', params: { name: 'worker' } },
+    { id: 22, method: 'prompts/get', params: { name: 'nosuch', arguments: VARS } },
+  ].map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
+  let out = '';
+  try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env: { ...process.env, HUBD_DIR: mktmp() }, timeout: 15000 }); }
+  catch (e) { out = e.stdout || ''; }
+  const res = {};
+  for (const l of out.split('\n')) { try { const m = JSON.parse(l); if (m.id != null) res[m.id] = m; } catch {} }
+  const list = res[2]?.result?.prompts || [];
+  const byName = Object.fromEntries(list.map(p => [p.name, p]));
+  ok(['harvest', 'worker', 'head', 'orchestrator'].every(n => byName[n]), `MCP: prompts/list has harvest and the three templates (got ${list.map(p => p.name).join(', ')})`);
+  for (const t of ['worker', 'head', 'orchestrator']) {
+    const a = byName[t]?.arguments || [];
+    ok(a.map(x => x.name).join(',') === P.templateVars(t).join(',') && a.every(x => x.required === true),
+      `MCP: ${t}'s arguments are its declared variables, all required`);
+    ok(a.length && a.every(x => x.description), `MCP: every argument of ${t} carries its description from prompts/meta/README.md`);
+    const cliOut = cli(['prompts', 'render', t, '--vars', vf]).stdout;
+    const got = res[10 + ['worker', 'head', 'orchestrator'].indexOf(t)]?.result?.messages?.[0]?.content?.text;
+    ok(got && got === cliOut, `MCP: prompts/get ${t} with every argument is byte for byte what hub prompts render prints`);
+  }
+  ok(/a worker: takes one dispatch per turn/.test(byName.worker?.description || ''), 'MCP: a template\'s description comes from the README table');
+  ok(res[20]?.error?.code === -32602 && /private_check/.test(res[20].error.message) && !res[20].result,
+    `MCP: a missing argument is an invalid-params error that names it (got ${JSON.stringify(res[20]?.error)})`);
+  ok(res[21]?.error?.code === -32602 && /role/.test(res[21].error.message) && /private_check/.test(res[21].error.message),
+    'MCP: with no arguments at all, the error names every one');
+  ok(res[22]?.error?.code === -32602 && /unknown prompt/.test(res[22].error.message), 'MCP: an unknown prompt is still an error');
+}
+// A broken template, in a copy of the package: the list keeps harvest, the render is an internal error.
+{
+  const pkg = mktmp();
+  for (const f of ['hub', 'prompts', 'package.json', 'HARVEST.md']) fs.cpSync(path.join(REPO, f), path.join(pkg, f), { recursive: true });
+  const w = path.join(pkg, 'prompts/meta/worker.md');
+  fs.writeFileSync(w, fs.readFileSync(w, 'utf8').split('\n').slice(1).join('\n'));
+  const reqs = [{ id: 1, method: 'prompts/list', params: {} }, { id: 2, method: 'prompts/get', params: { name: 'worker', arguments: VARS } }]
+    .map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
+  const r = spawnSync('node', [path.join(pkg, 'hub/index.mjs')], { input: reqs, encoding: 'utf8', env: { ...process.env, HUBD_DIR: mktmp() }, timeout: 15000 });
+  const res = {};
+  for (const l of (r.stdout || '').split('\n')) { try { const m = JSON.parse(l); if (m.id != null) res[m.id] = m; } catch {} }
+  const names = (res[1]?.result?.prompts || []).map(p => p.name);
+  ok(names.includes('harvest') && !names.includes('worker'), `MCP: a broken template drops the role prompts from the list, not harvest (got ${names.join(', ')})`);
+  ok(/prompts\/meta: .*worker/.test(r.stderr || ''), `MCP: and stderr says which template (got ${JSON.stringify((r.stderr || '').trim())})`);
+  ok(res[2]?.error?.code === -32603, `MCP: prompts/get of a broken template is an internal error (got ${JSON.stringify(res[2]?.error)})`);
+}
+// One more template variable is one more row in the README: the MCP description is read there.
+{
+  const docs = P.promptDocs();
+  const undocumented = P.templateNames().flatMap(t => P.templateVars(t)).filter(v => !docs.vars[v]);
+  ok(!undocumented.length, `prompts: every declared variable has a row in prompts/meta/README.md (missing: ${[...new Set(undocumented)].join(', ') || 'none'})`);
+  ok(P.templateNames().every(t => docs.templates[t]), 'prompts: and every template a row in its template table');
+}
 
 // ── the tarball ──
 {

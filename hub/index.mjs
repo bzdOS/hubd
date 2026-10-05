@@ -16,6 +16,7 @@ import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runRecall } from './lib/recall.mjs';
 import { queueWait, queueWaitAll, queueSummaryForBrief, queueAck, briefWithQueues, queueSendChecked } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
+import { promptList, renderPrompt, templateNames } from './lib/prompts.mjs';
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -589,13 +590,27 @@ async function handleMessage(msg, mode = 'stdio') {
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };
-  if (method === 'prompts/list') return { jsonrpc: '2.0', id, result: { prompts: [
-    { name: 'harvest', description: 'Harvest this dialog into the hub — projects, tasks, decisions, links, open questions (the Harvest Protocol). No need to fetch HARVEST.md.' },
-  ] } };
+  // A role's rules are prompts too, rendered from this package's prompts/meta by the code behind
+  // `hub prompts render`: a client with no rules file gets the installed version, not a copy.
+  if (method === 'prompts/list') {
+    let roles = [];   // a broken template costs the role prompts, not harvest
+    try { roles = promptList(); } catch (e) { process.stderr.write('hubd: prompts/meta: ' + e.message + '\n'); }
+    return { jsonrpc: '2.0', id, result: { prompts: [
+      { name: 'harvest', description: 'Harvest this dialog into the hub — projects, tasks, decisions, links, open questions (the Harvest Protocol). No need to fetch HARVEST.md.' },
+      ...roles,
+    ] } };
+  }
   if (method === 'prompts/get') {
     if (params?.name === 'harvest') {
       const text = harvestPrompt() || 'HARVEST.md not found in this hubd package.';
       return { jsonrpc: '2.0', id, result: { description: 'Harvest this dialog into the hub', messages: [{ role: 'user', content: { type: 'text', text } }] } };
+    }
+    if (templateNames().includes(params?.name)) {
+      const a = params.arguments || {};
+      let text;
+      try { text = renderPrompt(params.name, a); }
+      catch (e) { return { jsonrpc: '2.0', id, error: { code: e.args ? -32602 : -32603, message: e.message } }; }
+      return { jsonrpc: '2.0', id, result: { description: `The ${params.name} rules` + (a.role ? ` of ${a.role}` : ''), messages: [{ role: 'user', content: { type: 'text', text } }] } };
     }
     return { jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown prompt: ' + params?.name } };
   }
