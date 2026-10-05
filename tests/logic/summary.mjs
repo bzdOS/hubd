@@ -60,7 +60,7 @@ fs.writeFileSync(path.join(SM, 'projects', 'api.md'), '# api\n\n## Digest\n\n- 2
 
 const v = (ts, agent, verdict, text) => ({ ts, agent, verdict, text });
 const EXPECTED = {
-  v: 1, asOf: '2026-10-05 12:00', journalDays: 30, closedHours: 24, answeredHours: 24,
+  v: 1, asOf: '2026-10-05 12:00', journalDays: 30, closedHours: 24, answeredHours: 24, snapshotStaleMin: 5, diskFullPct: 90,
   tracks: [
     {
       project: 'api', heads: ['api-head'], roles: ['api-dev'],
@@ -86,6 +86,7 @@ const EXPECTED = {
     },
   ],
   escalations: { fleet: [], waiting: [], answered: [] },   // no fleet role here: tests/logic/escalations.mjs
+  nodes: [],   // no snapshot here: tests/logic/nodes.mjs
 };
 
 const s1 = sm.runSummary({ now: NOW });
@@ -108,8 +109,8 @@ ok(JSON.stringify(sm.runSummary({ now: NOW })) === JSON.stringify(s1), 'summary:
 ok(sm.namesTask('cedar-1').test('see cedar-1.') && !sm.namesTask('cedar-1').test('cedar-12') && !sm.namesTask('cedar-1').test('xcedar-1')
   && sm.namesTask('7').test('closes #7') && !sm.namesTask('7').test('7 files') && !sm.namesTask('7').test('#71'),
   'summary: a task is named whole, and a bare number only with #');
-ok(isDeepStrictEqual(sm.emptySummary(NOW), { v: 1, asOf: '2026-10-05 12:00', journalDays: 30, closedHours: 24, answeredHours: 24, tracks: [],
-  escalations: { fleet: [], waiting: [], answered: [] } }),
+ok(isDeepStrictEqual(sm.emptySummary(NOW), { v: 1, asOf: '2026-10-05 12:00', journalDays: 30, closedHours: 24, answeredHours: 24, snapshotStaleMin: 5,
+  diskFullPct: 90, tracks: [], escalations: { fleet: [], waiting: [], answered: [] }, nodes: [] }),
   'summary: an empty hub has the same shape with no tracks');
 
 // ── the endpoint and the page: the same answer, and nothing from the hub is markup ──

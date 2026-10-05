@@ -515,7 +515,14 @@ head's journal entry that names the task (`#<id>`, or the bare id when it has a 
 ACCEPT, ACCEPTED, REJECT or REJECTED in capitals. Heads who write in another language list their
 words in `<hub>/verdicts.json`, `{"accept": [...], "reject": [...]}`, negated forms under reject.
 Beside the tracks, the escalations to the fleet, as the board defines them, with their text and
-answers whole. Every list is ordered by its own fields, so one hub state gives one answer.
+answers whole; and the NODES, each as its `snapshot.<node>.json` in the hub directory states it.
+That file is written by the node's fleet tool, not by hubd, and the mesh carries it like
+`presence.<node>.json`: `{"v":1, "node", "ts" (ISO UTC), "sessions": [{session, role, state,
+hub_age_min, motion_min}], "disks": [{mount, used_pct, free_gb}], "relays": [{pair, active, failed,
+last_ok}]}`. Fields it does not know are ignored. In red: a snapshot over 5 minutes old, a disk
+at 90% or more, a relay failed or not active; a file that does not parse or is not v1 is a row
+"snapshot unreadable" naming its node. Every list is ordered by its own fields, so one hub state
+gives one answer.
 
 **`presence/` is node-local, so read `coverage` before you believe an absence.** The directory
 never syncs (a file per agent, rewritten every few seconds — syncing it would push every heartbeat

@@ -310,7 +310,8 @@ is a folder you own. They are two separate things — and that is the whole poin
 - **Board (read-only)** — `hub serve`: a Summary of each track, assembled by a
   script (goal, work in hand, blocked, closed today, the head's verdict on each
   task, what each role reports blocked; the escalations to the fleet still waiting
-  for your answer), Tracks, a Live kanban, and a History of
+  for your answer; each node's sessions, disks and relays from its snapshot,
+  what is wrong in red), Tracks, a Live kanban, and a History of
   the journal to play back. Cards move because agents move them. The only
   button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
   agents — you manage the rules.

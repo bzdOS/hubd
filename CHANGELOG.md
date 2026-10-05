@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.47 — 2026-10-05
+
+- **The Summary shows each node as its own snapshot states it.** A node's fleet tool writes
+  `snapshot.<node>.json` (v1: sessions, disks, relays) into the hub directory, and the mesh
+  carries it like `presence.<node>.json`; hubd only reads it. `/api/summary` gains `nodes`, one
+  row per file, and `snapshotStaleMin` and `diskFullPct`. The page lists each node's snapshot
+  age, disks and relays, and a table of sessions: session, node, role, state, minutes since the
+  hub, minutes since motion. In red: a snapshot over 5 minutes old (or with no time), a disk at
+  90% or more, a relay failed or not active. Fields it does not know are ignored; a file that
+  does not parse, is not an object or is not v1 is a row "snapshot unreadable" with its node and
+  the reason.
+
 ## 0.9.46 — 2026-10-05
 
 - **An escalation to the fleet waits until it is answered, and the board says which.** An
