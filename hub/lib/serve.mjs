@@ -59,7 +59,7 @@ export function startServer(port) {
           if (url.pathname === '/api/sparkline') return res.end(JSON.stringify({ months: [] }));
           if (url.pathname === '/api/journal-since') return res.end(JSON.stringify({ entries: [] }));
           if (url.pathname === '/api/board') return res.end(JSON.stringify({ days: 7, registry: { roles: 0, heads: 0, fleet: [] }, tracks: [], allTracks: [],
-            waiting: { queue: [], tasks: [], ownerGo: [], escalations: [], answers: [] }, unknownAssignees: [], generated: now() }));
+            waiting: { queue: [], tasks: [], ownerGo: [], escalations: [], answered: [] }, unknownAssignees: [], generated: now() }));
           if (url.pathname === '/api/summary') return res.end(JSON.stringify(emptySummary()));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
@@ -75,7 +75,7 @@ export function startServer(port) {
       if (url.pathname === '/api/board') return res.end(JSON.stringify(runBoard({
         days: url.searchParams.get('days') || undefined, project: url.searchParams.get('project') || undefined,
         all: url.searchParams.get('all') === '1', queueRoot: MT ? HUB : undefined })));
-      if (url.pathname === '/api/summary') return res.end(JSON.stringify(runSummary({ project: url.searchParams.get('project') || undefined })));
+      if (url.pathname === '/api/summary') return res.end(JSON.stringify(runSummary({ project: url.searchParams.get('project') || undefined, queueRoot: MT ? HUB : undefined })));
       res.writeHead(404); res.end(JSON.stringify({ error: 'not found' }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
   };

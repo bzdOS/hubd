@@ -115,7 +115,8 @@ details.item>summary .meta{font-weight:400}
 .verdict{margin-top:4px}
 .verdict .full{margin-top:2px}
 .stalled{border-top:1px solid #E3E3DE;padding-bottom:6px}
-@media(max-width:900px){.t-grid,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
+.t-grid.two{grid-template-columns:repeat(2,1fr)}
+@media(max-width:900px){.t-grid,.t-grid.two,.w-grid{grid-template-columns:1fr}.t-col,.w-col{border-right:none}}
 @media(max-width:720px){.board{grid-template-columns:1fr}.col{border-right:none;border-bottom:1px solid #E3E3DE}}
 </style>
 </head>
@@ -328,6 +329,11 @@ function stateText(s){
   return esc(s.kind);
 }
 function meta(parts){return parts.filter(Boolean).join(' &middot; ')}
+/* An escalation to the fleet, named by its key (what an answer quotes), with its answer once there is one. */
+function escItem(x){
+  return item(x.subject,x.text+(x.answer?NL+NL+'answered '+x.answer.ts+':'+NL+x.answer.text:''),meta([esc(x.key),'&rarr; '+esc(x.to),x.task?'#'+esc(x.task):'',
+    x.answer?'answered '+hm(x.answer.ts)+' after '+ago(x.waitedMin):'<span class="warn">waiting '+ago(x.waitedMin)+'</span>']));
+}
 function roleTr(r){
   return '<tr><td>'+esc(r.role)+'<div class="meta">'+meta([esc(r.rank),r.node?esc(r.node):''])+'</div></td>'+
     '<td class="st st-'+esc(r.state.kind)+'">'+stateText(r.state)+(r.statusText&&r.state.kind!=='off'?'<div class="meta" title="'+esc(r.statusText)+'">'+esc(String(r.statusText).slice(0,40))+'</div>':'')+'</td>'+
@@ -360,13 +366,13 @@ function trackEl(t,d){
 function renderTracks(){
   var d=bdData; if(!d)return;
   var w=d.waiting;
-  document.getElementById('waiting-sum').textContent='Waiting for you: '+w.queue.length+' in your queue, '+w.tasks.length+' tasks, '+w.ownerGo.length+' owner-go, '+w.escalations.length+' escalations in '+d.days+'d';
+  document.getElementById('waiting-sum').textContent='Waiting for you: '+w.queue.length+' in your queue, '+w.tasks.length+' tasks, '+w.ownerGo.length+' owner-go'+(d.registry.fleet.length?', '+w.escalations.length+' escalations unanswered':'');
   document.getElementById('waiting-body').innerHTML=
     '<div class="w-col">'+listBlock('w:q','Your queue',w.queue,function(x){return item(x.subject,null,meta([esc(x.role),(x.ageDays==null?'?':x.ageDays)+'d','from '+esc(x.from),x.task?'#'+esc(x.task):'']),'clamp-t')},5)+'</div>'+
     '<div class="w-col">'+listBlock('w:t','Your tasks',w.tasks,function(x){return item('#'+x.id+' '+x.title,x.text,meta([esc(x.project),x.deadline?esc(x.deadline):'',x.ready?'':'blocked']))},5)+
       listBlock('w:g','owner-go',w.ownerGo,function(x){return item('#'+x.id+' '+x.title,x.text,meta([esc(x.project),who(x)]))},5)+'</div>'+
-    '<div class="w-col">'+listBlock('w:e','Escalations',w.escalations.slice().reverse(),function(x){return item(x.subject,x.text,meta([hm(x.ts),esc(x.from)+' &rarr; '+esc(x.role),x.task?'#'+esc(x.task):'']))},5)+
-      listBlock('w:a','Answers',w.answers.slice().reverse(),function(x){return item(x.subject,x.text,meta([hm(x.ts),'&rarr; '+esc(x.role),x.task?'#'+esc(x.task):'']))},5)+'</div>';
+    '<div class="w-col">'+listBlock('w:e','Escalations, unanswered',w.escalations.slice().reverse(),escItem,5)+
+      listBlock('w:a','Answered, 24h',w.answered.slice().reverse(),escItem,5)+'</div>';
   var names=d.tracks.map(function(t){return t.project});
   if(bdTrack&&names.indexOf(bdTrack)<0)bdTrack='';
   document.getElementById('track-filter').innerHTML=(names.length>1?'<button class="chip'+(bdTrack?'':' active')+'" data-track="">all tracks</button>'+
@@ -425,10 +431,17 @@ function summaryEl(t,d){
     '</div></div>'+
     (t.stalled.length?'<div class="stalled">'+listBlock(k+'s','Stalled',t.stalled,stalledEl)+'</div>':'')+'</section>';
 }
+function escalationsEl(e,d){
+  if(!e||!e.fleet.length)return '';
+  return '<section class="track"><div class="track-head"><span class="track-name">escalations</span><span class="meta">to '+esc(e.fleet.join(', '))+
+    ' &middot; answered by an Owner decisions entry quoting the key</span></div><div class="t-grid two"><div class="t-col">'+
+    listBlock('s:esc:w','Unanswered',e.waiting.slice().reverse(),escItem)+'</div><div class="t-col">'+
+    listBlock('s:esc:a','Answered, '+esc(d.answeredHours)+'h',e.answered.slice().reverse(),escItem)+'</div></div></section>';
+}
 function renderSummary(){
   var d=smData; if(!d)return;
-  document.getElementById('summary').innerHTML=d.tracks.length?d.tracks.map(function(t){return summaryEl(t,d)}).join(''):
-    '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>';
+  document.getElementById('summary').innerHTML=escalationsEl(d.escalations,d)+(d.tracks.length?d.tracks.map(function(t){return summaryEl(t,d)}).join(''):
+    '<div class="empty">no tracks yet. A track is a project with a head: hub resource set &lt;role&gt; --type role --attr rank=head --attr project=&lt;slug&gt;</div>');
 }
 function loadSummary(){
   return fetch('/api/summary'+location.search).then(function(r){return r.json()}).then(function(d){

@@ -33,6 +33,11 @@
  * prose is a count far more often than a task. A blocked entry's task is the first task it names.
  * The entry stands until a later `done` entry by the same role names that task, or the task is
  * closed after it; an entry that names no task stands until the role's next `done` entry.
+ *
+ * Beside the tracks, the ESCALATIONS to the fleet (escalations.mjs): every one not yet answered,
+ * however old, and those answered in the last 24 hours with their answers, both oldest first and
+ * whole. An escalation is answered when an entry of the fleet card's Owner decisions quotes its
+ * "<date> · from <role> · id N"; nothing else is taken for an answer.
  */
 import path from 'node:path';
 import {
@@ -40,6 +45,7 @@ import {
   journalSinceMs, roleRegistry, eligibleOpen, taskTitle,
 } from './core.mjs';
 import { trackLayout } from './board.mjs';
+import { escalationState, ANSWERED_HOURS } from './escalations.mjs';
 
 const JOURNAL_DAYS = 30;   // how far back verdicts and blocked entries are read, as on the board
 const CLOSED_HOURS = 24;
@@ -70,9 +76,10 @@ function firstTaskNamed(text, byId) {
   return null;
 }
 
-const head = (nowMs) => ({ v: 1, asOf: new Date(nowMs).toISOString().slice(0, 16).replace('T', ' '), journalDays: JOURNAL_DAYS, closedHours: CLOSED_HOURS });
+const head = (nowMs) => ({ v: 1, asOf: new Date(nowMs).toISOString().slice(0, 16).replace('T', ' '),
+  journalDays: JOURNAL_DAYS, closedHours: CLOSED_HOURS, answeredHours: ANSWERED_HOURS });
 /** The answer for a hub with nothing in it (a tenant that has not written yet). */
-export function emptySummary(nowMs = Date.now()) { return { ...head(nowMs), tracks: [] }; }
+export function emptySummary(nowMs = Date.now()) { return { ...head(nowMs), tracks: [], escalations: { fleet: [], waiting: [], answered: [] } }; }
 
 export function runSummary(a = {}) {
   const nowMs = Number.isFinite(a.now) ? a.now : Date.now();
@@ -156,5 +163,5 @@ export function runSummary(a = {}) {
       working, blocked: stuck, closed, stalled,
     };
   });
-  return { ...head(nowMs), tracks };
+  return { ...head(nowMs), tracks, escalations: escalationState({ roles, root: a.queueRoot, nowMs }) };
 }

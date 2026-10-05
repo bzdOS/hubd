@@ -4,6 +4,25 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.46 — 2026-10-05
+
+- **An escalation to the fleet waits until it is answered, and the board says which.** An
+  escalation is a block with an id in the queue of a `fleet` role, and its key is its header,
+  `<date> · from <role> · id N`. It is answered when an entry of the fleet card's Owner decisions
+  section quotes that key; the entry's stamp is the answer's time. Matching is by the key alone:
+  "id 3" is not "id 32", and no author or wording is read for an answer. Entries the section cap
+  moved to the project's history still answer, and of two answers to one key the later stands.
+- **"Waiting for you" lists every unanswered escalation, however old, and those answered in the
+  last 24 hours** with the answer, in `hub board`, the Tracks view and the Summary
+  (`/api/summary` gains `escalations: {fleet, waiting, answered}` and `answeredHours`). Each
+  carries its key, who sent it to which role, its text, how long it waited and, once answered,
+  when and what. Queue files are read whole for this, not their last 256 KB. This replaces the
+  window of escalations and of the fleet role's own replies, which said nothing about whether
+  the owner had answered.
+- **A section key `owner-decisions`** (`## Owner decisions`), not in new cards, localised by
+  `sections.json` like any other: `hub section add <fleet project> owner-decisions "<key> —
+  <answer>" --by <you>`.
+
 ## 0.9.45 — 2026-10-05
 
 - **`hub serve` opens on a Summary: where each track stands, assembled by a script.** Asked

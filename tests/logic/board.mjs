@@ -29,7 +29,10 @@ core.setHubBase(BD); core.ensureHubDirs();
   core.runHeartbeat({ agent: 'web-dev', state: 'turn', turn: 3, turn_started: 'now', task_id: String(tDep) });
   queueLib.queueSend('boss', 'BUTTON: approve the budget', { from: 'web-head', root: BD, node: 'n1' });
   queueLib.queueSend('coord', 'escalation: the build box is down', { from: 'web-head', root: BD, node: 'n1', task: String(tBlk) });
-  queueLib.queueSend('web-head', 'answer: rebooted it', { from: 'coord', root: BD, node: 'n1' });
+  queueLib.queueSend('coord', 'escalation: the disk is full', { from: 'web-head', root: BD, node: 'n1' });
+  queueLib.queueSend('web-head', 'rebooted it', { from: 'coord', root: BD, node: 'n1' });
+  const disk = board.runBoard({ queueRoot: BD }).waiting.escalations.find(x => /disk is full/.test(x.text));
+  core.runSectionAdd({ project: 'infra', section: 'owner-decisions', text: `${disk.key}: cleaned it`, by: 'boss' });
 
   const b = board.runBoard({ queueRoot: BD });
   const t = b.tracks.find(x => x.project === 'web');
@@ -51,8 +54,9 @@ core.setHubBase(BD); core.ensureHubDirs();
   ok(off && off.assigneeOff && ghost && !ghost.assigneeKnown && b.unknownAssignees.join(',') === 'ghost', 'board: work on a switched-off role and on a name that is no role are both marked');
   ok(b.waiting.queue.length === 1 && /approve the budget/.test(b.waiting.queue[0].subject) && b.waiting.tasks.some(x => x.assignee === 'boss'),
     'board: waiting for the owner lists the owner queue and the owner\'s own tasks');
-  ok(b.waiting.escalations.length === 1 && b.waiting.escalations[0].task === String(tBlk) && b.waiting.answers.length === 1 && b.waiting.answers[0].role === 'web-head',
-    'board: what was escalated to the fleet coordinator, and what it answered, are listed');
+  ok(b.waiting.escalations.length === 1 && b.waiting.escalations[0].task === String(tBlk) && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · from web-head · id 1$/.test(b.waiting.escalations[0].key)
+    && b.waiting.answered.length === 1 && b.waiting.answered[0].key === disk.key && /cleaned it/.test(b.waiting.answered[0].answer.text),
+    'board: an escalation to the fleet coordinator waits until an entry of the fleet card\'s Owner decisions quotes its key, then shows with that answer');
   ok(!t.next.some(x => x.assignee === 'boss' && !x.owner), 'board: an owner task in a track is marked as the owner\'s');
   // a tenant board reads the tenant's queues, never the operator's
   const OP = mktmp(); fs.mkdirSync(path.join(OP, 'queues'));
