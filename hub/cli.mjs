@@ -22,7 +22,7 @@ import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './l
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/cards.mjs';
 import { runRecall } from './lib/recall.mjs';
-import { WINDOW_DAYS, journalStamp, watchPass } from './lib/watch.mjs';
+import { WINDOW_DAYS, journalStamp, watchExec, watchPass } from './lib/watch.mjs';
 import { runAbsorb } from './lib/absorb.mjs';
 import { runBoard } from './lib/board.mjs';
 import { startServer } from './lib/serve.mjs';
@@ -116,7 +116,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--follow', '--interval',
+  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--follow', '--interval', '--exec',
 );
 
 function getFlag(name) {
@@ -594,13 +594,15 @@ command('log', () => {
 /* hub watch: the journal's new entries, each once, to a named cursor (lib/watch.mjs says why a
  * byte offset cannot do this on a synced hub). One pass and exit, or --follow. */
 command('watch', () => {
-  const usage = 'Usage: hub watch --as <name> [-p <project>] [--since 1h|<time>] [--follow [--interval <s>]] [--private] [--json]';
+  const usage = 'Usage: hub watch --as <name> [-p <project>] [--since 1h|<time>] [--follow [--interval <s>]] [--private] [--json | --exec <command>]';
   const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
   const name = flag('--as') || process.env.HUBD_SUBSCRIBER;
   if (!name) die('hub watch needs a cursor name: --as <name> (or HUBD_SUBSCRIBER). The same name on the next run goes on where this one stopped.\n' + usage);
   const project = flag('--project') ?? flag('-p');
   const since = flag('--since');
-  const json = args.includes('--json'), follow = args.includes('--follow');
+  const exec = flag('--exec');
+  const json = args.includes('--json'), follow = args.includes('--follow'), includePrivate = args.includes('--private');
+  if (exec != null && json) die('--exec hands each entry to the command as one JSON line on stdin; --json has nothing to shape');
   const iv = flag('--interval');
   const interval = iv == null ? 5 : Number(iv);
   if (!(interval > 0)) die(`--interval: "${iv}" is not a number of seconds above 0`);
@@ -608,30 +610,56 @@ command('watch', () => {
   const line = (e) => json ? JSON.stringify(e) : `${e.ts} [${e.project}/${e.agent}] ${e.kind}${e.to ? ' → ' + e.to : ''}: ${e.text}`;
   const emit = (e) => writeAllSync(1, line(e) + '\n', true);
   const memo = {};
-  const pass = (first) => {
-    let r;
-    try { r = watchPass({ name, project, since: first ? since : null, includePrivate: args.includes('--private'), emit, memo }); }
-    catch (e) { if (e.code === 'EPIPE') process.exit(0); die(e.message); }
+  const created = (r) => {
     if (r.created) console.error(since
       ? `watch ${r.name}: a new cursor, from ${r.from} (at most ${WINDOW_DAYS} days back)`
       : `watch ${r.name}: a new cursor; entries written from now on are shown. --since 1h on a new cursor starts earlier.`);
-    return r;
   };
-  // A pass is synchronous, so a handled signal lands between passes, after the pass marked what
-  // it wrote. Unhandled, it would end the process mid-pass and the next run would show those again.
-  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(0));
-  if (!follow) { pass(true); done(0); }
+  // A pass to stdout is synchronous, so a handled signal lands between passes, after the pass
+  // marked what it wrote. Unhandled, it would end the process mid-pass and the next run would show
+  // those again. An --exec pass awaits each command, so the signal lands inside it: it stops the
+  // pass after the command in flight, and the process ends once the pass has saved the cursor.
+  let inPass = false, stopping = false;
+  for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => { if (!inPass) process.exit(0); stopping = true; });
+  let failing = null;
+  const pass = async (first) => {
+    const a = { name, project, since: first ? since : null, includePrivate, memo };
+    let r;
+    inPass = true;
+    try { r = exec != null ? await watchExec({ ...a, cmd: exec, stop: () => stopping }) : watchPass({ ...a, emit }); }
+    catch (e) {
+      if (e.code === 'EPIPE') process.exit(0);
+      // a second watch on this cursor holds it: --follow tries again on the next tick
+      if (follow && !first && /hub busy/.test(e.message)) { inPass = false; return false; }
+      die(e.message);
+    }
+    inPass = false;
+    created(r);
+    if (r.failed) {
+      const f = r.failed;
+      const msg = `watch ${r.name}: the command ${f.why} on the entry of ${f.ts} [${f.project}/${f.agent}]; it and the entries after it are handed over again`;
+      if (!follow) { console.error(msg + ' on the next run'); done(1); }
+      if (!failing) console.error(msg + ` every ${interval} s until it exits 0`);
+      failing = failing || { since: Date.now(), tries: 0 };
+      failing.tries++;
+    } else if (failing) {
+      console.error(`watch ${r.name}: the command exits 0 again, after ${failing.tries} failed attempt(s)`);
+      failing = null;
+    }
+    if (stopping) process.exit(0);
+    return !r.failed;
+  };
+  if (!follow) { pass(true).then(() => done(0)); return; }
   checkFlags();
   // A pass reads every journal file in the window, so a follower passes again only when one of
-  // them changed.
+  // them changed, or when the last pass left an entry the command did not take.
   let stamp = journalStamp();
-  pass(true);
-  const tick = () => {
+  const tick = async (first) => {
     const now = journalStamp();
-    if (now !== stamp) { stamp = now; pass(false); }
-    setTimeout(tick, interval * 1000);
+    if (first || now !== stamp || failing) { stamp = now; if (!(await pass(first)) && !failing) stamp = ''; }
+    setTimeout(() => tick(false), interval * 1000);
   };
-  setTimeout(tick, interval * 1000);
+  tick(true);
 });
 
 command('report', () => {
@@ -1424,6 +1452,7 @@ command('reflect', () => {
   }
   if (r.rules.length) console.log('\nrules proposed more than once');
   for (const g of r.rules) console.log(`  ×${g.count} ${g.rule.slice(0, 200)}  (${g.roles.join(', ')}; last ${g.last})`);
+  if (r.exampleRule.count) console.log(`\nthe example's rule, not counted as a rule: ×${r.exampleRule.count}  (${r.exampleRule.roles.join(', ')})`);
   if (r.decisions.length) console.log('\ndecisions');
   for (const d of r.decisions) console.log(`  ${d.ts} ${d.role} ${d.verdict}${d.reason ? ' (' + d.reason + ')' : ''}: ${d.rule.slice(0, 200)}`);
   done(0);
@@ -1930,8 +1959,8 @@ const HELP = [
   ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
   ['log [project] [-n 20] [--json]', 'journal tail'],
-  ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json]', 'new journal entries, each shown once to the cursor <name>',
-    'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line'],
+  ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json | --exec <cmd>]', 'new journal entries, each shown once to the cursor <name>',
+    'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to <cmd> on stdin, marked when it exits 0'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
   ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
     'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],

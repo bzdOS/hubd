@@ -207,7 +207,7 @@ function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function acquireLock(file) {
+export function acquireLock(file) {
   const lock = file + '.lock';
   const deadline = Date.now() + 2000;
   let madeDir = false;
@@ -252,7 +252,7 @@ function acquireLock(file) {
   throw new Error('hub busy, retry');
 }
 
-function releaseLock(lock) {
+export function releaseLock(lock) {
   try { fs.unlinkSync(lock); } catch {}
 }
 

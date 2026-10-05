@@ -4,6 +4,39 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.44 — 2026-10-05
+
+- **`hub_reflect`: the reflection digest over MCP**, what `hub reflect --json` prints: `project`
+  (its aliases count as it), `since` (default 7d), `level`. A head reads it instead of its
+  workers' reports in full. Every key is present with zeros; a capped reply drops `decisions`
+  first, then `rules`, and says so.
+- **A rule that holds the fragment's own example is not a rule.** On one hub, two roles put the
+  example's rule into 86 of 2768 reflections: 45 times alone, 41 times after the fragment's own
+  lines restated. The `reflect` field refuses it, with the reason. A `REFLECT` block that holds it
+  is read, and the reply names it a problem. `hub reflect` counts it as `exampleRule`, never among
+  the rules, and `hub recall` finds no rule in it.
+- **The fragments say it, and the head reads the digest.** `reflect`: the `rule` is what this turn
+  taught, in the role's own words; the `reflect` field is named as the other way to give the
+  block; the example says its rule is not the reader's. `head-cycle`: step 1 reads `hub_reflect`,
+  step 5 reads its obstacle counts and its rules. Every role's rendered rules differ from the
+  render until rendered again: `hub prompts render … --check` exits 1 on each.
+- **`hub watch --exec <command>`: each entry to a command, marked when it exits 0.** The entry goes
+  to `sh -c <command>` as one JSON line on stdin, so a delivery that fails is retried: it is
+  delivered at least once. A non-zero exit, or a command killed after 20 s, stops the pass at its
+  entry; it and the entries after it are handed over again on the next pass. One pass then exits
+  1. `--follow` says so once, retries each interval, and says when the command exits 0 again. The
+  cursor is saved after every entry. On SIGINT, SIGTERM or SIGHUP the command in flight finishes
+  and the watch exits 0. `HUBD_WATCH_KEY` is the entry's key, the same on every attempt, for a
+  receiver that drops repeats. `--exec` with `--json` is an error.
+- **`contrib/watch-to-matrix.sh` runs over `--exec`.** The Matrix transaction id is
+  `hubd-$HUBD_WATCH_KEY`, so a retried post shows once. Before, the id changed on every attempt:
+  a post that timed out after the server took it was shown twice. An entry the script is killed
+  holding was lost; now it is posted on the next start.
+- **Docs.** HUBD.md names `hub_reflect` and the `reflect` field. It pointed at `hub get <slug>`,
+  which the CLI does not have; it now names `hub_get` and the card file. The quickstart lists
+  mesh-sync's exit 5 (a merge git refused before merging) and shows `hub reflect` and
+  `hub watch`. The interop doc describes `--exec`.
+
 ## 0.9.43 — 2026-10-05
 
 - **`hub watch --as <name>`: the journal's new entries, each once.** For a notifier that follows
@@ -1009,7 +1042,7 @@ One theme: a hub that cannot do its job must say so, instead of looking idle.
 
   The alternative check, comparing the node in each filename against the authors of
   its commits, does find real cross-node writes: on this mesh
-  `kestrel.pine.queue.md` carried commits from three different nodes. But it also
+  `chat.pine.queue.md` carried commits from three different nodes. But it also
   flags renamed files, nodes that are not in the git mesh at all, hostname case, and
   history that was already resolved — so it is a forensic tool, not a monitor, and it
   stays out of doctor.

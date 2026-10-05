@@ -126,8 +126,9 @@ never trimmed. Limits are the hub's, in `limits.json` (`card.digestBytes`, `card
 This matters because a card that cannot be read does not answer the one question it exists for:
 one hub reached 41 cards with three past 72 KB, and `hub_get` on the largest was refused by the
 caller's own context budget. `hub_report` tells you the digest's age
-in every reply and nudges once it trails the journal you just moved. `hub get <slug>`
-reads a project; `hub status` / `hub brief` orient you. Sitting in a project folder
+in every reply and nudges once it trails the journal you just moved. `hub_get` reads a
+project (in a shell, the card is the file `projects/<slug>.md`); `hub status` / `hub brief`
+orient you. Sitting in a project folder
 and don't know its slug? `hub_context({cwd:"<your absolute cwd>"})` resolves it for
 you (`.hubd` marker file → a card's recorded sync path → a folder-name guess, flagged
 `guessed:true` when it's not certain, with the one-line `.hubd` fix in `hint`) and returns
@@ -191,6 +192,13 @@ existing tasks carry an off-enum category and moves them into tags on `--apply`.
   — the answer lists them as `dropped`, and a query made only of them is refused. A term matches
   at the start of a word (`imm` → IMM, IMM's, immediately), never inside one (not `committing`).
   `project` narrows recall — and `hub_whatsnew` — to one project or a comma-separated few.
+- **`hub reflect --project <p>`** / `hub_reflect` — what a project's turns reflected, digested:
+  per role and per obstacle class, with the latest facts; the rules more than one turn proposed;
+  a head's decisions on rules. A head reads it instead of its workers' reports in full. A turn's
+  reflection goes as `hub_report`'s `reflect` field (`{goal, result, obstacle, obstacle_fact,
+  instead, rule}`, checked when the report is written: a value off a list refuses the report) or
+  as a `REFLECT` block at the end of the text. A rule that only restates the prompt's example is
+  not a rule: the field refuses it, and the digest counts it apart (`exampleRule`).
 
 ## Scope: project, person, machine
 

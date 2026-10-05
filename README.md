@@ -257,7 +257,9 @@ is a folder you own. They are two separate things — and that is the whole poin
   never grows a second copy; `hub cards merge-sections` folds old doubles.
   A notifier follows the journal with `hub watch --as <name> --follow --json`:
   each new entry once, by a cursor that a mesh merge, a reset or a log
-  rotation does not throw off ([docs/interop.md](docs/interop.md#following-the-journal-hub-watch);
+  rotation does not throw off. With `--exec <command>` each entry goes to the
+  command and is marked only when it exits 0, so a failed delivery is retried
+  ([docs/interop.md](docs/interop.md#following-the-journal-hub-watch);
   [contrib/watch-to-matrix.sh](contrib/watch-to-matrix.sh) posts to a Matrix room).
 - **Queues** — per-role message queues. Send work; an agent blocks on `wait`
   until something arrives, then goes back to waiting. No polling you, no
@@ -290,11 +292,14 @@ is a folder you own. They are two separate things — and that is the whole poin
   obstacle (a class from a fixed list, plus the fact), what to do instead, and
   a proposed rule. It goes as the report's `reflect` field, checked against
   the lists, or as the `REFLECT` block in the text, read as written with what
-  is off the lists named in the reply. `hub reflect --project <p>` counts them
-  per role and per obstacle class, shows the latest facts and the rules more
-  than one turn proposed, and lists a head's decisions on rules; `--json`
-  keeps every key, so a script can read it. `hub recall` finds a rule or an
-  obstacle as a hit of its own.
+  is off the lists named in the reply. `hub reflect --project <p>` (MCP
+  `hub_reflect`) counts them per role and per obstacle class, shows the latest
+  facts and the rules more than one turn proposed, and lists a head's
+  decisions on rules; `--json` keeps every key, so a script can read it. A
+  head reads that digest instead of its workers' reports in full. A rule that
+  only restates the prompt's own example is refused in the field, named a
+  problem in the text, and counted apart, never as a rule. `hub recall` finds
+  a rule or an obstacle as a hit of its own.
 - **Resources & relationships** — infra is a card too: hosts, vms, services,
   endpoints, providers under `resources/`, with structured frontmatter
   (type, address, os, provider, status) and **typed `[[wikilink]]` edges**

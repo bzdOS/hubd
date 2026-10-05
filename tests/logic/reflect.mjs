@@ -39,16 +39,25 @@ const GOOD = { goal: 'build the package', result: 'partial', obstacle: 'permissi
   ok(throws(() => R.checkReflect({ ...GOOD, level: 'fleet', decisions: [{ verdict: 'accepted' }] }), /decisions\[0\]\.rule is required/), 'reflect: a decision names its rule');
   const h = R.checkReflect({ ...GOOD, level: 'fleet', decisions: [{ rule: 'one dispatch per turn', verdict: 'rejected', reason: 'no check' }] });
   ok(h.decisions.length === 1 && h.decisions[0].reason === 'no check', 'reflect: a fleet reflection carries its decisions');
+  // The copies the fleet wrote: the rule alone, without "only", after the fragment's lines restated.
+  for (const rule of [R.EXAMPLE_RULE, "Keep build recipes inside the role's allowed paths.",
+    'do not claim what you have not measured; done only with a named artifact; keep build recipes inside role\'s allowed paths per head'])
+    ok(throws(() => R.checkReflect({ ...GOOD, rule }), /rule holds the example's rule .* write what this turn taught, or "none"/),
+      `reflect: a rule that holds the example's is refused (${rule.slice(0, 50)})`);
+  ok(R.checkReflect({ ...GOOD, rule: 'keep build recipes inside the allowed paths' }).rule && !R.isExampleRule('keep recipes in the tree'),
+    'reflect: a rule near it but not holding it is kept');
 }
 
 // ── the text: read, not checked ──
 {
   const frag = fs.readFileSync(path.join(REPO, 'prompts/meta/fragments/reflect.md'), 'utf8');
-  const example = frag.split('Example, the end of a report:')[1].match(/```\n([\s\S]*?)```/)[1];
+  const example = frag.split('Example, the end of a report')[1].match(/```\n([\s\S]*?)```/)[1];
   const r = R.readReflect(example);
-  ok(r && !r.problems.length && r.level === 'turn' && r.result === 'partial' && r.obstacle === 'permissions' &&
+  ok(r && r.level === 'turn' && r.result === 'partial' && r.obstacle === 'permissions' &&
     /^read refused on a directory outside the list/.test(r.obstacle_fact) && /^keep build recipes/.test(r.rule),
-    `reflect: the fragment's own example reads into the fields with no problems (${JSON.stringify(r && r.problems)})`);
+    'reflect: the fragment\'s own example reads into the fields');
+  ok(r.rule === R.EXAMPLE_RULE && JSON.stringify(r.problems) === JSON.stringify(["rule holds the example's rule, not this turn's"]),
+    `reflect: its rule is EXAMPLE_RULE, and the only problem in it (${JSON.stringify(r.problems)})`);
   const joined = example.trim().split('\n').join(' · ');
   ok(JSON.stringify(R.readReflect(joined)) === JSON.stringify(r), 'reflect: the journal form, lines joined with " · ", reads the same');
   const listed = 'done it\nREFLECT\n- goal: g\n- result: done\n- obstacle: environment — exit 2\n- instead: i\n- rule: r';
@@ -140,7 +149,7 @@ const tail = () => core.journalTail(P, 1000);
     ? Object.fromEntries(Object.keys(o).sort().map(k => [k, shape(o[k])])) : typeof o;
   const j = JSON.parse(cli(['reflect', '--project', D, '--since', '2026-09-30', '--json']).stdout);
   const empty = JSON.parse(cli(['reflect', '--project', 'nothing-here', '--json']).stdout);
-  ok(JSON.stringify(Object.keys(j)) === JSON.stringify(['project', 'since', 'level', 'reflections', 'roles', 'obstacles', 'rules', 'decisions']) &&
+  ok(JSON.stringify(Object.keys(j)) === JSON.stringify(['project', 'since', 'level', 'reflections', 'roles', 'obstacles', 'rules', 'exampleRule', 'decisions']) &&
     JSON.stringify(Object.keys(empty)) === JSON.stringify(Object.keys(j)), 'CLI: hub reflect --json has the same keys, empty or full');
   ok(JSON.stringify(shape(empty.obstacles)) === JSON.stringify(shape(Object.fromEntries(Object.entries(j.obstacles).map(([k, v]) => [k, { ...v, facts: [] }])))),
     'CLI: every obstacle class is there with no data');
@@ -150,13 +159,34 @@ const tail = () => core.journalTail(P, 1000);
     Object.values(j.roles).every(p => JSON.stringify(shape(p)) === JSON.stringify(shape(role))), 'CLI: every role carries every result and every class, zeros included');
   ok(JSON.stringify(shape(j.rules[0])) === JSON.stringify({ count: 'number', last: 'string', roles: ['string'], rule: 'string' }) &&
     JSON.stringify(shape(j.decisions[0])) === JSON.stringify({ level: 'string', role: 'string', rule: 'string', ts: 'string', verdict: 'string' }) &&
-    JSON.stringify(shape(j.obstacles.environment.facts[0])) === JSON.stringify({ fact: 'string', role: 'string', ts: 'string' }),
-    'CLI: a rule, a decision and a fact have their fields');
+    JSON.stringify(shape(j.obstacles.environment.facts[0])) === JSON.stringify({ fact: 'string', role: 'string', ts: 'string' }) &&
+    JSON.stringify(empty.exampleRule) === '{"count":0,"roles":[]}',
+    'CLI: a rule, a decision, a fact and the example count have their fields');
   const txt = cli(['reflect', '--project', D, '--since', '2026-09-30']);
   ok(txt.code === 0 && /rfdigest: 7 reflection\(s\)/.test(txt.stdout) && /environment 4/.test(txt.stdout) && /×3 MEASURE the disk/.test(txt.stdout),
     'CLI: hub reflect prints the same digest for a person');
   ok(cli(['reflect', '--project', D, '--since', 'yesterday']).code !== 0 && cli(['reflect']).code !== 0, 'CLI: a bad --since, or no --project, exits non-zero');
 }
+// ── the example's rule, counted apart from the rules ──
+{
+  const X = 'rfexample';
+  const ex = (agent, ts, rule) => core.journalAppend({ ts, project: X, agent, kind: 'done',
+    text: `turn · REFLECT · goal: g · result: done · obstacle: none · instead: i · rule: ${rule}` });
+  ex('dev-a', '2026-10-02 10:00', R.EXAMPLE_RULE);
+  ex('dev-a', '2026-10-02 11:00', R.EXAMPLE_RULE);
+  ex('dev-b', '2026-10-02 12:00', 'report obstacles with a number; ' + R.EXAMPLE_RULE);
+  ex('dev-b', '2026-10-02 13:00', 'pin the toolchain');
+  ex('dev-a', '2026-10-02 14:00', 'pin the toolchain');
+  const d = core.runReflect({ project: X, since: '2026-10-01' });
+  ok(d.reflections === 5 && d.exampleRule.count === 3 && d.exampleRule.roles.join() === 'dev-a,dev-b',
+    `digest: three rules that hold the example's are counted, with their roles (${JSON.stringify(d.exampleRule)})`);
+  ok(d.rules.length === 1 && d.rules[0].rule === 'pin the toolchain', 'digest: and none of them is a rule proposed more than once');
+  const txt = cli(['reflect', '--project', X, '--since', '2026-10-01']);
+  ok(/the example's rule, not counted as a rule: ×3 {2}\(dev-a, dev-b\)/.test(txt.stdout), `CLI: hub reflect says how many held it (${txt.stdout.trim().split('\n').at(-1)})`);
+  ok(!recallLib.runRecall({ query: 'build recipes', project: X }).hits.some(h => h.kind === 'rule') &&
+    recallLib.runRecall({ query: 'toolchain', project: X }).hits.some(h => h.kind === 'rule'), 'recall: a rule that holds the example is no hit, another rule is');
+}
+
 ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e12) === 1e12 - 3 * 3600000 &&
   core.sinceToMs('2026-10-01') === Date.UTC(2026, 9, 1) && core.sinceToMs('2026-10-01 14:00') === Date.UTC(2026, 9, 1, 14) &&
   core.sinceToMs('2026-10-01T14:00:00Z') === Date.UTC(2026, 9, 1, 14) && throws(() => core.sinceToMs('soon'), /neither a duration/),
@@ -181,6 +211,9 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
     { id: 1, method: 'tools/list', params: {} },
     { id: 2, method: 'tools/call', params: { name: 'hub_report', arguments: { project: 'rfmcp', agent: 'dev-m', text: 'over mcp', reflect: GOOD } } },
     { id: 3, method: 'tools/call', params: { name: 'hub_report', arguments: { project: 'rfmcp', agent: 'dev-m', text: 'over mcp', reflect: { ...GOOD, obstacle: 'luck' } } } },
+    { id: 4, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rfdigest', since: '2026-09-30' } } },
+    { id: 5, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rfdigest', level: 'worker' } } },
+    { id: 6, method: 'tools/call', params: { name: 'hub_report', arguments: { project: 'rfmcp', agent: 'dev-m', text: 'over mcp', reflect: { ...GOOD, rule: R.EXAMPLE_RULE } } } },
   ].map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
   let out = '';
   try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env: { ...process.env }, timeout: 15000 }); } catch (e) { out = e.stdout || ''; }
@@ -191,6 +224,14 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
     s.properties.level.enum.join() === R.LEVELS.join() && s.required.join() === 'goal,result,obstacle,instead,rule', 'MCP: hub_report declares the reflect field with the same lists');
   ok(res[2]?.result && !res[2].result.isError && /"source":\s*"field"/.test(res[2].result.content[0].text), 'MCP: a report with the field is filed');
   ok(res[3]?.result?.isError && /obstacle "luck" is not one of/.test(res[3].result.content[0].text), 'MCP: an off-list value is refused with the list');
+  ok(res[6]?.result?.isError && /rule holds the example's rule/.test(res[6].result.content[0].text), 'MCP: and so is the example\'s rule');
+  const t = (res[1]?.result?.tools || []).find(t => t.name === 'hub_reflect');
+  ok(t && t.inputSchema.required.join() === 'project' && t.inputSchema.properties.level.enum.join() === R.LEVELS.join(),
+    'MCP: hub_reflect is listed, project required, the levels as its enum');
+  const via = res[4]?.result && !res[4].result.isError ? JSON.parse(res[4].result.content[0].text) : null;
+  ok(via && JSON.stringify(via) === JSON.stringify(core.runReflect({ project: 'rfdigest', since: '2026-09-30' })),
+    `MCP: hub_reflect answers what hub reflect --json does (${JSON.stringify(via).slice(0, 80)})`);
+  ok(res[5]?.result?.isError && /level "worker" is not one of/.test(res[5].result.content[0].text), 'MCP: a level off the list is refused');
 }
 
 done();

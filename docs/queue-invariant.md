@@ -23,15 +23,15 @@ either and the other stops being true.
 
 ## Three ways it was found broken
 
-**1. A real content conflict.** `queues/kestrel.pine.queue.md` diverged: 120
+**1. A real content conflict.** `queues/chat.pine.queue.md` diverged: 120
 message blocks on one node, 1 on another — and the 1 was newer. The mesh sync
 stopped, correctly, and refused to guess. Resolved by hand as a union of blocks;
 either side alone would have lost data (`--ours` would have dropped 1 message,
 `--theirs` 102).
 
 **2. Cross-node writes.** Comparing the node in each filename against the authors
-of its non-merge commits: `kestrel.fir.queue.md` has only `fir`,
-`hv.pine.queue.md` only `Pine` — but `kestrel.pine.queue.md` carried commits
+of its non-merge commits: `chat.fir.queue.md` has only `fir`,
+`hv.pine.queue.md` only `Pine` — but `chat.pine.queue.md` carried commits
 from `Maple`, `Pine` **and** `fir`. One file, three writers.
 
 **3. Out-of-band truncation — and it is legitimate.** Two commits removed **15531**
