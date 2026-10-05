@@ -163,8 +163,12 @@ is a folder you own. They are two separate things — and that is the whole poin
   0.9.34 a queue message, a report and a task text over 16 KB (`HUBD_MSG_MAX`) are refused, and so
   are a base64 or hex run over 2 KB, a git diff, a git bundle and a PEM block at any size; the
   error says to put the artifact in a file and send its path, size and sha256. A send is refused
-  too once the role holds 50 unread messages or 256 KB (`HUBD_QUEUE_MAX_MSGS`,
-  `HUBD_QUEUE_MAX_BYTES`, 0 = off; an owner role is exempt), and `hub doctor` warns at 80%.
+  too once the role holds 50 unread messages or 256 KB (`queue.msgs`, `queue.bytes` in the
+  hub's `limits.json`, or `HUBD_QUEUE_MAX_MSGS`, `HUBD_QUEUE_MAX_BYTES` on a node; 0 = off), and
+  `hub doctor` warns at 80%. An owner role is exempt, and so is a role listed in `queue.exempt`:
+  one whose reader reads the file itself, so hubd cannot see what it read. Since 0.9.49 a file
+  counts as read up to the last block its ack log names, and a reader publishes its position
+  even when nothing new came, so a reader from before 0.9.33 does not make its queue look full.
 - **Reads that cost more than the work.** On a live hub `hub_get`, `hub_whatsnew` and
   `hub_task_list` came to 6-11k tokens a call. Since 0.9.35 they are compact by default over MCP:
   the card's head and the newest 5 journal lines for `hub_get`, the newest 20 entries for

@@ -361,7 +361,9 @@ A message is prose, not cargo. A queue message, a report or a task text over 16 
 and so is a base64 or hex run over 2 KB, a git diff, a git bundle or a PEM block at any size: put
 the artifact in a file on your node and send its path, size and `sha256sum`. A role whose queue
 already holds 50 unread messages or 256 KB takes no more until its reader catches up — the
-refusal names it; look at that reader (`hub queue status <role>`), do not resend.
+refusal names it; look at that reader (`hub queue status <role>`), do not resend. A role that
+reads its queue file itself rather than through `hub queue wait` leaves hubd no trace of what it
+read, so its queue fills: such a role belongs in `queue.exempt` of the hub's `limits.json`.
 
 Say what a message is ABOUT: `hub queue send <role> "<text>" --from <you> --task <id>` stamps the
 task into the delivered block, and the consumer gets the ids back with the text (`tasks`). Report

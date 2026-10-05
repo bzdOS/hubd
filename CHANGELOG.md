@@ -4,6 +4,22 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.49 — 2026-10-05
+
+- **A queue read on another node no longer counts full there.** The send limit took a block as
+  read only by its own ack, so blocks written before ids, which no ack can name, and header lines
+  quoted inside a body stayed unread for ever. A reader hands its file out in order, so a file
+  now counts as read up to the last block its ack log names, every block above it included.
+- **A reader publishes its position even when nothing new came.** A reader that read its queue
+  to the end on a hubd from before read marks left none, and its cursor never leaves its node:
+  every other node counted that queue unread until the next message, which a queue counted full
+  refused. Each wait now writes the cursor's watermark as the read mark where the two differ.
+- **The hub sets the send limit in `limits.json`.** `{"queue": {"msgs": N, "bytes": N,
+  "exempt": [role, ...]}}` travels with the mesh; `HUBD_QUEUE_MAX_MSGS` and
+  `HUBD_QUEUE_MAX_BYTES` set on a node still win there. A role in `exempt` is never refused nor
+  listed as near full: one whose reader reads the file itself, leaving no cursor, mark or ack.
+  `hub doctor` names the exempt roles.
+
 ## 0.9.48 — 2026-10-05
 
 - **Artifact deliveries are mail, a row of their own.** A mail relay (a fleet tool) records each
