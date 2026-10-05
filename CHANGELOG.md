@@ -4,6 +4,25 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.53 — 2026-10-06
+
+- **`mesh-sync` fetches again when another node's push lands first.** Every node pushes to one
+  mirror about once a minute, and a push that lands between this node's fetch and its push wins:
+  git refuses ours ("fetch first"), or the mirror cannot lock the branch it is moving. One node
+  lost one run in six that way, about 90 a day, each a minute of delay and a failed unit in
+  systemd's log. That failure, and only that one, now goes back to the fetch in the same run, up
+  to `HUBD_SYNC_PUSH_TRIES` times in all (default 3). Any other failed push is left to the next
+  run, as before.
+- **A node's presence snapshot says when hubd last ran there.** `presence.<node>.json` was
+  written on heartbeat only, so a node whose sessions never heartbeat (people at a terminal, not
+  agents in a loop) kept the one it wrote weeks before: from every other node it looked silent
+  for 24 days while it wrote to the mesh every minute. Any MCP tool call now refreshes it too, at
+  most every 5 minutes. A hub that has never published one gets none.
+- **`hub doctor` waits for the hub's git.** Its checks read git with an 8 s bound and took a read
+  that ran out as an empty answer: with every core busy, `git ls-files` once took longer, and a
+  case-colliding pair came back as no pair. Reads of the hub's own repository now get a minute;
+  reads of project repositories keep 8 s.
+
 ## 0.9.52 — 2026-10-06
 
 - **`hub doctor` says when a merge driver will not run.** The drivers live in the node's own

@@ -316,10 +316,18 @@ export function withLock(file, fn) {
   try { return fn(); } finally { releaseLock(lock); }
 }
 
-export function sh(cmd, cwd) {
-  try { return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 }).trim(); }
+/** A command's output, or '' if it fails or runs past `timeout` ms. The 8 s default is for the
+ *  project repositories a sync or whereami reads, where an answer that comes later is no use. */
+export function sh(cmd, cwd, timeout = 8000) {
+  try { return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout }).trim(); }
   catch { return ''; }
 }
+
+/** A read of the hub's own git that a verdict is drawn from (doctor's checks). There, '' reads as
+ *  "nothing wrong": once, with every core busy, git ls-files took longer than 8 s, and a
+ *  case-colliding pair in the index came back as no pair at all. The hub repository is small, so
+ *  a slow read is a busy machine, not a big repo; a minute still ends a git that hangs. */
+export const hubGit = (cmd) => sh(cmd, HUB, 60000);
 
 export function gitFacts(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
@@ -2230,7 +2238,7 @@ export function gitignoreMissing() {
  *  whatever .gitignore says. */
 export function trackedNodeLocal() {
   if (!fs.existsSync(path.join(HUB, '.git'))) return [];
-  return HUB_GITIGNORE.filter(e => sh(`git ls-files -- "${e.replace(/\/$/, '')}"`, HUB).trim());
+  return HUB_GITIGNORE.filter(e => hubGit(`git ls-files -- "${e.replace(/\/$/, '')}"`));
 }
 
 /* What a writing command does to a hub before it runs: its directories, the node-local ignore
@@ -4264,6 +4272,17 @@ export function writePresenceSnapshot({ force = false } = {}) {
   return f;
 }
 
+/** Any MCP tool call refreshes the snapshot too, on the same throttle. It was written on heartbeat
+ *  only, and a node whose sessions never heartbeat — people at a terminal, not agents in a loop —
+ *  kept the one it wrote weeks before: read from every other node, a machine silent for 24 days
+ *  while it wrote to the mesh every minute. Its age now says when hubd last ran there; whether an
+ *  agent is alive is still each row's own last_seen. A hub that has never published one is left
+ *  alone, so no file appears in a hub with no mesh to carry it. */
+export function refreshPresenceSnapshot() {
+  if (READ_ONLY || !fs.existsSync(presenceSnapshotPath())) return null;
+  return writePresenceSnapshot();
+}
+
 /** Every OTHER node's published snapshot. Ours is skipped: the live directory is fresher than any
  *  snapshot of it, and reading both would list this node's agents twice. */
 export function presenceSnapshots() {
@@ -4519,9 +4538,10 @@ export function runPresence(a = {}) {
    * `laggingBehind` is a node whose registry IS here and was published a while ago. That is not
    * blindness and must not read as it. The rows from that node carry their own `last_seen` and are
    * judged by their own ttlMin, so nothing they say is any less true; what is missing is only
-   * heartbeats made SINCE the snapshot. An idle node refreshes on heartbeat and therefore has an
-   * old snapshot precisely because nothing happened on it — calling that a blind spot would flag a
-   * quiet machine as an unseen one, and then the warning is back to meaning two things at once. */
+   * heartbeats made SINCE the snapshot. A node refreshes on heartbeat and on any MCP tool call,
+   * and so has an old snapshot precisely because nothing ran on it — calling that a blind spot
+   * would flag a quiet machine as an unseen one, and then the warning is back to meaning two
+   * things at once. */
   const blind = coverage.filter(c => !c.self && c.snapshot === null).map(c => c.node);
   const lagging = coverage.filter(c => !c.self && c.snapshot !== null && c.stale)
     .map(c => ({ node: c.node, ageMin: c.snapshotAgeMin }));

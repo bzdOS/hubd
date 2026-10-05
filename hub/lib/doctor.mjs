@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  HUB, HUB_VIA, PROJ, RESOURCES, VERSION, now, parseTs, sh, projectAliases, loadTasks, loadClaims,
+  HUB, HUB_VIA, PROJ, RESOURCES, VERSION, now, parseTs, hubGit, projectAliases, loadTasks, loadClaims,
   activeClaims, journalFiles, taskEventFiles, journalNodeOf, taskEventNodeOf, writerVersions,
   cmpVersion, envChecks, runPresence, runGraph, unignoredNodeLocal, gitignoreMissing, trackedNodeLocal, readFreeze,
   rulesFilePath, readJson,
@@ -146,10 +146,10 @@ export function versionSkew() {
  * script chose to say, and in this case the script's own diagnosis was wrong. */
 export function meshStatus() {
   if (!fs.existsSync(path.join(HUB, '.git'))) return null;
-  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
-  const remotes = sh('git remote', HUB).split('\n').filter(Boolean);
+  const branch = hubGit('git rev-parse --abbrev-ref HEAD') || 'main';
+  const remotes = hubGit('git remote').split('\n').filter(Boolean);
   if (!remotes.includes('origin')) return { branch, remote: null };
-  const counts = sh(`git rev-list --left-right --count origin/${branch}...HEAD`, HUB).split(/\s+/);
+  const counts = hubGit(`git rev-list --left-right --count origin/${branch}...HEAD`).split(/\s+/);
   const behind = parseInt(counts[0], 10), ahead = parseInt(counts[1], 10);
   // The script's last word, quoted rather than trusted: worth showing a human, but the counts
   // above are what decides whether anything is wrong.
@@ -206,7 +206,7 @@ export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
   if (!fs.existsSync(path.join(HUB, '.git'))) return [];
   const last = new Map();                       // node (lowercased) -> newest commit ISO
   let newest = null;
-  for (const line of sh(`git log -${scan} --format=%cI%x09%cn`, HUB).split('\n')) {
+  for (const line of hubGit(`git log -${scan} --format=%cI%x09%cn`).split('\n')) {
     const [iso, name] = line.split('\t');
     if (!iso || !name) continue;
     if (!newest) newest = iso;
@@ -255,10 +255,10 @@ export function meshNodes({ staleHours = 6, scan = 800 } = {}) {
  * finds nothing wrong with a hub that cannot sync. */
 export function caseCollisions() {
   if (!fs.existsSync(path.join(HUB, '.git'))) return [];
-  const branch = sh('git rev-parse --abbrev-ref HEAD', HUB) || 'main';
+  const branch = hubGit('git rev-parse --abbrev-ref HEAD') || 'main';
   const files = [
-    ...sh('git ls-files', HUB).split('\n'),
-    ...sh(`git ls-tree -r --name-only origin/${branch}`, HUB).split('\n'),
+    ...hubGit('git ls-files').split('\n'),
+    ...hubGit(`git ls-tree -r --name-only origin/${branch}`).split('\n'),
   ].filter(Boolean);
   const byLower = new Map();
   for (const f of files) {
@@ -394,8 +394,9 @@ export function runDoctor() {
       console.log('            invisible here, which is NOT the same as dead. Each node publishes');
       console.log('            presence.<node>.json on heartbeat; a node on hubd < 0.9.13 never will.');
     }
-    /* Not a warning: an idle node refreshes on heartbeat, so an old snapshot is what a quiet
-     * machine looks like. Stated, not flagged - the rows from it stand on their own last_seen. */
+    /* Not a warning: a node refreshes on heartbeat and on any MCP tool call, so an old snapshot is
+     * what a quiet machine looks like. Stated, not flagged - the rows from it stand on their own
+     * last_seen. */
     if (pres.laggingBehind) console.log('            ' + pres.lagNote);
   }
 
@@ -787,7 +788,7 @@ export function runDoctor() {
   // append-only guard: task event logs only grow. A destructive "migration" that
   // strips fields rewrites them — catch it on git-tracked hubs (every user's doctor).
   if (fs.existsSync(path.join(HUB, '.git'))) {
-    const removed = sh("git diff --numstat HEAD -- '*.events.jsonl'", HUB).split('\n').reduce((s, l) => s + (parseInt(l.split('\t')[1], 10) || 0), 0);
+    const removed = hubGit("git diff --numstat HEAD -- '*.events.jsonl'").split('\n').reduce((s, l) => s + (parseInt(l.split('\t')[1], 10) || 0), 0);
     if (removed) {
       warnings++;
       console.log('');

@@ -267,12 +267,14 @@ sync if a task event log lost or changed a line — that means a migration rewro
 history instead of appending to it, and syncing would spread the damage to every
 peer. It tries the merge outside the hub first, so a conflicted one never reaches it: no
 conflict markers, and no reader sees files change and change back (an older git than 2.38
-merges in place and aborts). A failed push is just a retry next run, because the commit is already
-local. It packs the hub's git objects itself, once a run, in the foreground, and keeps git's own
-background gc off for its commands: on macOS that gc can crash and leave a lock that silently stops
-every gc after it. Exit codes: `2` merge conflict, `3` push, `4` append-only refusal (a log that lost lines,
-or one that was deleted outright), `5` a merge git refused before merging (local changes to a
-tracked file, or two paths that differ only by case): nothing conflicted, run `hub doctor`.
+merges in place and aborts). A push that lost the race to another node's push is fetched, merged
+and pushed again in the same run, up to `HUBD_SYNC_PUSH_TRIES` times in all (default 3); any other
+failed push is just a retry next run, because the commit is already local. It packs the hub's git
+objects itself, once a run, in the foreground, and keeps git's own background gc off for its
+commands: on macOS that gc can crash and leave a lock that silently stops every gc after it.
+Exit codes: `2` merge conflict, `3` push, `4` append-only refusal (a log that lost lines, or one
+that was deleted outright), `5` a merge git refused before merging (local changes to a tracked
+file, or two paths that differ only by case): nothing conflicted, run `hub doctor`.
 
 Project cards are the one file several nodes rewrite. Run `hub card merge-driver` once on each
 node, and git merges them by `##` section instead of stopping on them

@@ -357,6 +357,62 @@ GIT_TRACE="$TMP/trace" HUBD_DIR="$TMP/h" sh "$SCRIPT" >"$TMP/out10" 2>&1; rc=$?
 gcs=$(grep -c 'built-in: git gc ' "$TMP/trace")
 ok "$([ $rc -eq 3 ] && [ "$gcs" = 1 ] && grep -q 'push failed' "$TMP/out10" && echo 1 || echo 0)" \
   "gc: a failed push still packs, and still exits 3 and says so (got $rc, $gcs gc)"
+ok "$(grep -q 'fetching again' "$TMP/out10" && echo 0 || echo 1)" "push: a peer it cannot reach is not tried again in the same run"
+
+# ── a push that lost a race to another node's push: fetched again, in the same run ──
+# Every node pushes to one mirror about once a minute. A push that landed between this node's fetch
+# and its push failed the run, one run in six on a measured node, and the next run a minute later
+# went through. git tells the race two ways: the branch moved before our push looked ("fetch
+# first"), or while the mirror was taking it in (it cannot lock the branch). A hook in the node
+# pushes another node's commit at exactly that moment: post-merge after the fetch, pre-push after
+# the look. RACES says how many runs of the hook race; the rest let the push through.
+mkhub "$TMP/origin6"; git -C "$TMP/origin6" config receive.denyCurrentBranch ignore
+git clone -q "$TMP/origin6" "$TMP/other"
+cat > "$TMP/race.sh" <<EOF
+#!/bin/sh
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+n=\$(cat "$TMP/races" 2>/dev/null || echo 0)
+[ "\$n" -lt "\${RACES:-1}" ] || exit 0
+echo \$((n + 1)) > "$TMP/races"
+printf '{"ts":"2026-09-01 14:00","kind":"note","text":"other %s"}\n' "\$n" >> "$TMP/other/journal.other.jsonl"
+git -C "$TMP/other" add -A && git -C "$TMP/other" -c user.name=o -c user.email=o@o commit -q -m "other \$n" &&
+  git -C "$TMP/other" pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
+EOF
+chmod +x "$TMP/race.sh"
+racer() {   # racer <node> <hook> — a clone of the mirror whose <hook> pushes another node's commit
+  git clone -q "$TMP/origin6" "$TMP/$1" && cp "$TMP/race.sh" "$TMP/$1/.git/hooks/$2"
+  printf '{"ts":"2026-09-01 14:01","kind":"note","text":"from %s"}\n' "$1" >> "$TMP/$1/journal.$1.jsonl"
+  rm -f "$TMP/races"
+  # post-merge runs only after a merge: the mirror moves once before the run, so there is one
+  printf '{"ts":"2026-09-01 14:02","kind":"note","text":"before %s"}\n' "$1" >> "$TMP/other/journal.before.jsonl"
+  git -C "$TMP/other" add -A && git -C "$TMP/other" -c user.name=o -c user.email=o@o commit -q -m "before $1" &&
+    git -C "$TMP/other" pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
+}
+landed() {   # landed <node> -> 1 when the mirror is the node's HEAD and holds its line and the other node's
+  git -C "$TMP/origin6" show main:"journal.$1.jsonl" 2>/dev/null | grep -q "from $1" &&
+    git -C "$TMP/origin6" merge-base --is-ancestor "$(git -C "$TMP/other" rev-parse HEAD)" main &&
+    [ "$(git -C "$TMP/$1" rev-parse HEAD)" = "$(git -C "$TMP/origin6" rev-parse main)" ] && echo 1 || echo 0
+}
+for hook in pre-push post-merge; do
+  case $hook in pre-push) why='cannot lock ref|failed to update ref'; what='the mirror could not lock the branch';;
+    *) why='fetch first'; what='the branch moved after the fetch';; esac
+  # One push a run, as before: the hook does make the race it is meant to, in git's words.
+  racer "o$hook" $hook
+  HUBD_SYNC_PUSH_TRIES=1 HUBD_DIR="$TMP/o$hook" sh "$SCRIPT" >"$TMP/out-o$hook" 2>&1; rc=$?
+  ok "$([ $rc -eq 3 ] && grep -qE "$why" "$TMP/out-o$hook" && ! grep -q 'fetching again' "$TMP/out-o$hook" && echo 1 || echo 0)" \
+    "push race ($hook): HUBD_SYNC_PUSH_TRIES=1 is the old run - git says '$why', exit 3 (got $rc)"
+  racer "n$hook" $hook
+  HUBD_DIR="$TMP/n$hook" sh "$SCRIPT" >"$TMP/out-n$hook" 2>&1; rc=$?
+  ok "$([ $rc -eq 0 ] && [ "$(landed "n$hook")" = 1 ] && grep -q 'another node pushed first' "$TMP/out-n$hook" && echo 1 || echo 0)" \
+    "push race ($hook): $what - fetched, merged and pushed again in the same run (got $rc)"
+  ok "$(grep -qE "$why|rejected" "$TMP/out-n$hook" && echo 0 || echo 1)" "push race ($hook): and git's refusal is not left in the log of a run that went through"
+done
+# A race lost every time: three tries in all, then the failed push it always was, git's words kept.
+racer ra pre-push
+RACES=99 HUBD_DIR="$TMP/ra" sh "$SCRIPT" >"$TMP/out13" 2>&1; rc=$?
+tries=$(grep -c 'fetching again' "$TMP/out13")
+ok "$([ $rc -eq 3 ] && [ "$tries" = 2 ] && grep -q 'push failed' "$TMP/out13" && grep -q 'rejected' "$TMP/out13" && echo 1 || echo 0)" \
+  "push race: lost every time, it stops after 3 tries and exits 3 with git's reason (got $rc, $tries retries)"
 
 echo ""
 echo "$pass pass, $fail fail"
