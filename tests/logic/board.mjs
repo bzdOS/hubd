@@ -54,7 +54,7 @@ core.setHubBase(BD); core.ensureHubDirs();
   ok(off && off.assigneeOff && ghost && !ghost.assigneeKnown && b.unknownAssignees.join(',') === 'ghost', 'board: work on a switched-off role and on a name that is no role are both marked');
   ok(b.waiting.queue.length === 1 && /approve the budget/.test(b.waiting.queue[0].subject) && b.waiting.tasks.some(x => x.assignee === 'boss'),
     'board: waiting for the owner lists the owner queue and the owner\'s own tasks');
-  ok(b.waiting.escalations.length === 1 && b.waiting.escalations[0].task === String(tBlk) && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · from web-head · id 1$/.test(b.waiting.escalations[0].key)
+  ok(b.waiting.escalations.length === 1 && b.waiting.escalations[0].task === String(tBlk) && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · from web-head · id n1-\d+$/.test(b.waiting.escalations[0].key)
     && b.waiting.answered.length === 1 && b.waiting.answered[0].key === disk.key && /cleaned it/.test(b.waiting.answered[0].answer.text),
     'board: an escalation to the fleet coordinator waits until an entry of the fleet card\'s Owner decisions quotes its key, then shows with that answer');
   ok(!t.next.some(x => x.assignee === 'boss' && !x.owner), 'board: an owner task in a track is marked as the owner\'s');

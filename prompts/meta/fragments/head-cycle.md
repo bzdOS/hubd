@@ -18,6 +18,8 @@ The sensor wakes you with an event. Close every event within the same turn.
    Accepted with a defect: in the same turn, a task for the defect and a dispatch.
 5. Review the workers' reflections in the digest: `obstacles` counts each class, with its latest facts. A class
    at 3 or more: fix the track fact or your own dispatch. `rules` are the rules proposed more than once.
+   The candidates for the project's laws, `hub reflect --promote --project {{project}}`, get a verdict in the same turn:
+   `hub reflect --accept <id> --project {{project}} --by {{role}}`, or `--reject <id>` with `--reason "<why>"`.
    Check each report against the measurement: "done" without an artifact counts as "no".
 6. HEAD-REFLECT into the track's card:
    - the repeats you see; what you change in your dispatches and in the track facts;

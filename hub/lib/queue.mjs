@@ -29,7 +29,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock, readJson, atomicWrite,
-  assertProse, envLimit, loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting } from './core.mjs';
+  assertProse, envLimit, loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting,
+  roleRegistry, journalAppend, journalTail, nodeKey } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
 // code checkout never has. NOT `.git` (that is a code repo, not a hub) and NOT a
@@ -413,19 +414,32 @@ function readPosition(full, size, local, entries, buf = null) {
   return { off, by, at, seen };
 }
 
-// Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <N>`
-const BLOCK_ID_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from [^\n·]+? · id (\d+)/gm;
+/* A block's id, the `· id` of its header. Since 0.9.54 it is `<node>-<N>`, the node that wrote it
+ * and a number that node counts across every queue of the hub, as a task's id is: no two blocks
+ * share one. Before, it was a bare number counted per file, and "id 39" stood in twelve headers of
+ * one hub, in four roles' queues; an answer or an ack that named it named any of them. Both are
+ * read: a bare number as a number, the ack log's form for it. */
+const ID_SRC = '(?:[a-z0-9_-]+-)?\\d+';
+const ID_FULL = new RegExp(`^${ID_SRC}$`);
+/** An id as the ack log keeps it: a number for a bare one, else the `<node>-<N>` string. */
+export const idOf = (raw) => { const s = String(raw ?? '').trim().toLowerCase(); return /^\d+$/.test(s) ? Number(s) : s; };
+const idN = (id) => (typeof id === 'number' ? id : Number(/(\d+)$/.exec(String(id))?.[1] || 0));
+/** Order of two ids within one file: every bare one was written before the first `<node>-<N>`. */
+export const idCompare = (a, b) => ((typeof a === 'number') !== (typeof b === 'number') ? (typeof a === 'number' ? -1 : 1) : idN(a) - idN(b));
+
+// Block ID in a queue header: `## YYYY-MM-DD HH:MM · from <sender> · id <id>`
+const BLOCK_ID_RE = new RegExp(`^## \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} · from [^\\n·]+? · id (${ID_SRC})(?![\\w-])`, 'gm');
 
 /* Every block in `text`, header fields and body. The header is the one queueSend writes,
- * `## <ts> · from <sender>[ · id <n>][ · task #<ids>]`, matched whole so that a timestamp quoted
+ * `## <ts> · from <sender>[ · id <id>][ · task #<ids>]`, matched whole so that a timestamp quoted
  * inside a message body never starts a block. */
-const BLOCK_RE = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?)(?: · id (\d+))?(?: · task #([^\n]+))?$/gm;
+const BLOCK_RE = new RegExp(`^## (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}) · from ([^\\n·]+?)(?: · id (${ID_SRC}))?(?: · task #([^\\n]+))?$`, 'gm');
 function blocksIn(text) {
   const out = [];
   let prev = null;
   for (const m of text.matchAll(BLOCK_RE)) {
     if (prev) out.push({ ...prev.h, body: text.slice(prev.end, m.index) });
-    prev = { h: { ts: m[1], from: m[2].trim(), id: m[3] ? Number(m[3]) : null, task: m[4] ? m[4].trim() : null }, end: m.index + m[0].length };
+    prev = { h: { ts: m[1], from: m[2].trim(), id: m[3] ? idOf(m[3]) : null, task: m[4] ? m[4].trim() : null }, end: m.index + m[0].length };
   }
   if (prev) out.push({ ...prev.h, body: text.slice(prev.end) });
   return out;
@@ -496,7 +510,7 @@ function offsetAfterShrink(text, mark) {
   const heads = [...text.matchAll(BLOCK_RE)];
   let end = 0;
   heads.forEach((m, i) => {
-    if (m[3] && Number(m[3]) <= w.id && m[1] <= w.ts) end = i + 1 < heads.length ? heads[i + 1].index - 1 : text.length;
+    if (m[3] && idCompare(idOf(m[3]), w.id) <= 0 && m[1] <= w.ts) end = i + 1 < heads.length ? heads[i + 1].index - 1 : text.length;
   });
   return Buffer.byteLength(text.slice(0, end), 'utf8');
 }
@@ -578,9 +592,9 @@ function drainFile(qdir, stateDir, f, reader = null) {
         // subscriber of a broadcast — does not deliver it again.
         try {
           const af = acksPath(full);
-          const have = new Set(readAcks(af).map(a => a.id));
+          const have = new Set(readAcks(af).map(a => idOf(a.id)));
           for (const m of chunk.matchAll(BLOCK_ID_RE)) {
-            const id = parseInt(m[1], 10);
+            const id = idOf(m[1]);
             if (id && !have.has(id)) { writeAck(af, id, 'delivered'); have.add(id); }
           }
         } catch {}
@@ -632,7 +646,10 @@ export function parseTaskRefs(text) {
  * with the mesh; a variable set on a node wins over it there. An owner role is exempt: a human
  * reads the file, not a loop. So is a role listed in `exempt`: one whose reader reads the file
  * itself rather than through `hub queue wait`, and so leaves no cursor, mark or ack — hubd sees
- * none of its reads, and would count its whole queue unread for ever. */
+ * none of its reads, and would count its whole queue unread for ever. A role of rank `fleet` is
+ * never refused either: its queue is where a head escalates, and a refused escalation left the
+ * heads writing "the orchestrator is dead" without knowing whether a word of theirs got through.
+ * Its depth is still shown (queuesNearFull), as the deafness it is. */
 export function queueLimits() {
   let q = {};
   try { q = JSON.parse(fs.readFileSync(path.join(HUB, 'limits.json'), 'utf8')).queue || {}; } catch {}
@@ -673,10 +690,10 @@ export function unreadLoad(role, { root } = {}) {
     for (const s of subs) off = Math.max(off, readPosition(full, size, cursor(path.join(stateDir, s, `${f}.offset`)), marksFor(marks, f, s)).off);
     if (off >= size) continue;
     let tail; try { tail = readTail(full, off, size); } catch { continue; }
-    const handed = new Set(readAcks(acksPath(full)).map(a => a.id));
+    const handed = new Set(readAcks(acksPath(full)).map(a => idOf(a.id)));
     const heads = [...tail.matchAll(BLOCK_RE)];
     let last = -1;
-    heads.forEach((m, i) => { if (m[3] && handed.has(Number(m[3]))) last = i; });
+    heads.forEach((m, i) => { if (m[3] && handed.has(idOf(m[3]))) last = i; });
     heads.forEach((m, i) => {
       if (i <= last) return;
       msgs++;
@@ -694,25 +711,97 @@ export function queuesNearFull({ root, ratio = 0.8 } = {}) {
   const lim = queueLimits();
   if (!lim.msgs && !lim.bytes) return [];
   const owners = new Set([...ownerRoles(), ...lim.exempt]);
+  const fleet = fleetRoles();
   const out = [];
   for (const role of new Set(listShards(path.join(r, 'queues')).map(s => s.role))) {
     if (owners.has(role)) continue;
     let u; try { u = unreadLoad(role, { root: r }); } catch { continue; }
     const share = Math.max(lim.msgs ? u.msgs / lim.msgs : 0, lim.bytes ? u.bytes / lim.bytes : 0);
-    if (share >= ratio) out.push({ role, ...u, share, full: !!((lim.msgs && u.msgs >= lim.msgs) || (lim.bytes && u.bytes >= lim.bytes)) });
+    if (share >= ratio) out.push({ role, ...u, share, full: !!((lim.msgs && u.msgs >= lim.msgs) || (lim.bytes && u.bytes >= lim.bytes)),
+      ...(fleet.has(role) ? { fleet: true } : {}) });
   }
   return out.sort((a, b) => b.share - a.share).map(({ share, ...x }) => x);
 }
 
-/** Refuse a send of `add` bytes to `role` when its queue is already at the limit. */
-function assertRoom(role, root, add) {
+/** The roles of rank `fleet` in the hub's role registry: sends to them are never refused. */
+export function fleetRoles() {
+  const out = new Set();
+  try { for (const x of roleRegistry().values()) if (x.rank === 'fleet') out.add(x.role); } catch {}
+  return out;
+}
+
+/* A refused send is said where the sender's own trail is read, with the depth that refused it, so a
+ * head looking back sees that its addressee was deaf, not that it said nothing. One line per sender
+ * and role in ten minutes: a loop that retries would otherwise fill the journal with the same line. */
+function noteRefusal(sender, role, u) {
+  try {
+    const project = roleRegistry().get(sender)?.project || 'general';
+    const since = Date.now() - 600000;
+    const text = `queue full: ${role} holds ${u.msgs} unread message(s), ${u.bytes} bytes; a message from ${sender} to it was refused, not sent`;
+    if (journalTail(project, 50).some(e => e.kind === 'queue-full' && e.agent === sender && e.text.startsWith(`queue full: ${role} holds `) &&
+      parseTs(e.ts).getTime() >= since)) return;
+    journalAppend({ ts: now(), project, agent: sender, kind: 'queue-full', text });
+  } catch {}
+}
+
+/** Refuse a send of `add` bytes to `role` when its queue is already at the limit: code `queue-full`. */
+function assertRoom(role, root, add, sender) {
   const lim = queueLimits();
-  if ((!lim.msgs && !lim.bytes) || ownerRoles().includes(role) || lim.exempt.includes(role)) return;
+  if ((!lim.msgs && !lim.bytes) || ownerRoles().includes(role) || lim.exempt.includes(role) || fleetRoles().has(role)) return;
   const u = unreadLoad(role, { root });
-  if ((lim.msgs && u.msgs + 1 > lim.msgs) || (lim.bytes && u.bytes + add > lim.bytes))
-    throw new Error(`queue full: ${role} already holds ${u.msgs} unread message(s), ${u.bytes} bytes; the limit is ` +
+  if ((lim.msgs && u.msgs + 1 > lim.msgs) || (lim.bytes && u.bytes + add > lim.bytes)) {
+    const e = new Error(`queue full: ${role} already holds ${u.msgs} unread message(s), ${u.bytes} bytes; the limit is ` +
       `${lim.msgs || 'no'} messages / ${lim.bytes || 'no'} bytes (HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES, or queue in <hub>/limits.json). Its reader is ` +
-      `behind or stopped, and more messages only bury the first ones: check it (hub queue status ${role}) before sending again.`);
+      `behind or stopped, and more messages only bury the first ones: check it (hub queue status ${role}) before sending again. ` +
+      'An escalation goes to a role of rank fleet, which is never refused.');
+    e.code = 'queue-full';
+    e.unread = u;
+    noteRefusal(sender, role, u);
+    throw e;
+  }
+}
+
+/** The N of `id` when it is one of node `nk`'s, `<nk>-<N>`; else 0. */
+const ownN = (id, nk) => { const m = /^(.+)-(\d+)$/.exec(String(id ?? '')); return m && m[1] === nk ? Number(m[2]) : 0; };
+/** The highest N of the node's own ids in the headers of a queue file's `text`. */
+function highestOwnN(text, nk) {
+  let n = 0;
+  for (const m of text.matchAll(BLOCK_ID_RE)) n = Math.max(n, ownN(m[1], nk));
+  return n;
+}
+
+/* The next N of node `nk`'s block ids: one past its counter and past `floor`. The counter is in
+ * .qstate, node-local, as only this node writes ids with its name; a node without one, new or freshly
+ * cloned, starts past the highest N in its own queue files and their ack logs, which the mesh
+ * carries. Taken under a lock, so two sends at once never take one number. A counter that cannot
+ * be locked or written is not trusted again: it is removed, and N comes from that scan. */
+function nextBlockN(root, nk, floor) {
+  const counter = path.join(root, '.qstate', `ids.${nk}`);
+  const scan = () => {
+    const qdir = path.join(root, 'queues');
+    let n = 0;
+    for (const s of listShards(qdir)) {
+      if (nodeKey(s.node) !== nk) continue;
+      const full = path.join(qdir, s.file);
+      try { n = Math.max(n, highestOwnN(fs.readFileSync(full, 'utf8'), nk)); } catch {}
+      for (const a of readAcks(acksPath(full))) n = Math.max(n, ownN(a.id, nk));
+    }
+    return n;
+  };
+  try {
+    fs.mkdirSync(path.dirname(counter), { recursive: true });
+    return withLock(counter, () => {
+      let last = NaN;
+      try { last = parseInt(fs.readFileSync(counter, 'utf8'), 10); } catch {}
+      const n = Math.max(Number.isInteger(last) && last >= 0 ? last : scan(), floor) + 1;
+      fs.writeFileSync(counter, n + '\n', 'utf8');
+      shareMode(counter);
+      return n;
+    });
+  } catch {
+    try { fs.rmSync(counter, { force: true }); } catch {}
+    return Math.max(scan(), floor) + 1;
+  }
 }
 
 export function queueSend(role, text, { from, root, node, task } = {}) {
@@ -731,26 +820,21 @@ export function queueSend(role, text, { from, root, node, task } = {}) {
   const qfile = resolveQueueFile(qdir, role, nd);
 
   const ts = now();
-  // Block identity: a monotonic counter per file, so the sender can ask "was block N delivered?"
-  // and the consumer can ack individual blocks. It also counts past every id the file's ack log
-  // still holds: a file emptied or replaced by hand used to start again at 1, and its new id 1
-  // was then already "delivered" or "acked" by the old file's lines. Archiving moves the ack log
-  // with the file, so only an archived queue starts a new one at 1.
-  let blockId = 1;
-  try {
-    const existing = fs.readFileSync(qfile, 'utf8');
-    const matches = existing.match(/^## .* · id (\d+)/gm);
-    if (matches) {
-      const nums = matches.map(m => parseInt(m.match(/id (\d+)/)[1], 10));
-      blockId = Math.max(...nums) + 1;
-    }
-  } catch {}
-  for (const a of readAcks(acksPath(qfile))) if (Number.isInteger(a.id) && a.id >= blockId) blockId = a.id + 1;
+  // Block identity, `<node>-<N>`: the sender can ask "was this block delivered?", the consumer acks
+  // one block by it, and an answer to an escalation quotes it. N is the node's counter, and also
+  // past every id of this node the file and its ack log still hold: a file emptied or replaced by
+  // hand once started again at 1, and its new id 1 was then already "delivered" or "acked" by the
+  // old file's lines.
+  const nk = nodeKey(nd);
+  let floor = 0;
+  try { floor = highestOwnN(fs.readFileSync(qfile, 'utf8'), nk); } catch {}
+  for (const a of readAcks(acksPath(qfile))) floor = Math.max(floor, ownN(a.id, nk));
+  const blockId = `${nk}-${nextBlockN(r, nk, floor)}`;
   // The task ref goes AFTER "from <sender>", so the header still matches the `## <ts> · from `
   // prefix every existing reader (peekQueueDepth, doctor, the archive) keys on.
   const ref = (task ?? '') !== '' ? ` · task #${String(task).trim()}` : '';
   const entry = `\n## ${ts} · from ${sender} · id ${blockId}${ref}\n${body}\n`;
-  assertRoom(role, r, Buffer.byteLength(entry, 'utf8'));
+  assertRoom(role, r, Buffer.byteLength(entry, 'utf8'), sender);
 
   // append is atomic on POSIX for small writes (same guarantee as Python version)
   fs.appendFileSync(qfile, entry, 'utf8');
@@ -1118,37 +1202,46 @@ export function peekQueueDepth(role, { root } = {}) {
 /** Confirm that a delivered block was processed by the consumer.
  *  Writes "acked" to the blocks ack file, or "delivered" if not yet recorded.
  *  Idempotent: acking an already-acked block is a no-op.
- *  @returns {{ ok: true, id: number, status: string }} */
+ *
+ *  `id` is the header's: `pine-12`, or a bare number for a block from before 0.9.54. A bare number
+ *  that no header holds is read as the one `<node>-<N>` id ending in it, as a task's is; with
+ *  several, nothing is acked and the error names them.
+ *  @returns {{ ok: true, id: number|string, status: string }} */
 export function queueAck(role, id, { root } = {}) {
-  // the ack log compares ids as numbers, and a "12" from a client would never match its own ack
-  const blockId = Number(id);
-  if (!Number.isInteger(blockId) || blockId < 1) throw new Error(`block id must be a positive integer, got ${JSON.stringify(id)}`);
+  // the ack log compares a bare id as a number, and a "12" from a client would never match its own ack
+  let blockId = idOf(id);
+  if (typeof blockId === 'number' ? !(Number.isInteger(blockId) && blockId >= 1) : !ID_FULL.test(blockId))
+    throw new Error(`block id is the "· id" of the block's header, as "pine-12" (a bare positive number for a block from before 0.9.54), got ${JSON.stringify(id)}`);
   const r = root ?? resolveQueueRoot();
   const qdir = path.join(r, 'queues');
   const fileRe = roleFileRe(role);
   let files;
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { files = []; }
+  const texts = new Map();
+  for (const f of files) { try { texts.set(f, fs.readFileSync(path.join(qdir, f), 'utf8')); } catch {} }
+  const idsIn = (t) => [...t.matchAll(BLOCK_ID_RE)].map(m => idOf(m[1]));
+  if (typeof blockId === 'number' && ![...texts.values()].some(t => idsIn(t).includes(blockId))) {
+    const hits = [...new Set([...texts.values()].flatMap(t => idsIn(t).filter(x => typeof x === 'string' && idN(x) === blockId)))];
+    if (hits.length > 1) throw new Error(`block id ${blockId} is ambiguous in ${role}'s queue: ${hits.join(', ')} end in it; ack by the whole id`);
+    if (hits.length === 1) blockId = hits[0];
+  }
   // Find the block across all queue files for this role
   let found = false;
   for (const f of files) {
     const af = acksPath(path.join(qdir, f));
     const acks = readAcks(af);
-    if (acks.some(a => a.id === blockId && a.status === 'acked')) return { ok: true, id: blockId, status: 'acked' };
-    if (acks.some(a => a.id === blockId)) { found = true; break; }
+    if (acks.some(a => idOf(a.id) === blockId && a.status === 'acked')) return { ok: true, id: blockId, status: 'acked' };
+    if (acks.some(a => idOf(a.id) === blockId)) { found = true; break; }
   }
-  // Write to the first queue file's acks (the block id is unique per file)
-  for (const f of files) {
-    const full = path.join(qdir, f);
-    try {
-      const text = fs.readFileSync(full, 'utf8');
-      if (new RegExp(`· id ${blockId}(?![0-9])`).test(text)) {   // id 1 is not id 12
-        const af = acksPath(full);
-        const acks = readAcks(af);
-        if (!acks.some(a => a.id === blockId)) writeAck(af, blockId, 'delivered');
-        writeAck(af, blockId, 'acked');
-        return { ok: true, id: blockId, status: 'acked' };
-      }
-    } catch {}
+  // Write to the ack log of the file whose header holds it
+  for (const [f, text] of texts) {
+    if (idsIn(text).includes(blockId)) {
+      const af = acksPath(path.join(qdir, f));
+      const acks = readAcks(af);
+      if (!acks.some(a => idOf(a.id) === blockId)) writeAck(af, blockId, 'delivered');
+      writeAck(af, blockId, 'acked');
+      return { ok: true, id: blockId, status: 'acked' };
+    }
   }
   if (found) return { ok: true, id: blockId, status: 'acked' }; // already acked
   throw new Error(`block id ${blockId} not found in any queue file for role ${role}`);
@@ -1168,8 +1261,9 @@ export function getUnacked(role, { root } = {}) {
     // unacked only while no "acked" line follows it, and a redelivery does not count it twice.
     const pending = new Map();
     for (const a of readAcks(acksPath(path.join(qdir, f)))) {
-      if (a.status === 'acked') pending.set(a.id, null);
-      else if (a.status === 'delivered' && !pending.has(a.id)) pending.set(a.id, a);
+      const id = idOf(a.id);
+      if (a.status === 'acked') pending.set(id, null);
+      else if (a.status === 'delivered' && !pending.has(id)) pending.set(id, a);
     }
     for (const a of pending.values()) if (a) blocks.push({ id: a.id, status: a.status, ts: a.ts, roleFile: f });
   }

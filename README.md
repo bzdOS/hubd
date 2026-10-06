@@ -169,6 +169,13 @@ is a folder you own. They are two separate things — and that is the whole poin
   one whose reader reads the file itself, so hubd cannot see what it read. Since 0.9.49 a file
   counts as read up to the last block its ack log names, and a reader publishes its position
   even when nothing new came, so a reader from before 0.9.33 does not make its queue look full.
+  Since 0.9.54 a role of rank `fleet` is never refused, so an escalation always goes, and a
+  refused send exits 4 with `Error [queue-full]` and leaves a `queue-full` line in the sender's
+  project journal.
+- **An id that names one message.** A queue block's id was a number counted per file, so one hub
+  held "id 39" in twelve headers across four roles' queues, and an ack or an answer that named it
+  named any of them. Since 0.9.54 it is `<node>-<N>` (`pine-12`), counted by the node across every
+  queue, as a task id is. Bare ids from before are still read and acked.
 - **Reads that cost more than the work.** On a live hub `hub_get`, `hub_whatsnew` and
   `hub_task_list` came to 6-11k tokens a call. Since 0.9.35 they are compact by default over MCP:
   the card's head and the newest 5 journal lines for `hub_get`, the newest 20 entries for
@@ -305,7 +312,15 @@ is a folder you own. They are two separate things — and that is the whole poin
   head reads that digest instead of its workers' reports in full. A rule that
   only restates the prompt's own example is refused in the field, named a
   problem in the text, and counted apart, never as a rule. `hub recall` finds
-  a rule or an obstacle as a hit of its own.
+  a rule or an obstacle as a hit of its own. One rule in other words counts as
+  one: wordings that share 40% of their words (a word by its first five
+  letters) are its variants. A rule said 3 times by one role, or by 2 roles,
+  in 7 days is a candidate for the project's laws: `hub reflect --promote`
+  lists them by id, and the head accepts or rejects each with
+  `hub reflect --accept|--reject <id>`. An accepted one is a line in the
+  card's Laws section, never rotated out, and `hub_context` returns the laws
+  to every role of the project; a rejected one stays off the list until it
+  is said again.
 - **Resources & relationships** — infra is a card too: hosts, vms, services,
   endpoints, providers under `resources/`, with structured frontmatter
   (type, address, os, provider, status) and **typed `[[wikilink]]` edges**

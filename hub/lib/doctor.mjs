@@ -645,7 +645,8 @@ export function runDoctor() {
       }
       /* A send to a role that already holds HUBD_QUEUE_MAX_MSGS / HUBD_QUEUE_MAX_BYTES unread is
        * refused. Said here at 80%, counted the way the send counts it, so the reader gets looked at
-       * before its senders start failing rather than after. */
+       * before its senders start failing rather than after. A fleet-rank role is never refused, and
+       * is listed all the same: over the limit, its reader is the one nobody can reach. */
       const nearFull = queuesNearFull({ root: teamRoot });
       if (nearFull.length) {
         warnings++;
@@ -653,7 +654,8 @@ export function runDoctor() {
         console.log('  ' + nearFull.length + ' queue(s) at 80%+ of the send limit (' + (lim.msgs || 'no') + ' messages / ' +
           (lim.bytes || 'no') + ' bytes unread)  WARNING');
         for (const q of nearFull.slice(0, 6))
-          console.log('    ' + q.role + ': ' + q.msgs + ' msg, ' + q.bytes + 'B unread' + (q.full ? '  — FULL, sends to it are refused' : ''));
+          console.log('    ' + q.role + ': ' + q.msgs + ' msg, ' + q.bytes + 'B unread' +
+            (q.full ? (q.fleet ? '  — OVER THE LIMIT, not refused (rank fleet: escalations always go), its reader is deaf' : '  — FULL, sends to it are refused') : ''));
         if (nearFull.length > 6) console.log('    ... and ' + (nearFull.length - 6) + ' more');
         console.log('    their readers are behind or stopped: hub queue status <role>, then look on the node that runs it');
       }

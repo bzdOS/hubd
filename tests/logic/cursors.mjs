@@ -1,7 +1,7 @@
 // cursors.mjs — queue cursors: one per subscriber, fan-out roles, the session id, a reader across a respawn
 import fs from 'node:fs';
 import path from 'node:path';
-import { REPO, ok, mktmp, run, T0, core, queueLib, done } from './_h.mjs';
+import { REPO, ok, mktmp, run, cli, T0, core, queueLib, done } from './_h.mjs';
 
 // ── a cursor belongs to a subscriber, not to the node ─────────────────────────
 // Bug: the offset lived at .qstate/<file>.offset, one per queue file shared by the
@@ -115,6 +115,39 @@ ok(JSON.stringify(dmR.doneMissed) === JSON.stringify(['nope-99']),
 ok(core.runTaskList({ status: 'all' }).tasks.find(t => t.id === dmT.task.id).status === 'done',
   'report: the miss does not block the hit');
 fs.rmSync(DM, { recursive: true, force: true });
+
+// DONE as roles write it. "#" and a node left out are read when one task ends in the number; a
+// line that reads as closing a task but is not the DONE: form ("#471 DONE") used to be a note,
+// closing nothing and saying nothing. It refuses the report now, with the form.
+const DN = mktmp();
+core.setHubBase(DN); core.ensureHubDirs();
+const dnEv = (node, n, project) => JSON.stringify({ ts: '2026-10-06 08:00', node, ev: 'add', id: `${node}-${n}`,
+  t: { id: `${node}-${n}`, project, text: 'task ' + n, status: 'open' } }) + '\n';
+fs.writeFileSync(path.join(DN, 'tasks.fir.events.jsonl'), dnEv('fir', 471, 'p') + dnEv('fir', 500, 'p') + dnEv('fir', 600, 'p'));
+fs.writeFileSync(path.join(DN, 'tasks.oak.events.jsonl'), dnEv('oak', 500, 'q') + dnEv('oak', 600, 'p'));
+const dnSt = (id) => core.runTaskList({ status: 'all' }).tasks.find(t => t.id === id).status;
+const d1 = core.runReport({ project: 'p', by: 'test', text: 'DONE: #471' });
+ok(d1.done.join() === 'fir-471' && dnSt('fir-471') === 'done', `report: "DONE: #471" closes fir-471, the one task ending in -471 (${JSON.stringify(d1.done)})`);
+const d2 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 500' });
+ok(d2.done.join() === 'fir-500' && dnSt('oak-500') === 'open', `report: of two ending in -500, the one in the report's project (${JSON.stringify(d2.done)})`);
+const d3 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 600' });
+ok(!d3.done.length && d3.doneMissed.join() === '600' && d3.doneAmbiguous[0].tasks.sort().join() === 'fir-600,oak-600' &&
+  /Write "DONE: <id>\[, <id>\]"/.test(d3.doneForm) && dnSt('fir-600') === 'open' && dnSt('oak-600') === 'open',
+  `report: two in the project ending in -600 close neither, and the reply names both and the form (${JSON.stringify(d3.doneAmbiguous)})`);
+const dnRefused = (text) => { try { core.runReport({ project: 'p', by: 'test', text }); return null; } catch (e) { return e.message; } };
+const dnLen = core.journalTail('p', 1000).length;
+for (const line of ['#600 DONE', 'fir-600 done', 'fir-600: DONE', 'DONE #600', 'DONE fir-600', 'DONE 600', 'DONE - 600, 601']) {
+  const m = dnRefused(`checked the build\n${line}`);
+  ok(m && /reads as closing a task, but it is not the DONE: form and would close nothing\. Write "DONE: <id>/.test(m),
+    `report: "${line}" is refused with the form (${m && m.slice(0, 60)})`);
+}
+ok(core.journalTail('p', 1000).length === dnLen && dnSt('fir-600') === 'open', 'report: and a refused report writes nothing');
+for (const line of ['3 done, 2 left', 'phase-2 done', 'DONE 3 of 5 steps', 'Done with the build'])
+  ok(dnRefused(line) === null, `report: "${line}" is prose, filed as a note`);
+const dnC = cli(['report', '-p', 'p', '--agent', 'test', '-m', 'DONE: 600, nope-1'], { env: { HUBD_DIR: DN }, cwd: DN });
+ok(/NOT closed: #600 \(several end in it: (fir-600, oak-600|oak-600, fir-600)\), #nope-1 \(no such task\).*Write "DONE: <id>/.test(dnC.stderr),
+  `CLI: the misses, which kind each is, and the form (${dnC.stderr.trim().slice(0, 120)})`);
+fs.rmSync(DN, { recursive: true, force: true });
 
 // A card made by hub_card_set has `- set:`, not `- synced:` — it used to show '?' in
 // status and could never go stale in the brief, however long abandoned.

@@ -38,7 +38,7 @@
  * Beside the tracks, the ESCALATIONS to the fleet (escalations.mjs): every one not yet answered,
  * however old, and those answered in the last 24 hours with their answers, both oldest first and
  * whole. An escalation is answered when an entry of the fleet card's Owner decisions quotes its
- * "<date> · from <role> · id N"; nothing else is taken for an answer.
+ * "<date> · from <role> · id <id>"; nothing else is taken for an answer.
  *
  * And the NODES, as each one's own `snapshot.<node>.json` states them (nodes.mjs): its sessions,
  * disks and relays, with what is wrong flagged — a snapshot over 5 minutes old, a disk at 90% or

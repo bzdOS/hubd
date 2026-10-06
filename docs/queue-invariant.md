@@ -226,8 +226,14 @@ file, as with the queue files themselves, so no merge can conflict:
 Two smaller fixes travel with it. The ack log gets at most one "delivered" per id,
 however many times a block is handed out. And block ids continue past the highest
 id in the ack log, so a file emptied by hand does not start a second id 1 that the
-old log would answer for. Archiving a queue file moves its ack log with it, so the
-next file starts clean.
+old log would answer for. Archiving a queue file moves its ack log with it.
+
+Since 0.9.54 a block id is `<node>-<N>`, N counted by the writing node across every
+queue of the hub (a counter in its `.qstate`, taken under a lock), so no two blocks
+share one; before, a bare number counted per file stood in a dozen headers of one
+hub. A node without its counter starts past the highest N in its own queue files
+and their ack logs. Bare ids from before stay readable: in one file they all come
+before the first `<node>-<N>`, which is the order a rolled-back file is cut by.
 
 A reader on a hubd from before read marks leaves none, and two things cover it.
 Once upgraded, a reader publishes its cursor's watermark at the start of every

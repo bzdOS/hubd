@@ -158,6 +158,7 @@ hub inbox           # only what needs a DECISION: blocked/overdue/unassigned
 hub board           # every track: roles, done this week, next, what waits for you
 hub serve           # read-only board on localhost:7777 (Summary, Tracks, Live, History)
 hub reflect --project <slug>   # the turns' reflections: obstacles by class, rules proposed again
+hub reflect --promote --project <slug>   # rules said often enough to become the project's laws
 hub watch --as me --follow     # new journal entries as they arrive, each once
 ```
 
@@ -167,7 +168,7 @@ appear once roles are declared as cards — `hub resource set <role> --type role
 --attr project=<slug> --by <you>`, and `--link head:<head>` for a worker.
 A block with an id in the queue of a `fleet` role is an escalation; it waits for you on the board
 until the fleet card's Owner decisions quote its key: `hub section add <slug> owner-decisions
-"<date> · from <role> · id N — <answer>" --by <you>`. A node whose fleet tool writes
+"<date> · from <role> · id <id> — <answer>" --by <you>`. A node whose fleet tool writes
 `snapshot.<node>.json` into the hub shows on the Summary with its sessions, disks and relays.
 A mail relay that reports each delivery — `hub report "<sender> → <recipient>: <name> <bytes> B
 sha256 <hex>" -k delivery -p <slug> --agent <relay>` — fills the Mail row of Live, and the
@@ -215,7 +216,11 @@ or 256 KB takes no more until its reader catches up. The hub sets these in
 and `HUBD_QUEUE_MAX_BYTES` set on a node win there, and 0 turns a limit off.
 `hub doctor` warns at 80%. A role whose reader reads its queue file itself, not
 through `hub queue wait`, leaves hubd nothing to count its reads by: list it in
-`queue.exempt` of the same file.
+`queue.exempt` of the same file. A role of rank `fleet` (the `rank` of its role
+card) is never refused, so an escalation always goes; `hub doctor` lists it over
+the limit all the same. A refused send exits 4 with `Error [queue-full]` (the MCP
+error carries the same code) and leaves one line of kind `queue-full` in the
+sender's project journal, with the depth that refused it.
 
 Experiments leave roles behind — a queue file is created by the first send and
 never removed, so old test roles keep showing pending work for a consumer that

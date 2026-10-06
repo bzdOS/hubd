@@ -10,7 +10,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, JOURNAL_NODE, VERSION, now, parseTs, slugify, sh, cardPath, digestOf, requireAuthor, runSync,
-  runCardSet, runReport, runReflect, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
+  runCardSet, runReport, runReflect, runPromote, runLaw, projectLaws, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
   runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
@@ -117,7 +117,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--follow', '--interval', '--exec',
+  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
 );
 
 function getFlag(name) {
@@ -556,6 +556,7 @@ command(['whereami', 'where'], () => {
     L(`tasks:    ${w.openTasks.length} open` + (w.openTasks.length ? '' : ''));
     for (const t of w.openTasks.slice(0, 6)) L(`  #${t.id}${t.assignee ? ' @' + t.assignee : ''} ${String(t.text).slice(0, 100)}`);
     if (w.openTasks.length > 6) L(`  … ${w.openTasks.length - 6} more (hub task list -p ${w.project})`);
+    if (w.laws.length) { L(`laws:     ${w.laws.length}, accepted by the project's head`); for (const l of w.laws) L(`  - ${l}`); }
     L(`claims:   ${w.activeClaims.length ? w.activeClaims.map(c => `${c.area} — ${c.agent} since ${c.since}`).join('; ') : 'none'}`);
     L(`here:     ${w.presenceHere.length ? w.presenceHere.map(p => `${p.agent}${p.status ? ' (' + p.status + ')' : ''} ${p.last_seen}`).join('; ') : 'nobody else heartbeating under this root'}`);
     if (w.claimsTouched && w.claimsTouched.touched.length) {
@@ -705,7 +706,11 @@ command('report', () => {
   if (r.reflect) parts.push(`reflection (${r.reflect.level}${r.reflect.source === 'text' ? ', read from the text' : ''})`);
   console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
   if (r.reflect && r.reflect.problems) console.error('  reflection filed, off the rules: ' + r.reflect.problems.join('; ') + ' (the lists: prompts/meta/fragments/reflect.md)');
-  if (r.doneMissed && r.doneMissed.length) console.error('  warning: NOT closed (no such task): #' + r.doneMissed.join(' #') + ' — check the id with `hub task list`');
+  if (r.doneMissed && r.doneMissed.length) {
+    const amb = new Map((r.doneAmbiguous || []).map(x => [x.id, x.tasks]));
+    console.error('  warning: NOT closed: ' + r.doneMissed.map(id => '#' + id + (amb.has(id) ? ' (several end in it: ' + amb.get(id).join(', ') + ')' : ' (no such task)')).join(', ') +
+      ' — check the id with `hub task list`. ' + r.doneForm);
+  }
   const onlyNote = r.note && !r.reflect && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   done(0);
@@ -1442,12 +1447,48 @@ command('recall', () => {
 });
 
 command('reflect', () => {
-  const usage = 'Usage: hub reflect --project <project> [--since 7d|12h|<time>] [--level turn|head|fleet] [--json]';
+  const usage = 'Usage: hub reflect --project <project> [--since 7d|12h|<time>] [--level turn|head|fleet] [--json]\n' +
+    '       hub reflect --promote --project <project> [--since 7d] [--json]\n' +
+    '       hub reflect --accept <id> | --reject <id> [--reason "<why>"] --project <project> --by <head> [--since 7d]\n' +
+    '       hub reflect --laws --project <project> [--json]';
   const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
   const project = flag('--project') ?? flag('-p');
   if (!project) die(usage);
+  const since = flag('--since') ?? undefined;
+  const accept = flag('--accept'), reject = flag('--reject');
+  if (accept != null || reject != null) {
+    if (accept != null && reject != null) die(`--accept or --reject, not both\n${usage}`);
+    let v;
+    try { v = runLaw({ project, since, id: accept ?? reject, verdict: accept != null ? 'accept' : 'reject', by: authorOrDie('--by'), reason: flag('--reason') ?? undefined }); }
+    catch (e) { die(e.message); }
+    console.log(v.verdict === 'accepted' ? `law of ${v.project}, in its card's ${v.section} section: ${v.rule}` : `rejected for ${v.project}: ${v.rule}`);
+    done(0);
+  }
+  if (args.includes('--laws')) {
+    const laws = projectLaws(project);
+    if (args.includes('--json')) { console.log(JSON.stringify(laws)); done(0); }
+    for (const l of laws) console.log(`- ${l.rule}`);
+    done(0);
+  }
+  if (args.includes('--promote')) {
+    let p;
+    try { p = runPromote({ project, since }); } catch (e) { die(e.message); }
+    if (args.includes('--json')) { console.log(JSON.stringify(p)); done(0); }
+    console.log(`${p.project}: ${p.candidates.length} candidate(s) for the project's laws since ${p.since} ` +
+      `(a rule said 3 times by one role, or by 2 roles), ${p.laws.length} law(s) already`);
+    for (const c of p.candidates) {
+      console.log(`\n  ${c.id}  ×${c.count}  ${Object.entries(c.by).map(([r, n]) => `${r} ${n}`).join(', ')}; last ${c.last}` +
+        (c.rejected ? `; said again since its rejection ${c.rejected}` : ''));
+      console.log(`    ${c.rule}`);
+      for (const v of c.variants.slice(0, 3)) console.log(`    ~ ×${v.count} ${v.rule.slice(0, 200)}`);
+      if (c.variants.length > 3) console.log(`    ~ … ${c.variants.length - 3} more wording(s)`);
+    }
+    if (p.candidates.length) console.log(`\naccept: hub reflect --accept <id> --project ${p.project} --by <head>` +
+      `\nreject: hub reflect --reject <id> --project ${p.project} --by <head> --reason "<why>"`);
+    done(0);
+  }
   let r;
-  try { r = runReflect({ project, since: flag('--since') ?? undefined, level: flag('--level') ?? undefined }); }
+  try { r = runReflect({ project, since, level: flag('--level') ?? undefined }); }
   catch (e) { die(e.message); }
   if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
   const nz = (o) => Object.entries(o).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ');
@@ -1465,7 +1506,11 @@ command('reflect', () => {
     for (const f of o.facts) console.log(`    ${f.ts} ${f.role}: ${f.fact.slice(0, 200)}`);
   }
   if (r.rules.length) console.log('\nrules proposed more than once');
-  for (const g of r.rules) console.log(`  ×${g.count} ${g.rule.slice(0, 200)}  (${g.roles.join(', ')}; last ${g.last})`);
+  for (const g of r.rules) {
+    console.log(`  ×${g.count} ${g.rule.slice(0, 200)}  (${g.roles.join(', ')}; last ${g.last})`);
+    for (const v of g.variants.slice(0, 3)) console.log(`    ~ ×${v.count} ${v.rule.slice(0, 200)}`);
+    if (g.variants.length > 3) console.log(`    ~ … ${g.variants.length - 3} more wording(s)`);
+  }
   if (r.exampleRule.count) console.log(`\nthe example's rule, not counted as a rule: ×${r.exampleRule.count}  (${r.exampleRule.roles.join(', ')})`);
   if (r.decisions.length) console.log('\ndecisions');
   for (const d of r.decisions) console.log(`  ${d.ts} ${d.role} ${d.verdict}${d.reason ? ' (' + d.reason + ')' : ''}: ${d.rule.slice(0, 200)}`);
@@ -1778,7 +1823,13 @@ command('queue', () => {
     // --agent is what every other write calls its author; senders reached for it and lost
     // their body to it. Accept it as the same thing.
     const fromFlag = typeof getFlag('--agent') === 'string' && typeof getFlag('--from') !== 'string' ? '--agent' : '--from';
-    const sent = queueSendChecked(role, text, { from: authorOrDie(fromFlag), task: typeof taskRef === 'string' ? taskRef : undefined });
+    let sent;
+    try { sent = queueSendChecked(role, text, { from: authorOrDie(fromFlag), task: typeof taskRef === 'string' ? taskRef : undefined }); }
+    catch (e) {
+      // A full queue exits 4, apart from every other failure: the message is fine, its reader is not.
+      if (e.code === 'queue-full') { console.error('Error [queue-full]: ' + e.message); done(4); return; }
+      throw e;
+    }
     console.log(`→ ${path.basename(sent.file)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
     if (sent.taskKnown === false) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
     done(0);
@@ -1979,6 +2030,9 @@ const HELP = [
   ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
     'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
   ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
+  ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said 3 times by one role, or by 2 roles"],
+  ['reflect --accept|--reject <id> --project <proj> --by <head>', "the head's verdict on a candidate; an accepted one is a law, in hub_context"],
+  ['reflect --laws --project <proj>', "the project's laws, one per line"],
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
@@ -2055,12 +2109,13 @@ function readOnlyRun() {
   switch (cmd) {
     case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
     case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
-    case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall': case 'reflect':
+    case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
     case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts':
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
     case 'usage': return sub !== 'add';
     case 'rules': return !args.includes('--append');
+    case 'reflect': return !args.includes('--accept') && !args.includes('--reject');
     case 'resource': case 'res': return sub === 'list' || sub === 'get';
     case 'task': return sub === 'list' || sub === 'get';
     case 'claim': return sub === 'check';
