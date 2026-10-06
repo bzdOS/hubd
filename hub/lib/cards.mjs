@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   PROJ, appendHistory, readJson, atomicWrite, cardLimits, cardPath, CONFLICT_RE, editSection, HUB, isPlaceholder,
-  journalAppend, liveHeading, MOVED_MARK, NO_ROTATE, now, projectAliases, readCard, requireAuthor,
+  journalAppend, keptWhole, liveHeading, MOVED_MARK, now, projectAliases, readCard, requireAuthor,
   rotateCardOverflow, sectionBody, sectionHeadings, sectionsConfig, slugify,
 } from './core.mjs';
 
@@ -29,7 +29,7 @@ export function runCardsCompact(a = {}) {
     const planned = [];
     for (const part of text.split(/(?=^## )/m)) {
       const m = /^## (.+?)[ \t]*$/m.exec(part);
-      if (!m || NO_ROTATE.has(m[1].trim())) continue;
+      if (!m || keptWhole(m[1].trim())) continue;
       const body = part.slice(m.index + m[0].length);
       const bytes = Buffer.byteLength(body, 'utf8');
       if (bytes > lim.sectionBytes) planned.push({ section: m[1].trim(), bytes, over: bytes - lim.sectionBytes });

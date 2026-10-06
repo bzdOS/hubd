@@ -10,7 +10,7 @@ import {
   runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
-  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect,
+  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runRecall } from './lib/recall.mjs';
@@ -173,12 +173,24 @@ const TOOLS = [
     }, required: ['query'] } },
 
   { name: 'hub_reflect',
-    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. Read-only.',
+    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule\'s other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project\'s laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'the project; its aliases count as it' },
       since: { type: 'string', description: 'the window: a duration (7d, 12h, 30m) or a time (2026-10-01, 2026-10-01 14:00); default 7d' },
       level: { type: 'string', enum: LEVELS, description: 'only one level: turn (every role\'s own turn), head (a head\'s over its workers), fleet (the orchestrator\'s over the heads); default all' },
+      promote: { type: 'boolean', description: 'the candidates for the project\'s laws and its laws, not the digest' },
     }, required: ['project'] } },
+
+  { name: 'hub_law',
+    description: 'A head\'s verdict on a candidate for its project\'s laws (hub_reflect with promote lists them, each with an id). accept: the rule becomes a law, a line in the card\'s Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head\'s to rule on, or a fleet role\'s. Either verdict is a journal line.',
+    inputSchema: { type: 'object', properties: {
+      project: { type: 'string' },
+      id: { type: 'string', description: 'the candidate\'s id, as hub_reflect with promote lists it' },
+      verdict: { type: 'string', enum: ['accept', 'reject'] },
+      by: { type: 'string', description: 'the head ruling on it' },
+      reason: { type: 'string', description: 'why, for a reject above all' },
+      since: { type: 'string', description: 'the window the candidate was listed over; default 7d' },
+    }, required: ['project', 'id', 'verdict', 'by'] } },
 
   { name: 'hub_usage_add',
     description: 'Record what only YOU can see about a piece of work: seconds, tokens, cost, model. The hub cannot observe any of these, so they arrive here explicitly and are reported back as SUPPLIED, never mixed with what the hub measured itself. At least one number is required — an empty entry would record a $0 session.',
@@ -354,7 +366,7 @@ const TOOLS = [
     description: 'Confirm that a delivered queue block was processed, not just read. Without this, a zombie session that reads a block and dies looks exactly like a processed one — the sender sees pending=0 but gets no reply. Ack moves the block from "delivered" to "acked" so the sender can distinguish the two. Call this after you have acted on the block — the ack is your proof of work, and the sender can poll for unacked blocks.',
     inputSchema: { type: 'object', properties: {
       role: { type: 'string', description: 'the role whose queue the block was delivered to' },
-      id: { type: 'integer', description: 'block id — the `· id <N>` in the delivered block header' },
+      id: { type: ['string', 'integer'], description: 'block id — the `· id` in the delivered block header, as "pine-12"; a bare number for a block from before 0.9.54' },
     }, required: ['role', 'id'] } },
 ];
 
@@ -387,7 +399,7 @@ const OUTPUT_PLANS = {
   hub_audit:      [['findings', 40]],
   hub_recall:     [['hits', 20]],
   // decisions first: what was already decided matters less to a head than what is proposed again.
-  hub_reflect:    [['decisions', 30], ['rules', 30]],
+  hub_reflect:    [['decisions', 30], ['rules', 30], ['candidates', 30]],
   hub_agenda:     [['blocked', 40], ['agentReady', 40], ['dueSoon', 20], ['overdue', 20], ['ownerButtons', 20]],
   hub_lint:       [['findings', 40]],
   hub_resource_list: [['resources', 100]],
@@ -435,7 +447,7 @@ const DISPATCH = {
   // itself without closing an import cycle (see runAudit).
   hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }) }),
   hub_lint: runLint,
-  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall, hub_reflect: runReflect,
+  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall, hub_reflect: (a) => (a.promote ? runPromote(a) : runReflect(a)), hub_law: runLaw,
   hub_usage: runUsage, hub_usage_add: runUsageAdd,
   hub_rules: (a) => runRules({ ...a, teamRoot: teamRoot() }), hub_operator: () => runOperatorGet(),
   hub_kanban: runKanban, hub_claim: runClaim, hub_claim_check: runClaimCheck, hub_release: runRelease,
@@ -662,7 +674,9 @@ async function handleMessage(msg, mode = 'stdio') {
       const capped = OUTPUT_PLANS[name] ? capOutput(r, OUTPUT_PLANS[name], { full: !!argv.full }) : r;
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(capped, null, 1) }, ...extra], isError: false } };
     } catch (e) {
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + e.message }], isError: true } };
+      // A refusal the caller acts on by kind carries its code (queue-full), the way an exit code would.
+      const code = e && typeof e.code === 'string' && /^[a-z]+(?:-[a-z]+)+$/.test(e.code) ? ' [' + e.code + ']' : '';
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error' + code + ': ' + e.message }], isError: true } };
     }
   }
   return { jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } };

@@ -437,7 +437,7 @@ core.setHubBase(QT); core.ensureHubDirs();
 queueLib.queueSend('worker', 'HOLD: waiting on the owner', { from: 'dev-t', root: QT, task: 'pine-3', node: 'n1' });
 queueLib.queueSend('worker', 'unrelated', { from: 'dev-t', root: QT, node: 'n1' });
 const qtText = fs.readFileSync(path.join(QT, 'queues', 'worker.n1.queue.md'), 'utf8');
-ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t(?: · id \d+)? · task #pine-3$/m.test(qtText),
+ok(/^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} · from dev-t · id n1-1 · task #pine-3$/m.test(qtText),
   'queue task ref: stamped after the sender, so the header pattern every reader uses still matches');
 ok(queueLib.peekQueueDepth('worker', { root: QT }).pending === 2,
   'queue task ref: the existing depth reader is unaffected by the extra field');
@@ -629,11 +629,11 @@ const AK = mktmp();
   for (let i = 1; i <= 12; i++) queueLib.queueSend('ak', 'order ' + i, { from: 'dev-t', root: AK, node: 'n1' });
   await queueLib.queueWait('ak', { root: AK, timeout: 0 });
   ok(queueLib.peekQueueDepthWithAcks('ak', { root: AK }).unacked === 12, 'acks: a delivered block is unacked until acked');
-  queueLib.queueAck('ak', 12, { root: AK });
+  queueLib.queueAck('ak', 'n1-12', { root: AK });
   queueLib.queueAck('ak', '3', { root: AK });
   const u = queueLib.peekQueueDepthWithAcks('ak', { root: AK });
-  ok(u.unacked === 10 && !u.unackedBlocks.some(b => b.id === 12 || b.id === 3),
-    `acks: an acked block leaves the unacked count, a string id included (it only ever grew; got ${u.unacked})`);
+  ok(u.unacked === 10 && !u.unackedBlocks.some(b => b.id === 'n1-12' || b.id === 'n1-3'),
+    `acks: an acked block leaves the unacked count, and a bare number is the one id ending in it (it only ever grew; got ${u.unacked})`);
   // a trimmed shard that still holds id 12 but not id 1, read before the shard that holds id 1
   fs.writeFileSync(path.join(AK, 'queues', 'ak2.a.queue.md'), '## 2026-09-01 10:00 · from dev-t · id 12\nlate\n');
   fs.writeFileSync(path.join(AK, 'queues', 'ak2.b.queue.md'), '## 2026-09-01 10:00 · from dev-t · id 1\nfirst\n');
@@ -641,7 +641,7 @@ const AK = mktmp();
   ok(!fs.existsSync(path.join(AK, 'queues', 'ak2.a.acks')) && fs.existsSync(path.join(AK, 'queues', 'ak2.b.acks')),
     'acks: id 1 is acked in the shard that holds id 1, not in one that holds id 12');
   let bad = null; try { queueLib.queueAck('ak', 'x1', { root: AK }); } catch (e) { bad = e.message; }
-  ok(/positive integer/.test(bad || ''), 'acks: a block id that is not a number is refused, not searched for');
+  ok(/"· id" of the block's header/.test(bad || ''), 'acks: a block id that is no id is refused, not searched for');
 }
 
 // ── read marks: every node counts what the role's reader read ──
@@ -723,14 +723,58 @@ const AK = mktmp();
   for (let i = 1; i <= 3; i++) queueLib.queueSend('ic', 'order ' + i, { from: 'dev-t', root: I, node: 'n1' });
   await queueLib.queueWait('ic', { root: I, timeout: 0 });
   fs.writeFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), '');   // emptied by hand, as a purge does
+  fs.rmSync(path.join(I, '.qstate', 'ids.n1'));                      // and the node's counter gone with its .qstate
   queueLib.queueSend('ic', 'after the purge', { from: 'dev-t', root: I, node: 'n1' });
-  ok(/· id 4\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')),
-    'ids: a file emptied by hand continues at 4 — a second id 1 would be answered by the old log');
+  ok(/· id n1-4\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')),
+    'ids: a file emptied by hand, its node\'s counter lost, continues at 4 — a second n1-1 would be answered by the old log');
   queueLib.archiveQueueFile(I, 'ic.n1.queue.md');
   ok(fs.existsSync(path.join(I, 'queues', 'archive', 'ic.n1.acks')) && !fs.existsSync(path.join(I, 'queues', 'ic.n1.acks')),
     'archive: the ack log moves with its queue file');
   queueLib.queueSend('ic', 'a new file', { from: 'dev-t', root: I, node: 'n1' });
-  ok(/· id 1\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')), 'archive: and the next file starts over at id 1');
+  ok(/· id n1-5\n/.test(fs.readFileSync(path.join(I, 'queues', 'ic.n1.queue.md'), 'utf8')), 'archive: and the next file goes on with the node\'s count, so no id comes back');
+}
+
+// ── a block id is one block in the whole hub ──
+/* Counted per file, "id 39" stood in twelve headers of one hub, in four roles' queues, and an ack or
+ * an answer that named it named any of them. Now `<node>-<N>`, N counted per node across queues. */
+{
+  const G = mktmp();
+  const sendG = (role, node, text = 'order') => { queueLib.queueSend(role, text, { from: 'dev-t', root: G, node }); };
+  const idsOf = (f) => [...fs.readFileSync(path.join(G, 'queues', f), 'utf8').matchAll(/ · id (\S+)$/gm)].map(m => m[1]);
+  sendG('gu', 'fir'); sendG('gu', 'pine'); sendG('gv', 'fir'); sendG('gu', 'fir');
+  ok(idsOf('gu.fir.queue.md').join() === 'fir-1,fir-3' && idsOf('gu.pine.queue.md').join() === 'pine-1' && idsOf('gv.fir.queue.md').join() === 'fir-2',
+    'ids: two shards of one recipient on two nodes never share an id, and one node counts across every queue');
+  await queueLib.queueWait('gu', { root: G, timeout: 0 });
+  ok(queueLib.queueAck('gu', 'pine-1', { root: G }).id === 'pine-1' && queueLib.peekQueueDepthWithAcks('gu', { root: G }).unacked === 2 &&
+    !fs.readFileSync(path.join(G, 'queues', 'gu.fir.acks'), 'utf8').includes('"acked"'), 'ids: an ack by the id takes exactly that one block');
+  let amb = null; try { queueLib.queueAck('gu', 1, { root: G }); } catch (e) { amb = e.message; }
+  ok(/ambiguous/.test(amb || '') && /fir-1/.test(amb) && /pine-1/.test(amb) && queueLib.peekQueueDepthWithAcks('gu', { root: G }).unacked === 2,
+    'ids: a bare number two ids end in acks nothing, and the error names both');
+  ok(queueLib.queueAck('gu', 3, { root: G }).id === 'fir-3' && queueLib.peekQueueDepthWithAcks('gu', { root: G }).unacked === 1,
+    'ids: a bare number one id ends in is that id');
+
+  // a file from before: its bare ids stay readable, and the new ones follow them
+  fs.writeFileSync(path.join(G, 'queues', 'go.fir.queue.md'), '\n## 2026-10-01 10:00 · from dev-t · id 39\nold order\n');
+  sendG('go', 'fir');
+  ok(idsOf('go.fir.queue.md').join() === '39,fir-4', 'ids: an old file keeps its bare ids, and the next block is the node\'s');
+  await queueLib.queueWait('go', { root: G, timeout: 0 });
+  queueLib.queueAck('go', 39, { root: G });
+  const left = queueLib.peekQueueDepthWithAcks('go', { root: G }).unackedBlocks.map(b => b.id);
+  ok(left.join() === 'fir-4', `ids: an old block is acked by its bare number, and only it (${left.join()})`);
+  ok(queueLib.idCompare(39, 'fir-1') < 0 && queueLib.idCompare('fir-2', 'fir-10') < 0 && queueLib.idCompare('fir-10', 'fir-9') > 0,
+    'ids: in one file every bare id comes before the first node id, and node ids go by their number');
+
+  // senders at once on one node take a number each: six processes, 25 sends each, each to its own role
+  const lib = JSON.stringify(path.join(REPO, 'hub/lib/queue.mjs'));
+  const procs = Array.from({ length: 6 }, (_, i) => new Promise(res => {
+    const c = spawn(process.execPath, ['--input-type=module', '-e',
+      `const q = await import(${lib}); for (let k = 0; k < 25; k++) q.queueSend('gp${i}', 'at once ' + k, { from: 'dev-t', root: ${JSON.stringify(G)}, node: 'elm' });`],
+      { env: process.env, stdio: 'ignore' });
+    c.on('exit', res);
+  }));
+  await Promise.all(procs);
+  const par = Array.from({ length: 6 }, (_, i) => idsOf(`gp${i}.elm.queue.md`)).flat();
+  ok(par.length === 150 && new Set(par).size === 150, `ids: 150 sends at once from six processes on one node take 150 numbers (${par.length}, ${new Set(par).size} distinct)`);
 }
 
 // ── a message is prose, not cargo ──
@@ -791,8 +835,8 @@ const AK = mktmp();
 
   // a reader that leaves no mark (a hubd from before read marks) still leaves its acks in the mesh
   for (let i = 1; i <= 50; i++) send('da', 'order ' + i);
-  fs.writeFileSync(path.join(D, 'queues', 'da.cedar.acks'),
-    Array.from({ length: 50 }, (_, i) => JSON.stringify({ id: i + 1, status: 'delivered', ts: '2026-10-03 10:00' })).join('\n') + '\n');
+  fs.writeFileSync(path.join(D, 'queues', 'da.cedar.acks'), [...fs.readFileSync(path.join(D, 'queues', 'da.cedar.queue.md'), 'utf8').matchAll(/ · id (\S+)$/gm)]
+    .map(m => JSON.stringify({ id: m[1], status: 'delivered', ts: '2026-10-03 10:00' })).join('\n') + '\n');
   ok(queueLib.unreadLoad('da', { root: D }).msgs === 0 && send('da') === '', 'depth: a block the ack log says was handed out is not unread');
 
   // blocks from before ids sit above the first acknowledged one, and a reader hands a file out in order
@@ -859,6 +903,36 @@ const AK = mktmp();
   for (const [role, n] of [['e39', 39], ['e40', 40], ['e50', 50]]) for (let i = 1; i <= n; i++) send(role, 'order ' + i, E);
   const near = queueLib.queuesNearFull({ root: E });
   ok(near.map(x => `${x.role}:${x.msgs}:${x.full}`).join() === 'e50:50:true,e40:40:false', `depth: queues at 80%+ of a limit are listed, full ones marked (${JSON.stringify(near)})`);
+
+  // An escalation is never refused: a head's word to a fleet-rank role goes through a queue of 60
+  // unread, where an order to a worker is refused with the code queue-full and the sender's trail
+  // says whose queue was deaf.
+  const F = mktmp();
+  core.runResourceSet({ slug: 'dfleet', type: 'role', attrs: { rank: 'fleet', project: 'infra' }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'dhead', type: 'role', attrs: { rank: 'head', project: 'pq' }, by: 'dev-t' });
+  process.env.HUBD_QUEUE_MAX_MSGS = '0';
+  for (let i = 1; i <= 60; i++) { send('dfleet', 'escalation ' + i, F); send('dwork', 'order ' + i, F); }
+  delete process.env.HUBD_QUEUE_MAX_MSGS;
+  const sendAs = (role) => { try { queueLib.queueSend(role, 'one more', { from: 'dhead', root: F }); return null; } catch (e) { return e; } };
+  ok(queueLib.unreadLoad('dfleet', { root: F }).msgs === 60 && sendAs('dfleet') === null && queueLib.unreadLoad('dfleet', { root: F }).msgs === 61,
+    'escalation: a fleet-rank queue at 60 unread takes an escalation');
+  const refused = sendAs('dwork');
+  ok(refused && refused.code === 'queue-full' && refused.unread.msgs === 60 && /^queue full: dwork already holds 60 unread/.test(refused.message) &&
+    /rank fleet, which is never refused/.test(refused.message), `escalation: an order to a worker at 60 unread is refused with the code queue-full (${refused && refused.code})`);
+  const trail = () => core.journalTail('pq', 50).filter(e => e.kind === 'queue-full' && e.agent === 'dhead');
+  ok(trail().length === 1 && /^queue full: dwork holds 60 unread message\(s\), \d+ bytes; a message from dhead to it was refused, not sent$/.test(trail()[0].text),
+    `escalation: the refusal is a line in the sender's project journal, with the depth (${JSON.stringify(trail().map(e => e.text))})`);
+  sendAs('dwork');
+  ok(trail().length === 1, 'escalation: a retry within ten minutes adds no second line');
+  const nf = queueLib.queuesNearFull({ root: F });
+  ok(nf.find(x => x.role === 'dfleet')?.fleet === true && nf.find(x => x.role === 'dfleet').full && !nf.find(x => x.role === 'dwork').fleet,
+    'escalation: doctor\'s list still shows a fleet-rank queue over the limit, marked as such');
+  const c = cli(['queue', 'send', 'dwork', 'from the CLI', '--from', 'dhead'], { env: { HUBD_QUEUE_DIR: F, HUBD_TEAM_DIR: F }, cwd: F });
+  ok(c.code === 4 && /^Error \[queue-full\]: queue full: dwork/.test(c.stderr), `escalation: the CLI exits 4 and names the code (${c.code}, ${c.stderr.slice(0, 50)})`);
+  const d = cli(['doctor'], { env: { HUBD_QUEUE_DIR: F, HUBD_TEAM_DIR: F }, cwd: F });
+  ok(/dfleet: 61 msg, \d+B unread  — OVER THE LIMIT, not refused \(rank fleet/.test(d.out) && /dwork: 60 msg, \d+B unread  — FULL, sends to it are refused/.test(d.out),
+    'escalation: and hub doctor shows both, each with what happens to a send');
+  for (const r of ['dfleet', 'dhead']) fs.rmSync(path.join(T0, 'resources', r + '.md'), { force: true });
 }
 
 // ── the queue from the CLI: a roundtrip, what doctor sees of it, a second waiter, the sender rule ──

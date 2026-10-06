@@ -96,7 +96,13 @@ decisions/facts = many lines (one per line):
   similar report) can close something that isn't done yet. Verify, don't
   trust your own claim any more than you'd trust another agent's. An id that
   matches no task comes back in the summary as `doneMissed` — it closed
-  NOTHING; recheck the id, that task is still open. An id someone had ALREADY
+  NOTHING; recheck the id, that task is still open. `#` is optional, and a
+  bare number that is no task's id reads as the one task whose id ends in
+  `-N` (`DONE: 471` closes `pine-471`); of several, those of the report's
+  project, and if still several it closes none and the reply lists them in
+  `doneAmbiguous`. A line that reads as closing a task but is not this form
+  (`#471 DONE`, `pine-471 done`, `DONE #471`) refuses the whole report, with
+  the form, before anything is written. An id someone had ALREADY
   closed comes back as `doneAlready`: the second close is a no-op, not a
   second closing, so nothing double-counts — but it does mean two sessions
   believed they owned that task, which is worth a look.
@@ -200,7 +206,15 @@ existing tasks carry an off-enum category and moves them into tags on `--apply`.
   reflection goes as `hub_report`'s `reflect` field (`{goal, result, obstacle, obstacle_fact,
   instead, rule}`, checked when the report is written: a value off a list refuses the report) or
   as a `REFLECT` block at the end of the text. A rule that only restates the prompt's example is
-  not a rule: the field refuses it, and the digest counts it apart (`exampleRule`).
+  not a rule: the field refuses it, and the digest counts it apart (`exampleRule`). Wordings of
+  one rule that share 40% of their words count as one, the rest as its `variants`.
+- **`hub reflect --promote --project <p>`** / `hub_reflect` with `promote` — the candidates for the
+  project's laws: a rule said 3 times by one role, or by 2 roles, in 7 days. The head rules on each
+  by its id: `hub reflect --accept <id> --project <p> --by <head>`, or `--reject <id> --reason
+  "<why>"` (MCP `hub_law`). A project whose head is a role card is the head's to rule on, or a fleet
+  role's. An accepted rule is a line in the card's Laws section; `hub_context` returns the laws as
+  `laws` and `hub reflect --laws --project <p>` lists them: every role of the project works by them.
+  A rejected one leaves the list until it is said again after the rejection.
 
 ## Scope: project, person, machine
 
@@ -361,9 +375,12 @@ A message is prose, not cargo. A queue message, a report or a task text over 16 
 and so is a base64 or hex run over 2 KB, a git diff, a git bundle or a PEM block at any size: put
 the artifact in a file on your node and send its path, size and `sha256sum`. A role whose queue
 already holds 50 unread messages or 256 KB takes no more until its reader catches up — the
-refusal names it; look at that reader (`hub queue status <role>`), do not resend. A role that
-reads its queue file itself rather than through `hub queue wait` leaves hubd no trace of what it
-read, so its queue fills: such a role belongs in `queue.exempt` of the hub's `limits.json`.
+refusal names it; look at that reader (`hub queue status <role>`), do not resend. The refusal
+carries the code `queue-full` (the CLI exits 4) and leaves one line of that kind in your project's
+journal, so whoever reads your trail sees that the addressee was deaf. A role of rank `fleet` is
+never refused: an escalation always goes. A role that reads its queue file itself rather than
+through `hub queue wait` leaves hubd no trace of what it read, so its queue fills: such a role
+belongs in `queue.exempt` of the hub's `limits.json`.
 
 Say what a message is ABOUT: `hub queue send <role> "<text>" --from <you> --task <id>` stamps the
 task into the delivered block, and the consumer gets the ids back with the text (`tasks`). Report
@@ -371,6 +388,10 @@ the outcome onto those tasks — a HOLD that lives only in a consumed message le
 reading plain open, with no trace of the blocker. To see what has actually been delivered versus
 what is still waiting, across every host's file at once: `hub queue status [role]`. One per-host
 file read on its own is not the answer — a message already popped elsewhere looks undelivered in it.
+Every block's header ends in its id, `· id <node>-<N>` (`pine-12`): one block in the whole hub, as a
+task id is. Ack a block by it (`hub_queue_ack`), and quote it in an answer. A block from before
+0.9.54 has a bare number, counted per file; a bare number that names no such block is read as the
+one id ending in it.
 
 **Sending appends; it does not deliver.** A send reports the depth now waiting for that role, and a
 depth that keeps climbing means nothing is consuming — check that the role is waiting, and run `hub
@@ -499,10 +520,10 @@ waits for the owner: the owner queue, the owner's tasks, `owner-go` tasks, and t
 a `fleet` role. Titles are a task's first line, at most 80 characters.
 
 An ESCALATION is a block with an id in a `fleet` role's queue; its key is its header without the
-`## `: `<date> · from <role> · id N`. It is ANSWERED when an entry of the Owner decisions section of
+`## `: `<date> · from <role> · id <id>`. It is ANSWERED when an entry of the Owner decisions section of
 that role's project card quotes the key — `hub section add <fleet project> owner-decisions "<key> —
 <answer>" --by <you>` — and the entry's stamp is the time of the answer. The key is all that is
-matched: "id 3" is not "id 32", and no author or wording counts as an answer. Entries the section
+matched: "id pine-3" is not "id pine-32", and no author or wording counts as an answer. Entries the section
 cap moved to the project's history still answer; of two answers to one key, the later stands. The
 board lists every escalation still waiting, however old, with how long it has waited, and those
 answered in the last 24 hours with the answer.

@@ -3,7 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
-import { LEVELS, checkReflect, readReflect, reflectDigest, renderReflect, splitReflect } from './reflect.mjs';
+import { LEVELS, checkReflect, entryReflect, isExampleRule, isNoRule, isWaitingTurn, promoteCandidates, readReflect, reflectDigest,
+  renderReflect, ruleId, splitReflect } from './reflect.mjs';
 import { deliveries, DELIVERY, MAIL_LIMIT } from './mail.mjs';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
@@ -1858,8 +1859,10 @@ const SECTIONS_DEFAULT = [
   { key: 'communication', heading: 'Communication',      hint: 'what has gone out externally vs what is still queued' },
   // Read, not scaffolded: a card has it when someone writes it (hub section add <slug> goal "..." --by <you> --set).
   { key: 'goal',          heading: 'Goal',               hint: 'what the track is for, in a line the summary quotes', scaffold: false },
-  // On a fleet role's card: an entry quoting an escalation's "<date> · from <role> · id N" answers it (escalations.mjs).
-  { key: 'owner-decisions', heading: 'Owner decisions',  hint: 'the owner\'s answers to escalations, each quoting the escalation\'s "<date> · from <role> · id N"', scaffold: false },
+  // On a fleet role's card: an entry quoting an escalation's "<date> · from <role> · id <id>" answers it (escalations.mjs).
+  { key: 'owner-decisions', heading: 'Owner decisions',  hint: 'the owner\'s answers to escalations, each quoting the escalation\'s "<date> · from <role> · id <id>"', scaffold: false },
+  // Written by hub reflect --accept, read into hub_context: the rules the project's head accepted.
+  { key: 'laws',          heading: 'Laws',               hint: 'the rules the project\'s head accepted from its roles\' reflections (hub reflect --promote); never rotated out', scaffold: false },
 ];
 export function sectionsConfig() {
   // `defaultHeading` survives the override: a card written before sections.json existed (or on a
@@ -2627,6 +2630,34 @@ const REPORT_PREFIX = {
   NOTE: 'note',
   TO: 'to',   // addressee: a role or "fleet" — the entry is still public, but readers filter
 };
+/* The DONE: form, said wherever a report's DONE went wrong. A line that reads as closing a task
+ * and is not this form ("#471 DONE", "pine-471 done", "DONE #471") used to fall through to a
+ * note: nothing closed and nothing said so, and a role sent it four times before it noticed. */
+const DONE_FORM = 'Write "DONE: <id>[, <id>]" on a line of its own, each id as hub_task_list shows it ' +
+  '("DONE: pine-471"), "#" optional, or the bare number when one task ends in it ("DONE: 471").';
+// The id comes first ("#471 DONE") or after a capital DONE with no colon ("DONE #471"). A bare
+// number counts only alone after DONE, since "3 done, 2 left" is prose, and "phase-2 done" is
+// prose too: a name-N is an id only when some task's id has the same name before its number.
+const DONE_MISSHAPEN = [/^(#\d+|[a-z][a-z0-9-]*-\d+)\s*[:=—–-]*\s*done\b/i, /^DONE\s*[=>—–-]*\s*(#\d+\b|[a-z][a-z0-9-]*-\d+\b|\d+(?=\s*(?:,|$)))/];
+const nodeOf = (id) => String(id).replace(/-\d+$/, '');
+function misshapenDone(line, tasks) {
+  for (const re of DONE_MISSHAPEN) {
+    const m = re.exec(line);
+    if (m && (!/[a-z]/i.test(m[1]) || tasks().some(t => nodeOf(t.id) === nodeOf(m[1]).toLowerCase()))) return true;
+  }
+  return false;
+}
+/* An id as a DONE: line writes it: "#" dropped, and a bare number that is no task's id read as the
+ * one task whose id ends in -N, since roles leave the node's prefix out. Of several, those of the
+ * report's project; still several, it closes none and names them. */
+function resolveDoneId(raw, tasks, project) {
+  const id = String(raw).replace(/^#/, '').trim();
+  if (!/^\d+$/.test(id) || tasks.some(t => String(t.id) === id)) return { id };
+  let hits = tasks.filter(t => String(t.id).endsWith('-' + id));
+  if (hits.length > 1 && hits.some(t => t.project === project)) hits = hits.filter(t => t.project === project);
+  if (hits.length === 1) return { id: String(hits[0].id) };
+  return hits.length ? { id, ambiguous: hits.map(t => String(t.id)) } : { id };
+}
 // Prefixes route to section KEYS, resolved per card by liveHeading(): the heading the card already
 // uses for that key, whichever locale it was written in, before the configured one is created.
 function cardBaseFor(name) {
@@ -2694,6 +2725,9 @@ export function cardLimits() {
 /* Sections that are NOT rotated. Digest has its own cap and its own history trail; Facts (auto) is
  * regenerated from git on every sync, so moving it to history would archive a derived value. */
 export const NO_ROTATE = new Set(['Digest', 'Facts (auto)']);
+/* Nor are a project's laws: a law moved to history is a law its roles no longer read. Named by the
+ * section's key, so a hub that localises the heading keeps it whole too. */
+export const keptWhole = (heading) => NO_ROTATE.has(heading) || sectionHeadings('laws').some(h => h.toLowerCase() === heading.toLowerCase());
 export const MOVED_MARK = '- … older entries moved to ';
 
 /* Split a section body into ENTRIES. A list item starts an entry; anything that follows without
@@ -2720,7 +2754,7 @@ export function rotateCardOverflow(text, slug, by, limits = cardLimits()) {
   const parts = String(text).split(/(?=^## )/m);
   const outParts = parts.map(part => {
     const m = /^## (.+?)[ \t]*$/m.exec(part);
-    if (!m || NO_ROTATE.has(m[1].trim())) return part;
+    if (!m || keptWhole(m[1].trim())) return part;
     const heading = m[1].trim();
     const head = part.slice(0, m.index + m[0].length);
     const body = part.slice(m.index + m[0].length);
@@ -2775,18 +2809,22 @@ export function runReport(a) {
   const rf = a.reflect != null ? checkReflect(a.reflect) : null;
   if (rf) {
     if (splitReflect(a.text).reflect) throw new Error('reflect: given twice, as the field and as a REFLECT block in the text. Send one of them.');
+    if (isWaitingTurn(a.text)) throw new Error('reflect: a turn that only waits for a dispatch takes no reflection; send the waiting line alone');
     assertProse(renderReflect(rf), 'reflect');
   }
   const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
-  let explicitNote = false;
+  let explicitNote = false, allTasks = null;
+  const knownTasks = () => (allTasks ||= loadTasks().tasks);
   for (const raw of String(a.text || '').split('\n')) {
     const ln = raw.replace(/\s+$/, '');
     if (!ln.trim()) continue;
     const m = ln.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
     const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
     if (tag) { if (tag === 'note') explicitNote = true; b[tag].push(m[2].trim()); }
+    else if (misshapenDone(ln.trim(), knownTasks))
+      throw new Error(`report: "${ln.trim().slice(0, 60)}" reads as closing a task, but it is not the DONE: form and would close nothing. ${DONE_FORM}`);
     else b.note.push(ln.trim());
   }
   // Opt-in (rules.json → strict.rejectNoteOnlyReport): a report made of nothing but prose is
@@ -2851,8 +2889,11 @@ export function runReport(a) {
     if (rot.moved.length) summary.rotated = rot.moved;
     atomicWrite(cardPath(project), rot.text);
   }
+  const doneTasks = b.done.length ? knownTasks() : [];
   for (const list of b.done) for (const part of list.split(',')) {
-    const id = part.trim();   // id may be a bare number OR a node-scoped string (task #194) — pass through as-is
+    // id may be a bare number OR a node-scoped string (task #194); resolveDoneId reads "#" and a node left out
+    const { id, ambiguous } = resolveDoneId(part, doneTasks, slug);
+    if (ambiguous) { summary.doneMissed.push(id); (summary.doneAmbiguous ||= []).push({ id, tasks: ambiguous }); continue; }
     // A typo'd id used to vanish silently — the task stayed open and nothing said so.
     // DONE closes without per-task confirmation, so a miss must be loud: it goes in
     // the summary (doneMissed) for the caller to see and recheck.
@@ -2866,6 +2907,7 @@ export function runReport(a) {
       } catch { summary.doneMissed.push(id); }
     }
   }
+  if (summary.doneMissed.length) summary.doneForm = DONE_FORM;
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   /* A reflection field rides on the report's own entry, and its block is written into the text as
    * well: the field is what a digest counts, the text what the head's order and every grep read. */
@@ -2933,6 +2975,79 @@ export function runReflect(a = {}) {
   entries.sort((x, y) => parseTs(x.ts) - parseTs(y.ts));
   return { project: canonProject(a.project), since: new Date(sinceMs).toISOString().slice(0, 16).replace('T', ' '),
     ...reflectDigest(entries, { level: a.level ?? null }) };
+}
+
+/* ── A project's laws: the rules its roles keep proposing, accepted by its head ──
+ * A reflection's rule is a proposal, and nobody turned proposals into rules: the hub-wide rules
+ * file held one law while 36 hours wrote 949 reflections. hub reflect --promote lists
+ * the candidates (reflect.mjs → promoteCandidates); the head accepts or rejects each by its id. An
+ * accepted one is a line in the card's laws section, `- <when> (<head>): <rule>`, which hub_context
+ * returns to every role of the project; a rejected one is a journal line, which keeps the rule
+ * off the list until it is said again after it. */
+export function projectLaws(project) {
+  const card = readCard(canonProject(project));
+  const body = card ? sectionHeadings('laws').map(h => sectionBody(card, h)).find(b => b != null) : null;
+  const laws = [];
+  for (const l of String(body ?? '').split('\n')) {
+    const item = /^\s*[-*+]\s+(.+?)\s*$/.exec(l);
+    if (!item || l.startsWith(MOVED_MARK)) continue;
+    const m = /^(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?) \(([^)]+)\): (.+)$/.exec(item[1]);
+    laws.push(m ? { rule: m[3], since: m[1], by: m[2] } : { rule: item[1] });
+  }
+  return laws;
+}
+
+/** The candidates for a project's laws over a window (default 7 days), with the laws it has. */
+export function runPromote(a = {}) {
+  if (!a.project || typeof a.project !== 'string') throw new Error('project required: hub reflect --promote --project <project>');
+  const sinceMs = sinceToMs(a.since ?? '7d');
+  const set = projectSlugSet(a.project);
+  const entries = [];
+  for (const e of journalEntries(sinceMs)) {
+    const ms = set.has(e.project) ? parseTs(e.ts).getTime() : NaN;
+    if (ms >= sinceMs) entries.push({ e, ms });
+  }
+  entries.sort((x, y) => x.ms - y.ms);
+  const said = [], rejected = [];
+  for (const { e, ms } of entries) {
+    if (e.law && e.law.verdict === 'rejected' && e.law.rule) { rejected.push({ rule: e.law.rule, ms, ts: e.ts }); continue; }
+    const r = entryReflect(e);
+    if (r && r.rule && !isNoRule(r.rule) && !isExampleRule(r.rule)) said.push({ rule: r.rule, role: e.agent || '?', ts: e.ts, ms });
+  }
+  const laws = projectLaws(a.project);
+  return { project: canonProject(a.project), since: new Date(sinceMs).toISOString().slice(0, 16).replace('T', ' '),
+    laws, candidates: promoteCandidates(said, { laws: laws.map(l => l.rule), rejected }) };
+}
+
+/** The head's verdict on one candidate, by its id: `accept` makes it a law of the project, `reject`
+ *  takes it off the list. A project whose head is a role card is the head's to rule on (or a fleet
+ *  role's, above the heads); with no head on record, whoever signs. */
+export function runLaw(a = {}) {
+  if (!['accept', 'reject'].includes(a.verdict)) throw new Error(`verdict "${a.verdict}" is not one of accept | reject`);
+  const by = requireAuthor(a.by, 'by');
+  const id = String(a.id ?? '').trim().toLowerCase();
+  if (!id) throw new Error('id required: the candidate\'s id, as hub reflect --promote lists it');
+  const p = runPromote({ project: a.project, since: a.since });
+  const set = projectSlugSet(a.project);
+  const reg = roleRegistry();
+  const heads = [...reg.values()].filter(r => r.rank === 'head' && set.has(r.project)).map(r => r.role);
+  const me = reg.get(slugify(by));
+  if (heads.length && !heads.includes(me?.role) && me?.rank !== 'fleet')
+    throw new Error(`a law of ${p.project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);
+  const c = p.candidates.find(x => x.id === id || x.variants.some(v => ruleId(v.rule) === id));
+  if (!c) throw new Error(`no candidate ${id} for ${p.project} since ${p.since}; hub reflect --promote --project ${p.project} lists them`);
+  const reason = String(a.reason ?? '').replace(/\s+/g, ' ').trim();
+  const law = { verdict: a.verdict === 'accept' ? 'accepted' : 'rejected', id: c.id, rule: c.rule, count: c.count, roles: c.by, ...(reason ? { reason } : {}) };
+  let section = null;
+  if (law.verdict === 'accepted') {
+    const before = readCard(p.project) || cardBaseFor(p.project);
+    section = liveHeading(before, 'laws');
+    fs.mkdirSync(PROJ, { recursive: true });
+    atomicWrite(cardPath(p.project), rotateCardOverflow(editSection(before, section, `- ${now()} (${by}): ${c.rule}`, 'append'), p.project, by).text);
+  }
+  journalAppend({ ts: now(), project: p.project, agent: by, kind: 'decision', law,
+    text: `${law.verdict === 'accepted' ? 'law accepted' : 'law candidate rejected'}: ${c.rule.slice(0, 160)}${reason ? ' (' + reason + ')' : ''}` });
+  return { ok: true, project: p.project, verdict: law.verdict, id: c.id, rule: c.rule, count: c.count, ...(section ? { section, card: cardPath(p.project) } : {}) };
 }
 
 /** Where else this name exists — the pointer a "no card" error owes its caller. */
@@ -3278,7 +3393,7 @@ export function runContext(a) {
   const local = a.local !== false;
   const ctx = resolveContext(cwd, { local });
   if (ctx.guessed) ctx.hint = `guessed from the folder name — write ${path.join(ctx.root, '.hubd')} with one line "${ctx.project}" to make it certain`;
-  if (!ctx.project) return { ...ctx, digest: null, openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
+  if (!ctx.project) return { ...ctx, digest: null, laws: [], openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
   const card = readCard(ctx.project);
   const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
   const { at: digestSetAt, by: digestSetBy } = cardStamp(card);
@@ -3289,6 +3404,8 @@ export function runContext(a) {
     ...ctx,
     digest, digestSetAt, digestSetBy, digestAgeDays,
     ...(digestStale ? { digestStale } : {}),
+    // The rules this project's head accepted (runLaw): every role of it works by them.
+    laws: projectLaws(ctx.project).map(l => l.rule),
     openTasks: runTaskList({ project: ctx.project, status: 'open' }).tasks,
     activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
     presenceHere: presenceHere({ root: ctx.root, project: null }),
@@ -3337,9 +3454,10 @@ export function runWhereAmI(a = {}) {
     if (fs.existsSync(script)) {
       let text = '';
       // No shell: the path comes from a file in the repository, and JSON-style double quotes do not
-      // stop a shell from expanding $(...) or backticks inside them.
-      try { text = execFileSync(script, [], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }); }
-      catch (e) { text = String((e && e.stdout) || '') + (e && e.stderr ? '\n[stderr] ' + String(e.stderr).slice(0, 500) : '') + (e && e.killed ? '\n[inventory script exceeded 5 s and was stopped]' : ''); }
+      // stop a shell from expanding $(...) or backticks inside them. The bound only stops a script
+      // that hangs: 5 s killed a one-line echo on a loaded machine, so it is 30 s.
+      try { text = execFileSync(script, [], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 }); }
+      catch (e) { text = String((e && e.stdout) || '') + (e && e.stderr ? '\n[stderr] ' + String(e.stderr).slice(0, 500) : '') + (e && e.killed ? '\n[inventory script exceeded 30 s and was stopped]' : ''); }
       out.localInventory = { script: ctx.inventory, output: String(text).slice(0, 4000), truncated: String(text).length > 4000 };
     } else out.localInventory = { script: ctx.inventory, missing: true };
   }

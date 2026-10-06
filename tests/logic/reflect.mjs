@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { REPO, ok, core, recallLib, cli, done } from './_h.mjs';
+import { REPO, T0, ok, core, recallLib, cli, mktmp, done } from './_h.mjs';
 
 const R = await import(path.join(REPO, 'hub/lib/reflect.mjs'));
 const throws = (f, re) => { try { f(); return false; } catch (e) { return re.test(e.message); } };
@@ -108,6 +108,63 @@ const tail = () => core.journalTail(P, 1000);
   ok(bad.code !== 0 && /result null is not one of|instead is required/.test(bad.stderr), `CLI: and a bad one is refused (${bad.stderr.trim().slice(0, 80)})`);
 }
 
+// ── the block's own rules, beyond the lists: both forms ──
+{
+  // The values off the lists: the field refuses with the list, the text names it.
+  ok(throws(() => R.checkReflect({ ...GOOD, result: 'maybe' }), /result "maybe" is not one of done \| partial \| no/), 'shape: result "maybe" is refused with the list');
+  ok(throws(() => R.checkReflect({ ...GOOD, obstacle: '', obstacle_fact: '' }), /obstacle null is not one of permissions \| path/), 'shape: partial with no class is refused with the list');
+  ok(R.readReflect('REFLECT\ngoal: g\nresult: maybe\nobstacle: none\ninstead: i\nrule: none').problems.some(p => /result "maybe" is not one of done \| partial \| no/.test(p)),
+    'shape: and in the text, result "maybe" is a problem with the list');
+  // Russian for "hinder: weather", escaped: the public tree stays ASCII.
+  const hinder = '\u043c\u0435\u0448\u0430\u043b\u043e: \u043f\u043e\u0433\u043e\u0434\u0430';
+  const weather = R.readReflect(`x\nREFLECT\ngoal: g\nresult: done\n${hinder}\ninstead: i\nrule: none`);
+  ok(weather && weather.obstacle === null && weather.problems.includes('no obstacle'), `shape: an obstacle under a key not read is "no obstacle", not a silent class (${JSON.stringify(weather.problems)})`);
+  const cls = R.readReflect('REFLECT\ngoal: g\nresult: partial\nobstacle: \u043f\u043e\u0433\u043e\u0434\u0430\ninstead: i\nrule: none');
+  ok(cls.obstacle === null && cls.problems.some(p => /obstacle class "\u043f\u043e\u0433\u043e\u0434\u0430" is not one of permissions/.test(p)), 'shape: a class off the list in another language is a problem with the list');
+  // Every key in another language: the marker alone, on its own line, is still a block meant.
+  const keys = ['\u0446\u0435\u043b\u044c: g', '\u0438\u0442\u043e\u0433: done', hinder, '\u0432\u043c\u0435\u0441\u0442\u043e: i', '\u043f\u0440\u0430\u0432\u0438\u043b\u043e: none'];
+  for (const text of [`did it\nREFLECT\n${keys.join('\n')}`, `did it · REFLECT · ${keys.join(' · ')}`, `did it\nREFLECT:\n${keys.join('\n')}`]) {
+    const r = R.readReflect(text);
+    ok(r && r.level === 'turn' && r.result === null && r.obstacle === null && r.problems.length === 1 && /REFLECT is followed by no result: or obstacle: line.*the keys are goal, result, obstacle, instead, rule, in English/.test(r.problems[0]),
+      `shape: REFLECT with no key read is read as empty, with the one problem that says why (${JSON.stringify(text.slice(0, 20))})`);
+  }
+  ok(R.readReflect('NOTE: REFLECT on this later') === null && R.readReflect('we should REFLECT more\non it') === null, 'shape: the word in prose is still no block');
+  // instead "none": only with done and none.
+  ok(R.checkReflect({ ...GOOD, result: 'done', obstacle: 'none', obstacle_fact: '', instead: 'none' }).instead === 'none', 'shape: instead "none" with done and none is kept');
+  for (const instead of ['none', 'nothing', 'N/A', '-'])
+    ok(throws(() => R.checkReflect({ ...GOOD, instead }), /instead ".*" only with result "done" and obstacle "none"; say what you would do differently$/), `shape: instead ${JSON.stringify(instead)} with partial and a class is refused`);
+  ok(throws(() => R.checkReflect({ ...GOOD, obstacle: 'none', obstacle_fact: '', instead: 'nothing' }), /or, for a run not finished yet, what it waits for/),
+    'shape: with partial and none the refusal says what instead is for');
+  ok(R.checkReflect({ ...GOOD, obstacle: 'none', obstacle_fact: '', instead: 'waiting for the test run, tests.log' }).result === 'partial', 'shape: partial with none and what it waits for is kept');
+  // `no` names what held it up.
+  ok(throws(() => R.checkReflect({ ...GOOD, result: 'no', obstacle: 'none', obstacle_fact: '' }), /result "no" with obstacle "none": .* one of permissions \| path \| unclear-dispatch \| environment \| model$/),
+    'shape: no with none is refused, the classes listed');
+  // One rule.
+  ok(throws(() => R.checkReflect({ ...GOOD, rule: 'measure first; name the artifact; ask once' }), /rule holds more than one rule/), 'shape: three rules joined with ";" are refused');
+  ok(R.checkReflect({ ...GOOD, rule: 'run `make clean; make` before a build' }).rule, 'shape: a ";" inside backticks is a command, not a second rule');
+  const text = R.readReflect('x · REFLECT · goal: g · result: partial · obstacle: none · instead: none · rule: a; b');
+  ok(text.problems.length === 2 && /instead "none" only with/.test(text.problems[0]) && /more than one rule/.test(text.problems[1]),
+    `shape: the text names every one of them (${JSON.stringify(text.problems)})`);
+  ok(/result "no" with obstacle "none"/.test(R.readReflect('REFLECT · goal: g · result: no · obstacle: none · instead: i · rule: none').problems.join()), 'shape: and no with none');
+}
+
+// ── a turn that found no work: the waiting line, no block ──
+{
+  ok(R.isWaitingTurn('waiting for a dispatch from head-a') && R.isWaitingTurn('NOTE: "waiting for a dispatch"') && !R.isWaitingTurn('waiting for a dispatch\nNEXT: x') &&
+    !R.isWaitingTurn('built it'), 'waiting: the line alone is a waiting turn, with anything else it is not');
+  const w = core.runReport({ project: P, agent: 'dev-w', text: 'waiting for a dispatch from head-a' });
+  ok(w.note && !w.reflect && !tail().at(-1).reflect, 'waiting: the line alone is filed, and no reflection is asked of it');
+  const wb = core.runReport({ project: P, agent: 'dev-w', text: 'waiting for a dispatch\nREFLECT\ngoal: g\nresult: done\nobstacle: none\ninstead: none\nrule: none' });
+  ok(wb.reflect && wb.reflect.problems.length === 1 && /only waits for a dispatch takes no reflection/.test(wb.reflect.problems[0]), `waiting: with a block, the block is the problem (${JSON.stringify(wb.reflect.problems)})`);
+  const before = tail().length;
+  ok(throws(() => core.runReport({ project: P, agent: 'dev-w', text: 'waiting for a dispatch', reflect: { ...GOOD, result: 'done', obstacle: 'none', obstacle_fact: '', instead: 'none' } }),
+    /only waits for a dispatch takes no reflection/) && tail().length === before, 'waiting: with the field, the report is refused and nothing written');
+  const ru = core.runReport({ project: P, agent: 'dev-w', text: 'did it\nREFLECT\n\u0446\u0435\u043b\u044c: g\n\u0438\u0442\u043e\u0433: done' });
+  ok(ru.reflect && ru.reflect.problems && /is followed by no result: or obstacle: line/.test(ru.reflect.problems[0]), 'report: a block with no key read is in the reply, not silent');
+  const c = cli(['report', '-p', P, '--agent', 'dev-w', '-m', 'did it\nREFLECT\n\u0446\u0435\u043b\u044c: g']);
+  ok(c.code === 0 && /reflection filed, off the rules: REFLECT is followed by no result/.test(c.stderr), `CLI: and on stderr (${c.stderr.trim().slice(0, 90)})`);
+}
+
 // ── the digest ──
 {
   const D = 'rfdigest';
@@ -157,7 +214,7 @@ const tail = () => core.journalTail(P, 1000);
   ok(JSON.stringify(Object.keys(role.result)) === JSON.stringify([...R.RESULTS, 'other']) &&
     JSON.stringify(Object.keys(role.obstacle)) === JSON.stringify([...R.OBSTACLES, 'unclassified']) &&
     Object.values(j.roles).every(p => JSON.stringify(shape(p)) === JSON.stringify(shape(role))), 'CLI: every role carries every result and every class, zeros included');
-  ok(JSON.stringify(shape(j.rules[0])) === JSON.stringify({ count: 'number', last: 'string', roles: ['string'], rule: 'string' }) &&
+  ok(JSON.stringify(shape(j.rules[0])) === JSON.stringify({ count: 'number', last: 'string', roles: ['string'], rule: 'string', variants: [] }) &&
     JSON.stringify(shape(j.decisions[0])) === JSON.stringify({ level: 'string', role: 'string', rule: 'string', ts: 'string', verdict: 'string' }) &&
     JSON.stringify(shape(j.obstacles.environment.facts[0])) === JSON.stringify({ fact: 'string', role: 'string', ts: 'string' }) &&
     JSON.stringify(empty.exampleRule) === '{"count":0,"roles":[]}',
@@ -205,7 +262,135 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
     'recall: goal and instead are still found, in the journal hit');
 }
 
+// ── one rule in other words ──
+{
+  const S = R.ruleSimilarity;
+  ok(S('run the tests before the push', 'before the push, run the tests') === 1, 'rules: a reordered wording is the same rule');
+  ok(S('verify checksums before deploying', 'verified the checksum before deployment') >= R.SAME_RULE &&
+    S('\u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0442\u044c \u043a\u043e\u043d\u0442\u0440\u043e\u043b\u044c\u043d\u044b\u0435', '\u043f\u0440\u043e\u0432\u0435\u0440\u0438\u043b \u043a\u043e\u043d\u0442\u0440\u043e\u043b\u044c\u043d\u0443\u044e') === 1,
+    'rules: a word is its first five letters, so an inflected one is the same word, in any script');
+  ok(S('64 hex', '6 hex') < R.SAME_RULE && S('64 hex', '64 HEX!') === 1, 'rules: a number is a word of its own, so 64 is not 6');
+  ok(S('alpha bravo charlie delta', 'alpha bravo echo') === R.SAME_RULE && S('alpha bravo charlie delta', 'alpha bravo echo foxtrot') < R.SAME_RULE,
+    `rules: two words of five shared is one rule, two of six is not (SAME_RULE ${R.SAME_RULE})`);
+
+  const at = (rule, role, h) => ({ rule, role, ts: `2026-10-03 ${String(h).padStart(2, '0')}:00`, ms: Date.UTC(2026, 9, 3, h) });
+  const A = 'alpha bravo charlie delta', B = 'alpha bravo charlie echo', C = 'bravo charlie echo foxtrot';
+  const g = R.promoteCandidates([at(A, 'dev-a', 1), at(A, 'dev-a', 2), at(C, 'dev-b', 3), at(C, 'dev-c', 4), at(A, 'dev-a', 5), at(B, 'dev-a', 6), at(B, 'dev-a', 7)]);
+  ok(g.length === 2 && g[0].rule === A && g[0].count === 5 && g[0].by['dev-a'] === 5 && g[0].last === '2026-10-03 07:00' &&
+    JSON.stringify(g[0].variants) === JSON.stringify([{ rule: B, count: 2 }]) && g[0].id === R.ruleId(A),
+    `promote: a wording joins the most repeated one it resembles, counted with it as a variant (${JSON.stringify(g[0])})`);
+  ok(g[1] && g[1].rule === C && g[1].count === 2 && Object.keys(g[1].by).join() === 'dev-b,dev-c',
+    'promote: one that resembles the variant but not the rule stays a rule of its own, never a chain');
+
+  const X = 'keep the build log beside the package';
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2)]).length === 0, 'promote: twice by one role is no candidate');
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3)]).length === 1, 'promote: three times by one role is');
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at('the package, and beside it the build log, kept', 'dev-b', 2)])[0]?.count === 2, 'promote: and so is once each by two roles, worded apart');
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-b', 2)], { laws: ['the build log is kept beside the package'] }).length === 0,
+    'promote: a rule that is a law already, in whatever words, is no candidate');
+  const no = { rule: X, ...at(X, 'dev-h', 2) };
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4)], { rejected: [no] }).length === 0,
+    'promote: a rejected one counts only what was said after the rejection');
+  const back = R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4), at(X, 'dev-a', 5)], { rejected: [no] });
+  ok(back.length === 1 && back[0].count === 3 && back[0].rejected === '2026-10-03 02:00', 'promote: said three times since, it is back, with the rejection it outlived');
+}
+
+// ── a project's laws: the candidates, the head's verdict, the card ──
+{
+  const P = 'rflaw';
+  const say = (project, agent, ts, rule) => core.journalAppend({ ts, project, agent, kind: 'done', text: 'turn', reflect: R.checkReflect({ ...GOOD, rule }) });
+  const sayText = (project, agent, ts, rule) => core.journalAppend({ ts, project, agent, kind: 'done', text: `turn · REFLECT · goal: g · result: done · obstacle: none · instead: i · rule: ${rule}` });
+  const L1 = 'pin the toolchain version before a build', L1b = 'before a build, pin the version of the toolchain';
+  const L2 = 'ask the head before touching the schema', L3 = 'name the file in every report';
+  say(P, 'dev-a', '2026-10-02 10:00', L1); say(P, 'dev-b', '2026-10-02 10:10', L1); say(P, 'dev-a', '2026-10-02 10:20', L1b);
+  say(P, 'dev-a', '2026-10-02 10:30', L1); say(P, 'dev-a', '2026-10-02 10:40', L2); say(P, 'dev-b', '2026-10-02 10:50', L2);
+  say(P, 'dev-a', '2026-10-02 11:00', L3); say(P, 'dev-a', '2026-10-02 11:10', L3);
+  say(P, 'dev-a', '2026-10-02 11:20', 'none'); sayText(P, 'dev-a', '2026-10-02 11:30', R.EXAMPLE_RULE); sayText(P, 'dev-b', '2026-10-02 11:40', R.EXAMPLE_RULE);
+  say('elsewhere', 'dev-a', '2026-10-02 11:50', L3);
+
+  const p = core.runPromote({ project: P, since: '2026-10-01' });
+  ok(p.project === P && p.since === '2026-10-01 00:00' && p.laws.length === 0 && p.candidates.map(c => c.rule).join('|') === `${L1}|${L2}`,
+    `law: the candidates of the project in the window, most said first, none of "none", the example or another project (${p.candidates.map(c => c.rule).join(' | ')})`);
+  ok(p.candidates[0].count === 4 && p.candidates[0].variants[0]?.rule === L1b && p.candidates[0].by['dev-a'] === 3, 'law: a reworded one counts with its rule');
+  ok(Math.abs(core.parseTs(core.runPromote({ project: P }).since).getTime() - (Date.now() - 7 * 86400000)) < 120000, 'law: the default window is the last 7 days');
+
+  const id2 = p.candidates[1].id;
+  ok(throws(() => core.runLaw({ project: P, id: 'abcdef', verdict: 'accept', by: 'dev-h', since: '2026-10-01' }), /no candidate abcdef for rflaw since 2026-10-01 00:00; hub reflect --promote --project rflaw lists them/) &&
+    throws(() => core.runLaw({ project: P, id: id2, verdict: 'maybe', by: 'dev-h' }), /verdict "maybe" is not one of accept \| reject/) &&
+    throws(() => core.runLaw({ project: P, verdict: 'accept', by: 'dev-h' }), /id required/) &&
+    throws(() => core.runLaw({ project: P, id: id2, verdict: 'accept' }), /by required/), 'law: an unknown id, a verdict off the list, no id or nobody signing is an error');
+
+  const a = core.runLaw({ project: P, id: R.ruleId(L1b), verdict: 'accept', by: 'dev-h', since: '2026-10-01' });
+  const card = fs.readFileSync(core.cardPath(P), 'utf8');
+  ok(a.ok && a.verdict === 'accepted' && a.rule === L1 && a.section === 'Laws' && new RegExp(`## Laws\\n\\n- \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d \\(dev-h\\): ${L1}\\n`).test(card),
+    `law: accepted by a variant's id, the rule is a line of the card's Laws section (${a.section})`);
+  const law = core.projectLaws(P);
+  ok(law.length === 1 && law[0].rule === L1 && law[0].by === 'dev-h' && /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(law[0].since), 'law: projectLaws reads it back, who and when');
+  const je = core.journalTail(P, 1)[0];
+  ok(je && je.kind === 'decision' && je.agent === 'dev-h' && je.law.verdict === 'accepted' && je.law.rule === L1 && je.law.count === 4 && je.law.roles['dev-b'] === 1,
+    `law: and a decision in the journal, with the count and the roles (${JSON.stringify(je && je.law)})`);
+  const p2 = core.runPromote({ project: P, since: '2026-10-01' });
+  ok(p2.laws.length === 1 && p2.candidates.map(c => c.rule).join() === L2, 'law: a law is no candidate any more');
+
+  const r = core.runLaw({ project: P, id: id2, verdict: 'reject', by: 'dev-h', reason: ' the schema\n has an owner ', since: '2026-10-01' });
+  const jr = core.journalTail(P, 1)[0];
+  ok(r.verdict === 'rejected' && !r.section && jr.law.verdict === 'rejected' && jr.law.reason === 'the schema has an owner' && core.projectLaws(P).length === 1,
+    'law: a rejection is a journal decision with its reason, and no law');
+  ok(core.runPromote({ project: P, since: '2026-10-01' }).candidates.length === 0, 'law: a rejected one is off the list');
+
+  const Q = 'rflaw-again';
+  say(Q, 'dev-a', '2026-10-02 10:00', L2); say(Q, 'dev-b', '2026-10-02 10:10', L2);
+  core.journalAppend({ ts: '2026-10-02 11:00', project: Q, agent: 'dev-h', kind: 'decision', text: 'law candidate rejected', law: { verdict: 'rejected', id: R.ruleId(L2), rule: L2 } });
+  ok(core.runPromote({ project: Q, since: '2026-10-01' }).candidates.length === 0, 'law: rejected, a rule said before stays off');
+  say(Q, 'dev-a', '2026-10-02 12:00', L2); say(Q, 'dev-b', '2026-10-02 12:10', 'ask the head before touching the schema!');
+  const again = core.runPromote({ project: Q, since: '2026-10-01' }).candidates;
+  ok(again.length === 1 && again[0].count === 2 && again[0].rejected === '2026-10-02 11:00', 'law: said again by two roles after it, it is back');
+
+  const ctxDir = mktmp(); fs.writeFileSync(path.join(ctxDir, '.hubd'), P + '\n');
+  ok(JSON.stringify(core.runContext({ cwd: ctxDir }).laws) === JSON.stringify([L1]) && JSON.stringify(core.runContext({ cwd: mktmp() }).laws) === '[]',
+    'context: hub_context gives every role the project\'s laws, none outside a project');
+
+  // a project with a head on record is the head's to rule on, or a fleet role's
+  const H = 'rflaw-head', made = ['rfl-head', 'rfl-dev', 'rfl-fleet'];
+  core.runResourceSet({ slug: 'rfl-head', type: 'role', attrs: { rank: 'head', project: H }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'rfl-dev', type: 'role', attrs: { rank: 'worker', project: H }, edges: { head: ['rfl-head'] }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'rfl-fleet', type: 'role', attrs: { rank: 'fleet', project: 'fleet' }, by: 'dev-t' });
+  const L4 = 'write the plan before the code', L5 = 'one commit per task';
+  for (const h of [10, 11, 12]) { say(H, 'rfl-dev', `2026-10-02 ${h}:00`, L4); say(H, 'rfl-dev', `2026-10-02 ${h}:30`, L5); }
+  const hp = core.runPromote({ project: H, since: '2026-10-01' });
+  const [i4, i5] = [L4, L5].map(l => hp.candidates.find(c => c.rule === l)?.id);
+  ok(throws(() => core.runLaw({ project: H, id: i4, verdict: 'accept', by: 'rfl-dev', since: '2026-10-01' }), /a law of rflaw-head is its head's to rule on \(rfl-head\) or a fleet role's; rfl-dev is of rank worker/) &&
+    throws(() => core.runLaw({ project: H, id: i4, verdict: 'accept', by: 'dev-x', since: '2026-10-01' }), /dev-x is no role on record/),
+    'law: a worker of the project, or a name with no role card, may not rule on it');
+  ok(core.runLaw({ project: H, id: i5, verdict: 'reject', by: 'rfl-fleet', since: '2026-10-01' }).verdict === 'rejected' &&
+    core.runLaw({ project: H, id: i4, verdict: 'accept', by: 'rfl-head', since: '2026-10-01' }).verdict === 'accepted' &&
+    core.projectLaws(H).map(l => `${l.by}: ${l.rule}`).join() === `rfl-head: ${L4}`, 'law: its head may, and so may a fleet role');
+  for (const m of made) fs.rmSync(path.join(T0, 'resources', m + '.md'), { force: true });
+
+  // the CLI
+  const Z = 'rflaw-cli', Z1 = 'say the exit code in the report', Z1b = 'the report says the exit code';
+  say(Z, 'dev-a', '2026-10-02 10:00', Z1); say(Z, 'dev-b', '2026-10-02 10:10', Z1b);
+  const pr = cli(['reflect', '--promote', '--project', Z, '--since', '2026-10-01']);
+  const zid = core.runPromote({ project: Z, since: '2026-10-01' }).candidates[0]?.id;
+  ok(pr.code === 0 && /^rflaw-cli: 1 candidate\(s\) for the project's laws since 2026-10-01 00:00 \(a rule said 3 times by one role, or by 2 roles\), 0 law\(s\) already$/m.test(pr.stdout) &&
+    new RegExp(`^ {2}${zid} {2}×2 {2}dev-a 1, dev-b 1; last 2026-10-02 10:10$`, 'm').test(pr.stdout) && pr.stdout.includes(`    ~ ×1 `) &&
+    /accept: hub reflect --accept <id> --project rflaw-cli --by <head>/.test(pr.stdout), `CLI: hub reflect --promote lists the candidates and how to rule on them (${pr.stdout.split('\n').slice(2, 3)})`);
+  ok(JSON.parse(cli(['reflect', '--promote', '--project', Z, '--since', '2026-10-01', '--json']).stdout).candidates[0].id === zid, 'CLI: and --json');
+  const both = cli(['reflect', '--accept', zid, '--reject', zid, '--project', Z, '--by', 'dev-h']);
+  const none = cli(['reflect', '--accept', 'abcdef', '--project', Z, '--by', 'dev-h', '--since', '2026-10-01']);
+  ok(both.code !== 0 && /--accept or --reject, not both/.test(both.stderr) && none.code !== 0 && /no candidate abcdef/.test(none.stderr),
+    'CLI: --accept with --reject, or an unknown id, exits non-zero and says why');
+  const acc = cli(['reflect', '--accept', zid, '--project', Z, '--by', 'dev-h', '--since', '2026-10-01']);
+  ok(acc.code === 0 && acc.stdout.startsWith("law of rflaw-cli, in its card's Laws section: "), `CLI: hub reflect --accept makes it a law (${acc.stdout.trim()})`);
+  const lw = cli(['reflect', '--laws', '--project', Z]);
+  const lj = JSON.parse(cli(['reflect', '--laws', '--project', Z, '--json']).stdout);
+  ok(lw.code === 0 && /^- (say the exit code in the report|the report says the exit code)\n$/.test(lw.stdout) && lj.length === 1 && lj[0].by === 'dev-h',
+    'CLI: hub reflect --laws lists the laws, --json with who and when');
+}
+
 // ── over MCP ──
+const MCP_RULE = 'quote the error line in the report';
+for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, project: 'rflaw-mcp', agent: 'dev-m', kind: 'done', text: 'turn', reflect: R.checkReflect({ ...GOOD, rule: MCP_RULE }) });
 {
   const reqs = [
     { id: 1, method: 'tools/list', params: {} },
@@ -214,6 +399,9 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
     { id: 4, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rfdigest', since: '2026-09-30' } } },
     { id: 5, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rfdigest', level: 'worker' } } },
     { id: 6, method: 'tools/call', params: { name: 'hub_report', arguments: { project: 'rfmcp', agent: 'dev-m', text: 'over mcp', reflect: { ...GOOD, rule: R.EXAMPLE_RULE } } } },
+    { id: 7, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rflaw', since: '2026-10-01', promote: true } } },
+    { id: 8, method: 'tools/call', params: { name: 'hub_law', arguments: { project: 'rflaw-mcp', id: R.ruleId(MCP_RULE), verdict: 'accept', by: 'dev-h', since: '2026-10-01' } } },
+    { id: 9, method: 'tools/call', params: { name: 'hub_law', arguments: { project: 'rflaw-mcp', id: 'abcdef', verdict: 'reject', by: 'dev-h' } } },
   ].map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
   let out = '';
   try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env: { ...process.env }, timeout: 15000 }); } catch (e) { out = e.stdout || ''; }
@@ -232,6 +420,13 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
   ok(via && JSON.stringify(via) === JSON.stringify(core.runReflect({ project: 'rfdigest', since: '2026-09-30' })),
     `MCP: hub_reflect answers what hub reflect --json does (${JSON.stringify(via).slice(0, 80)})`);
   ok(res[5]?.result?.isError && /level "worker" is not one of/.test(res[5].result.content[0].text), 'MCP: a level off the list is refused');
+  const pv = res[7]?.result && !res[7].result.isError ? JSON.parse(res[7].result.content[0].text) : null;
+  ok(pv && JSON.stringify(pv) === JSON.stringify(core.runPromote({ project: 'rflaw', since: '2026-10-01' })), 'MCP: hub_reflect with promote answers what hub reflect --promote --json does');
+  const lt = (res[1]?.result?.tools || []).find(t => t.name === 'hub_law');
+  ok(lt && lt.inputSchema.required.join() === 'project,id,verdict,by' && lt.inputSchema.properties.verdict.enum.join() === 'accept,reject', 'MCP: hub_law is listed, the verdicts as its enum');
+  ok(res[8]?.result && !res[8].result.isError && JSON.parse(res[8].result.content[0].text).verdict === 'accepted' && core.projectLaws('rflaw-mcp')[0]?.rule === MCP_RULE,
+    'MCP: hub_law accepts a candidate into the project\'s laws');
+  ok(res[9]?.result?.isError && /no candidate abcdef/.test(res[9].result.content[0].text), 'MCP: and refuses an id that is no candidate');
 }
 
 done();

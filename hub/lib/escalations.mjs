@@ -1,16 +1,17 @@
 /* escalations.mjs — what was escalated to the fleet, and whether the owner has answered it.
  *
  * An ESCALATION is a block with an id in the queue of a role of rank `fleet`:
- *   ## 2026-10-05 10:32 · from web-head · id 32
- * and its KEY is that header line without the "## ": "2026-10-05 10:32 · from web-head · id 32".
+ *   ## 2026-10-05 10:32 · from web-head · id pine-32
+ * and its KEY is that header line without the "## ": "2026-10-05 10:32 · from web-head · id pine-32".
+ * A block from before 0.9.54 has a bare number for its id, "· id 32", and is keyed the same way.
  * Every such block counts, whoever wrote it: the queue a block sits in says it was escalated.
  *
  * An ANSWER is an entry of the Owner decisions section (key `owner-decisions`, under whatever heading
  * the hub's sections.json gives it) of the card of a fleet role's project, that quotes the key:
- *   - 2026-10-05 10:48: answered 2026-10-05 10:32 · from web-head · id 32 — restart it, then report
+ *   - 2026-10-05 10:48: answered 2026-10-05 10:32 · from web-head · id pine-32 — restart it, then report
  * An entry starts at a list item that begins with a "YYYY-MM-DD HH:MM" stamp, the time it was written
  * (what `hub section add` puts there), and runs to the next one. Each key it quotes is answered by
- * it, at its stamp; "id 3" is not "id 32". A section over the card's cap moves its older entries to
+ * it, at its stamp; "id pine-3" is not "id pine-32". A section over the card's cap moves its older entries to
  * the project's history file, often within hours on a busy fleet, so the overflow blocks of that
  * section are read there too: an answer does not stop being one when it is moved. With two answers
  * to one key, the later one stands.
@@ -24,11 +25,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { HISTORY, parseTs, slugify, readCard, sectionBody, sectionHeadings, liveHeading, hasHeading, roleRegistry } from './core.mjs';
-import { recentBlocks } from './queue.mjs';
+import { recentBlocks, idCompare } from './queue.mjs';
 
 export const ANSWERED_HOURS = 24;
 
-const KEY_RE = /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?) · id (\d+)(?!\d)/g;
+const KEY_RE = /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from ([^\n·]+?) · id ((?:[a-z0-9_-]+-)?\d+)(?![\w-])/g;
 const ENTRY_RE = /^[-*+] (\d{4}-\d{2}-\d{2} \d{2}:\d{2})(?::|\s·)\s/;
 const HISTORY_BLOCK_RE = /\n---\n(?=### until )/;
 
@@ -101,7 +102,7 @@ export function escalationState({ roles = roleRegistry(), root, nowMs = Date.now
   const blocks = recentBlocks({ root, to: fleet, tailBytes: Infinity, textChars: Infinity, subjectChars: 160 })
     .filter(b => b.id != null)
     .sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : x.role < y.role ? -1 : x.role > y.role ? 1
-      : String(x.node || '') < String(y.node || '') ? -1 : String(x.node || '') > String(y.node || '') ? 1 : x.id - y.id));
+      : String(x.node || '') < String(y.node || '') ? -1 : String(x.node || '') > String(y.node || '') ? 1 : idCompare(x.id, y.id)));
   const since = nowMs - ANSWERED_HOURS * 3600000;
   const seen = new Set(), waiting = [], answered = [];
   for (const b of blocks) {

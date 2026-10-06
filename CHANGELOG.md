@@ -4,6 +4,51 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.54 — 2026-10-06
+
+- **A project's laws, from its roles' reflections.** A reflection's rule was a proposal nobody
+  turned into a rule: one hub's rules file held one law while 36 hours wrote 949 reflections.
+  `hub reflect --promote --project <p>` lists the candidates: a rule said 3 times by one role, or
+  by 2 roles, in the window (default 7 days), each with an id, its count per role and its other
+  wordings. The head rules on each with `hub reflect --accept <id>` or `--reject <id> --reason
+  "<why>"`, signed `--by <head>` (MCP `hub_law`); a project with a head on record as a role card
+  is that head's to rule on, or a fleet role's. An accepted rule is a line of the card's new Laws
+  section, `- <when> (<head>): <rule>`, never rotated out: `hub_context` returns the laws as
+  `laws`, `hub whereami` prints them, `hub reflect --laws` lists them. A rejection is a journal
+  line, and the rule stays off the list until it is said again after it. On two days of one
+  project's journal: 19 candidates.
+- **One rule in other words counts as one.** Counted by exact wording, a rule restated from turn
+  to turn read as several rules said a few times each, below any line a head draws. Wordings that
+  share 40% of their words (a word by its first five letters, a number a word of its own) are one
+  rule now: `hub reflect` and `hub_reflect` list the others under it as `variants`. A wording
+  joins the most repeated one it resembles, never a chain.
+- **A reflection is checked for its own rules, not only the lists.** Refused in the `reflect`
+  field and named a problem in the text: `result: no` with `obstacle: none`; `instead: none`
+  anywhere but a done turn with no obstacle; a `rule` that joins several with `;` outside
+  backticks. A `REFLECT` marker followed by no key this reads (keys in another language, or
+  misspelt) is a reflection with one problem that says so, no longer prose. The fragment asks for
+  the values in the dispatch's language and the keys as written.
+- **A turn that found no work takes no reflection.** Its report is the one line "waiting for a
+  dispatch"; with a reflection, in the field or the text, it is refused, so a loop can tell it
+  from a step that skipped the block.
+- **`DONE:` takes the id as people write it.** `DONE: #471` or `DONE: 471` closes the one task
+  whose id ends in -471; of several, the one in the report's project; if still several, none, and
+  the reply lists them as `doneAmbiguous`. A line that reads as closing a task but is not the form
+  (`#471 DONE`, `DONE #471`, `pine-471 done`) refuses the report before anything is written: it
+  was filed as a note and closed nothing. The CLI's warning names each id not closed, and why.
+- **A block's id is one block in the whole hub.** Headers end in `· id <node>-<N>`, N counted by
+  the node across all its queues, under a lock, as task ids are. It was a bare number counted per
+  file, and one hub had "id 39" in twelve headers of four queues. `hub_queue_ack` takes the
+  string; a bare number names an old block, or the one new id ending in it. Escalations and their
+  answers are keyed by it. Upgrade every node together: an older hubd reads no block in a header
+  with the new id.
+- **A full queue refuses with a code.** The refusal carries `queue-full` (`Error [queue-full]:`
+  over MCP, exit 4 from `hub queue send`) and leaves a line in the sender's project journal, at
+  most one per sender and role in ten minutes. A role of rank `fleet` is never refused, since an
+  escalation must go; `hub doctor` lists its queue as OVER THE LIMIT.
+- **`hub whereami` gives the inventory script 30 s**, not 5: 5 killed a one-line echo on a loaded
+  machine. A script it stops says so in the output.
+
 ## 0.9.53 — 2026-10-06
 
 - **`mesh-sync` fetches again when another node's push lands first.** Every node pushes to one

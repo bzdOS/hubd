@@ -121,6 +121,21 @@ ok(noCard.waiting.length === 5 && !noCard.answered.length, 'escalations: with no
       'serve: an escalation\'s text is text, never markup');
   } finally { srv.kill(); }
 }
+
+// a block id of today, <node>-<N>: keyed and answered the same way, and "fir-3" is not "fir-32"
+{
+  const E2 = mktmp();
+  core.setHubBase(E2); core.ensureHubDirs();
+  core.runResourceSet({ slug: 'coord', type: 'role', attrs: { rank: 'fleet', project: 'infra' }, by: 'dev-t' });
+  fs.mkdirSync(path.join(E2, 'queues'), { recursive: true });
+  fs.writeFileSync(path.join(E2, 'queues', 'coord.fir.queue.md'),
+    block('2026-10-05 09:00 · from web-head · id fir-3', 'the build box is down') + block('2026-10-05 10:00 · from web-head · id fir-32', 'the disk is full'));
+  fs.writeFileSync(path.join(E2, 'projects', 'infra.md'),
+    ['# infra', '', '## Owner decisions', '', '- 2026-10-05 10:30: answered 2026-10-05 10:00 · from web-head · id fir-32 — cleaned it', ''].join('\n'));
+  const g2 = es.escalationState({ root: E2, nowMs: NOW });
+  ok(g2.waiting.map(x => x.key).join() === '2026-10-05 09:00 · from web-head · id fir-3' && g2.answered.map(x => x.id).join() === 'fir-32',
+    `escalations: a node-scoped id is keyed whole, and "id fir-32" does not answer "id fir-3" (${JSON.stringify(g2.waiting.map(x => x.key))})`);
+}
 core.setHubBase(T0); core.ensureHubDirs();
 
 done();
