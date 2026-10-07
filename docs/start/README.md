@@ -3,7 +3,8 @@
 Seven steps, each a level of what hubd does. Each one continues the last, in one
 practice hub under `/tmp`, so nothing lands in your real one. Every output shown is
 real, captured on a node called `oak`; set `HUBD_NODE=oak` as the first one says and
-your ids match the ones on the page.
+your ids match the ones on the page. In a clone of the repository,
+`node tests/docs.mjs start` runs all seven and compares what they print with these pages.
 
 | | You get | Time |
 | --- | --- | --- |

@@ -111,6 +111,10 @@ Card merge driver installed in /tmp/hub-tour
 State file merge driver installed in /tmp/hub-tour
 …
 This node only: nothing here travels with the mesh, so run it on every node that syncs.
+Different ## sections changed on two nodes now merge cleanly. One section changed on both keeps
+both versions under a marker line for a person to review. A snapshot, presence, sense or read-mark
+file rewritten on both sides takes the version with the later time. If node or hubd moves, cards
+fall back to a union merge and those files to the side git calls ours, until this is run again.
 ```
 
 Now both nodes edit the `shop` card at the same time, in different sections:
@@ -169,7 +173,7 @@ hub base:
   projects: 1
   resources:0
   tasks:    4 open
-  claims:   2 active, 0 expired
+  claims:   1 active, 0 expired
   journal:  2 file(s), 16 entries
   writers:  elm 0.9.56 - oak 0.9.56
   fleet:    elm SILENT - oak (here, 2)  WARNING

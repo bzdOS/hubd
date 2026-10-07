@@ -10,6 +10,8 @@ order in one shell, and the output under each is what they printed. An `sh` bloc
 for a real machine and is not part of the run. Every output is real, captured on a
 node called `oak`, or on two or three simulated nodes on one computer. A run takes
 minutes where the story takes hours or days, so the clock in the output reads minutes.
+In a clone of the repository, `node tests/docs.mjs` runs them all and compares what they
+print with these pages.
 
 | | You end with | Level |
 | --- | --- | --- |

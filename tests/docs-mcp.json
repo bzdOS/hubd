@@ -1,0 +1,24 @@
+{
+  "docs/start/1-memory.md": {
+    "1": { "agent": "dev-shop", "calls": [["hub_context", { "cwd": "/tmp/hub-tour-work/shop" }]] }
+  },
+  "docs/start/3-queues.md": {
+    "1": { "agent": "worker", "calls": [["hub_queue_wait", { "role": "worker", "timeout": 5 }]] },
+    "2": { "agent": "worker", "calls": [["hub_queue_ack", { "role": "worker", "id": "oak-2" }]] }
+  },
+  "docs/scenarios/01-three-clients.md": {
+    "2": { "agent": "dev-web", "calls": [["hub_context", { "cwd": "/tmp/hub-s1-work/invoices" }]] },
+    "3": { "agent": "dev-api", "calls": [["hub_context", { "cwd": "/tmp/hub-s1-work/invoices" }]] }
+  },
+  "docs/scenarios/02-night-worker.md": {
+    "1": { "agent": "night", "calls": [["hub_queue_wait", { "role": "night", "tasks": true, "timeout": 5 }]] },
+    "2": { "agent": "night", "calls": [["hub_queue_ack", { "role": "night", "id": "oak-1" }]] },
+    "3": { "agent": "night", "calls": [["hub_queue_wait", { "role": "night", "tasks": true, "timeout": 5 }]] }
+  },
+  "docs/scenarios/03-track-with-a-head.md": {
+    "1": { "agent": "atlas-head", "calls": [["hub_task_update", { "id": "fir-5", "assignee": "atlas-qa", "by": "atlas-head" }]] }
+  },
+  "docs/scenarios/05-team-learns.md": {
+    "1": { "agent": "atlas-qa", "calls": [["hub_context", { "cwd": "/tmp/hub-s5-work/atlas" }]] }
+  }
+}

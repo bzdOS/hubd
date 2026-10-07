@@ -31,6 +31,21 @@ over stdio (`smoke_mcp.sh`), card writes that must keep hand-written sections
 through (`test_mesh_sync.sh`), and no private names or non-English in tracked
 files (`check_clean.sh`).
 
+The pages in `docs/start/` and `docs/scenarios/` show real output, and a test keeps them
+honest:
+
+```bash
+node tests/docs.mjs              # the tutorials as one run, then each scenario
+node tests/docs.mjs 03 --write   # scenario 3, its changed outputs written into the page
+```
+
+It runs a page's `bash` blocks in one shell, as a reader would, with this checkout's `hub`,
+and compares what each prints with the `text` block under it. It is not in `npm test`: the
+pages write to fixed folders under `/tmp`, start servers on fixed ports, and use `curl`,
+`jq`, `uuidgen`, `python3` and `openssl`. Run it after a change to anything a page shows.
+Links are in `npm test`: `tests/logic/links.mjs` follows every relative link and anchor in
+the markdown.
+
 Wire the commit-message hook once per clone:
 
 ```bash
@@ -70,5 +85,5 @@ whoever can. Measured and supplied stay in separate columns.
 ## Pull requests
 
 One change per PR, with the reasoning in the message rather than the diff.
-Run all five suites before pushing; `check_clean.sh` will also stop you
+Run `npm test` before pushing; `check_clean.sh` will also stop you
 committing a private name into a public repo, which is exactly why it exists.
