@@ -23,7 +23,7 @@ curl -s localhost:8787/healthz
 
 ```text
 hubd serving MCP over HTTP on 127.0.0.1:8787 (single-tenant, hub_sync disabled)
-{"ok":true,"server":"hubd","version":"0.9.55","mode":"single-tenant"}
+{"ok":true,"server":"hubd","version":"0.9.56","mode":"single-tenant"}
 ```
 
 The token is the only credential: 16 characters at least, and a uuid is a good one.
@@ -106,11 +106,20 @@ mcp hub_task_add '{"project":"shop","text":"translate the refund page"}'
 ```
 
 ```text
-Error: by required: the function you are performing, e.g. "dev-hubd" or "reviewer-bsdos". Set HUBD_AGENT to give every call a default.
+Error: by required: the function you are performing, e.g. "dev-hubd" or "reviewer-bsdos". Over HTTP every call names its own author: the server's HUBD_AGENT does not apply to remote callers.
 ```
 
-The last sentence is the advice for stdio; over HTTP, only the call can name its
-author.
+**A call with a gap in it is refused.** Each tool's required arguments are checked
+before anything is written, over HTTP and over stdio, and a field the tool does not
+take is named, since a misspelling is the usual reason:
+
+```bash
+mcp hub_task_add '{"project":"shop","title":"translate the refund page","by":"dev-remote"}'
+```
+
+```text
+Error: text required: what the task is, in a line or two (got title, which hub_task_add does not take)
+```
 
 **Nothing waits on the server.** A wait holds a connection open for minutes, and on a
 shared server that is a way to run it out of connections; `hub_sync` reads a path
@@ -134,10 +143,8 @@ hub queue wait worker --timeout 3
 
 ```text
 {
- "file": "/tmp/hub-tour/queues/worker.oak.queue.md",
  "pending": 1,
  "oldestWaiting": "2026-10-07 13:14",
- "consumedHere": true,
  "unacked": 2
 }
 ## 2026-10-07 13:14 · from dev-remote · id oak-7
@@ -145,7 +152,9 @@ the refund page is up on staging; check its links
 ```
 
 `unacked` counts the blocks the worker read and never acked: the two it read from a
-shell in tutorials 3 and 4.
+shell in tutorials 3 and 4. A remote sender gets the queue's depth and no more: the
+file's path and whether the server's node reads the role are the server's business
+(over stdio both are in the reply).
 
 **Nothing reads the server's disk for a caller.** A `cwd` a remote agent passes is a
 place on its own machine, so `hub_context` finds the project from hub data only

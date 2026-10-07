@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import path from 'node:path';
 import {
   VERSION, tenantKey, runSync, runCardSet, runReport, runStatus, runGet, runSearch, runSectionAdd, runTaskAdd,
-  runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban,
+  runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban, setAuthorTransport,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
   envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
@@ -54,7 +54,7 @@ const TOOLS = [
   { name: 'hub_report',
     description: 'Append a session report to the shared journal: what was done / broken / blocked.',
     inputSchema: { type: 'object', properties: {
-      project: { type: 'string' }, agent: { type: 'string' },
+      project: { type: 'string', description: 'the project slug, as hub_status lists it' }, agent: { type: 'string' },
       text: { type: 'string' },
       kind: { type: 'string', enum: ['done', 'broken', 'blocked', 'note'], description: 'default: note' },
       private: { type: 'boolean', description: 'route this entry to the LOCAL-ONLY life braid (journal.life.jsonl — gitignored, never mesh-synced) and stamp it private. Prose only: DECIDE:/FACT:/COMM:/NEXT: write into a card, and cards are synced, so mixing the two would publish what you asked to keep local.' },
@@ -99,7 +99,8 @@ const TOOLS = [
   { name: 'hub_task_add',
     description: 'Add a task to the shared cross-project backlog.',
     inputSchema: { type: 'object', properties: {
-      project: { type: 'string' }, text: { type: 'string' },
+      project: { type: 'string', description: 'the project slug, as hub_status lists it' },
+      text: { type: 'string', description: 'what the task is, in a line or two' },
       importance: { type: 'string', enum: ['high', 'med', 'normal'], description: 'default normal' },
       deadline: { type: 'string', description: 'YYYY-MM-DD, optional' },
       cat: { type: 'string', description: 'one of technical | communicative | decision | chore. Anything else is kept — as a tag, not a category: the four values are the axis every by-type number is counted on, so it stays closed.' },
@@ -467,7 +468,7 @@ const DISPATCH = {
   // repoints the HUB global while hub_queue_wait's promise is still pending.
   // from: required like every other author (was `|| 'mcp'` — a transport name, i.e. a
   // placeholder); an omitted from is filled by the HUBD_AGENT floor in withAuthorFloor.
-  hub_queue_send: (a) => queueSendChecked(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task }),
+  hub_queue_send: (a) => queueSendChecked(a.role, a.text, { from: a.from, root: teamRoot(), task: a.task, remote: a.local === false }),
   // subscriber: subscriberId() — stable across a respawn (HUBD_SUBSCRIBER / HUBD_SESSION /
   // HUBD_AGENT before the process id), so a restarted role resumes its own position.
   // Resolved from THIS process, never from the caller's arguments — the
@@ -579,6 +580,24 @@ function withAuthorFloor(args) {
   return out;
 }
 
+/* A tool's `required` is checked here, once, for every tool: hub_task_add called with `title`
+ * instead of `text` used to file a task whose whole text was "undefined", because nothing
+ * between the schema and the engine read the list. A blank string is as missing as an absent
+ * key. An argument the tool does not know is named beside it, since a misspelling is the usual
+ * reason a required one is missing. The author keys are left to requireAuthor, whose refusal
+ * says what an author is and how this transport fills one in. */
+function missingRequired(name, args, raw) {
+  const schema = TOOLS.find(t => t.name === name)?.inputSchema;
+  const missing = (schema?.required || []).filter(k => !AUTHOR_KEYS.includes(k) &&
+    (args[k] == null || (typeof args[k] === 'string' && !args[k].trim())));
+  if (!missing.length) return null;
+  const props = schema.properties || {};
+  const unknown = Object.keys(raw || {}).filter(k => !(k in props));
+  const one = missing.length === 1 && props[missing[0]]?.description;
+  return (one ? `${missing[0]} required: ${one}` : 'missing required: ' + missing.join(', ')) +
+    (unknown.length ? ` (got ${unknown.join(', ')}, which ${name} does not take)` : '');
+}
+
 // One line: the count and where the list is. An upgrade can require something outside
 // the code — a variable in this client's config, a role declared in the hub — and
 // nothing used to say so; the agent found out by having a call rejected, or never.
@@ -664,6 +683,8 @@ async function handleMessage(msg, mode = 'stdio') {
       // hub_context, hub_claim_check, hub_presence and the audit off the SERVER's filesystem, and
       // a tenant who could pass `local: true` would get that walk back.
       const argv = { ...withAuthorFloor(params?.arguments || {}), ...(mode === 'http' ? { local: false } : {}) };
+      const missing = missingRequired(name, argv, params?.arguments);
+      if (missing) throw new Error(missing);
       const r = await fn(argv);
       // A session that never heartbeats still says its node is up (refreshPresenceSnapshot).
       if (mode === 'stdio') refreshPresenceSnapshot();
@@ -807,6 +828,7 @@ const httpPortArg = (() => {
 // The author floor and the environment checks read it: both describe THIS process's
 // env, which is only the caller's environment on a local (stdio) transport.
 const SERVE_MODE = httpPortArg ? 'http' : 'stdio';
+setAuthorTransport(SERVE_MODE);
 
 try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
 if (httpPortArg) serveHttp(httpPortArg); else serveStdio();

@@ -789,6 +789,7 @@ const AK = mktmp();
     try { queueLib.queueSend('cg', text, { from: 'dev-t', root: C }); return false; }
     catch (e) { return re.test(e.message) && /prose, not cargo/.test(e.message) && /path, size and sha256sum/.test(e.message) && size() === before; }
   };
+  const sent0 = (root, text) => { try { queueLib.queueSend('cg', text, { from: 'dev-t', root }); return true; } catch { return false; } };
   ok(refused(b64(1_700_000), /^message refused: 22\d{5} bytes, over the 16384-byte limit \(HUBD_MSG_MAX\)/),
     'cargo: a 2.3 MB base64 bundle is refused, nothing is appended, and the error names the rule');
   ok(refused('plain words '.repeat(1450), /^message refused: 17399 bytes, over the 16384-byte limit/), 'cargo: 17 KB of plain text is refused');
@@ -797,6 +798,16 @@ const AK = mktmp();
   ok(refused('the key:\n' + b64(2300).replace(/(.{76})/g, '$1\n'), /carries a base64 or hex run/), 'cargo: base64 wrapped at 76 columns is one run');
   ok(refused('hex: ' + crypto.randomBytes(1100).toString('hex'), /carries a base64 or hex run of 2200/), 'cargo: a 2.2 KB hex run is refused');
   ok(refused('fix:\ndiff --git a/x.c b/x.c\n--- a/x.c\n+++ b/x.c\n', /carries a git diff \(line 2\)/), 'cargo: a git diff is refused at any size');
+  // A diff is a diff wherever it starts: after prose on its own first line, indented, quoted, or
+  // from `diff -u`, which writes no git header at all.
+  const hunk = '--- a/x.c\n+++ b/x.c\n@@ -1,2 +1,2 @@\n-old\n+new\n';
+  ok(refused('Here is the fix: diff --git a/x.c b/x.c\nindex 1..2 100644\n' + hunk, /carries a diff \(line 3\)/),
+    'cargo: a diff whose git header sits after prose on the same line is refused at its hunk');
+  ok(refused('the patch, indented:\n\n    diff --git a/x.c b/x.c\n    --- a/x.c\n', /carries a git diff \(line 3\)/), 'cargo: an indented git diff is refused');
+  ok(refused('you wrote:\n> diff --git a/x.c b/x.c\n> --- a/x.c\n', /carries a git diff \(line 2\)/), 'cargo: a quoted git diff is refused');
+  ok(refused('from diff -u:\n' + hunk.replace(/a\/x\.c/, 'x.c.orig').replace(/b\/x\.c/, 'x.c'), /carries a diff \(line 2\)/), 'cargo: a diff -u hunk with no git header is refused');
+  ok(sent0(C, 'I compared them with diff --git off and found nothing.\n---\n+ a list item\n@@ is not a hunk here'),
+    'cargo: prose that names diff --git mid-sentence, a ruler and a list item pass');
   ok(refused('# v2 git bundle\n1f2e3d refs/heads/main\n', /carries a git bundle/), 'cargo: a git bundle header is refused');
   ok(refused('-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA\n-----END OPENSSH PRIVATE KEY-----', /carries a PEM block/), 'cargo: a PEM block is refused');
   const sent = (text) => { try { queueLib.queueSend('cg', text, { from: 'dev-t', root: C }); return true; } catch { return false; } };

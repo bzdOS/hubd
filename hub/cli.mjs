@@ -482,7 +482,15 @@ command('init', () => {
 
   console.log('');
   console.log('Next steps:');
-  console.log('  Connect an agent:  claude mcp add --scope user hubd -- npx -y @bzdos/hubd');
+  /* The line is meant to be pasted, so it carries what the agent needs to be the same hub as this
+   * shell: an author (without HUBD_AGENT every MCP write is refused or floored to a session
+   * suffix), and whichever of HUBD_DIR, HUBD_TEAM_DIR, HUBD_NODE is set here — without them the
+   * agent would connect to ~/.hubd, not to the hub just scaffolded. */
+  const q = (v) => /^[\w@%+=:,./<>-]+$/.test(v) ? v : "'" + v.replace(/'/g, "'\\''") + "'";
+  const envs = ['HUBD_AGENT=dev-<project>', ...['HUBD_DIR', 'HUBD_TEAM_DIR', 'HUBD_NODE']
+    .filter(k => process.env[k]).map(k => k + '=' + process.env[k])];
+  console.log('  Connect an agent:  claude mcp add --scope user hubd ' + envs.map(e => '--env ' + q(e)).join(' ') + ' -- npx -y @bzdos/hubd');
+  console.log('                     (name HUBD_AGENT for the function the agent performs, not the model)');
   console.log('  Check setup:       hub doctor');
   console.log('  Full org template: hubd-company/ in the hubd repository');
   done(0);
@@ -702,6 +710,7 @@ command('report', () => {
   if (r.next) parts.push('next set');
   if (r.done.length) parts.push('closed #' + r.done.join(' #'));
   if (r.doneAlready && r.doneAlready.length) parts.push('already closed #' + r.doneAlready.join(' #'));
+  if (r.released) parts.push('released ' + r.released + ' task claim' + (r.released > 1 ? 's' : ''));
   if (r.private) parts.push('PRIVATE (journal.life.jsonl, local only, never synced)');
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
@@ -780,6 +789,7 @@ command('task', () => {
     console.log(r.noop === 'already-done'
       ? `Task #${id} was already closed${r.closedAt ? ' ' + r.closedAt : ''} — nothing changed`
       : `Task #${id} closed`);
+    if (r.released) console.log(`  released ${r.released} claim${r.released > 1 ? 's' : ''} on it`);
     if (r.resourceHint) console.error('  note: ' + r.resourceHint);
   } else if (sub === 'list') {
     const proj = getFlag('-p');

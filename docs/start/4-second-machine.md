@@ -170,7 +170,7 @@ hub base:
   tasks:    4 open
   claims:   2 active, 0 expired
   journal:  2 file(s), 16 entries
-  writers:  elm 0.9.55 - oak 0.9.55
+  writers:  elm 0.9.56 - oak 0.9.56
   fleet:    elm SILENT - oak (here, 2)  WARNING
             no registry at all from elm - a role running there is
             invisible here, which is NOT the same as dead. Each node publishes

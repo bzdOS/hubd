@@ -166,8 +166,10 @@ Violating these means it is not this product.
   model, and a role loop cuts one past 16 KB: a 2.3 MB base64 bundle sent to a head
   overflowed it twice, and the work stood. A queue message, a report and a task text
   over 16 KB (`HUBD_MSG_MAX`) are refused, and so are a base64 or hex run over 2 KB, a
-  git diff, a git bundle and a PEM block at any size; the error says to put the
-  artifact in a file and send its path, size and sha256.
+  diff, a git bundle and a PEM block at any size; the error says to put the
+  artifact in a file and send its path, size and sha256. A diff is caught wherever it
+  starts, after prose, indented or quoted, by its `diff --git` line or by a unified
+  hunk's `---`, `+++` and `@@` lines, so `diff -u` output counts too (0.9.56).
 - **A queue nobody reads takes no more** (0.9.34, 0.9.54). A send is refused once the
   role holds 50 unread messages or 256 KB (`queue.msgs`, `queue.bytes` in the hub's
   `limits.json`, or `HUBD_QUEUE_MAX_MSGS`, `HUBD_QUEUE_MAX_BYTES` on a node; 0 = off),

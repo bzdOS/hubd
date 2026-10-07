@@ -127,7 +127,7 @@ Append a session report to the shared journal: what was done / broken / blocked.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `project` | string | yes |  |
+| `project` | string | yes | the project slug, as hub_status lists it |
 | `agent` | string | yes |  |
 | `text` | string | yes |  |
 | `kind` | one of `done`, `broken`, `blocked`, `note` |  | default: note |
@@ -225,8 +225,8 @@ Add a task to the shared cross-project backlog.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `project` | string | yes |  |
-| `text` | string | yes |  |
+| `project` | string | yes | the project slug, as hub_status lists it |
+| `text` | string | yes | what the task is, in a line or two |
 | `importance` | one of `high`, `med`, `normal` |  | default normal |
 | `deadline` | string |  | YYYY-MM-DD, optional |
 | `cat` | string |  | one of technical \| communicative \| decision \| chore. Anything else is kept — as a tag, not a category: the four values are the axis every by-type number is counted on, so it stays closed. |
