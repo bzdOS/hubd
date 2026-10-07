@@ -4,6 +4,51 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.56 — 2026-10-07
+
+Ten fixes, found by running the tutorials in `docs/start/` end to end.
+
+- **A call with a gap in it is refused before anything is written.** `hub_task_add` over MCP
+  with no `text`, or with `title` in its place, filed a task with no text. Every tool's required
+  arguments are now checked first, over stdio and over HTTP: a blank string counts as missing,
+  and a field the tool does not take is named, since a misspelling is the usual reason (`text
+  required: what the task is, in a line or two (got title, which hub_task_add does not take)`).
+  The engine itself refuses a task text that is empty or not a string, on add and on update.
+  `hub_report` with no `project` is refused too, where it used to land in `general`.
+- **A card set keeps the folder the card records.** `hub_card_set` rewrote the card's header
+  without its `- path:` line, so `hub_context` from that folder fell back to guessing the project
+  by the folder's name.
+- **Closing a task releases the claim that started it.** `hub claim --task` holds `task:<id>`,
+  and closing the task (`hub task done`, `hub_task_update` to done, `DONE:` in a report) left
+  that claim to expire, so finished work showed as held. A close now drops every claim on the
+  task, whoever holds it, and says so: `released 1 task claim` in a report, `released` in the
+  reply. A claim on files stays: files outlive a task.
+- **A claim that nests in another's warns.** The warning fired only when two agents claimed the
+  very same area; `src/**` and `src/checkout/**` passed in silence. A claim whose glob sits
+  inside another agent's, or around it, now warns `area overlaps src/**, claimed by dev-shop
+  until …`, and the reply lists them as `overlaps`. It is still a soft lock: it never refuses.
+- **A project is found from either name of its folder.** On macOS `/tmp` is a link to
+  `/private/tmp`: a project synced under one name was not found from the other, and
+  `hub_context` guessed. A local lookup compares real paths; over HTTP a caller's `cwd` is still
+  never resolved on the server's disk.
+- **Over HTTP the author error no longer advises `HUBD_AGENT`.** That variable names whoever
+  started the server and does not apply to remote callers; the error now says each call names
+  its own author.
+- **Over HTTP `hub_queue_send` no longer shows the server's disk.** A remote sender gets the
+  queue's depth: `file` (a path on the server) and `consumedHere` (whether the server's node
+  reads the role) are in the stdio reply only, and the notes say "the server's node".
+- **The refusal of a model's name suggests a function.** It suggested `"claude-<project>"`, the
+  model's name again; it now says `"dev-<project>", "reviewer-<project>"`.
+- **`hub init` prints a connect line that names the agent.** The line left out `HUBD_AGENT`. It
+  now carries `HUBD_AGENT=dev-<project>`, and `HUBD_DIR`, `HUBD_TEAM_DIR` and `HUBD_NODE` when
+  the shell set them, so an agent connected to a practice hub writes there and not to
+  `~/.hubd`.
+- **A diff is caught wherever it starts.** The cargo check knew a diff only by `diff --git` at
+  the very start of a line: one indented or quoted (`> `), one whose header follows prose on its
+  line, and a `diff -u` with no git header passed as prose. A unified hunk's three header lines
+  (`---`, `+++`, `@@ -n,m +n,m @@`) now count on their own, indented or quoted too; prose that
+  names `diff --git` mid-sentence still passes.
+
 ## 0.9.55 — 2026-10-07
 
 - **`hub demo`: a hub to look at before your team has written to one.** The board's Summary, the

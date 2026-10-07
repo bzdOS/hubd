@@ -74,6 +74,29 @@ const ctxSyncedSub = path.join(ctxSyncedDir, 'sub');
 fs.mkdirSync(ctxSyncedSub, { recursive: true });
 const ctxD = core.resolveContext(ctxSyncedSub);
 ok(ctxD.project === 'custom-name', `context path-match: also resolves from a subdirectory of the synced path (got ${JSON.stringify(ctxD)})`);
+// A patch to the card keeps the path sync recorded: it used to rewrite the header without it, and
+// every hub_context resolved "via: guess" until the next sync.
+const cardOf = (slug) => fs.readFileSync(path.join(ctxRoot2, 'projects', slug + '.md'), 'utf8');
+core.runCardSet({ project: 'custom-name', digest: 'd2, patched', by: 'test' });
+ok(cardOf('custom-name').includes('- path: ' + ctxSyncedDir), 'card set: a new digest keeps the recorded - path: line');
+core.runCardSet({ project: 'custom-name', replace: [{ from: 'patched', to: 'patched again' }], by: 'test' });
+ok(cardOf('custom-name').split('- path: ').length === 2 && core.resolveContext(ctxSyncedDir).via === 'path',
+  'card set: so does a replace, once, and the project still resolves via path');
+// One folder, two spellings: macOS gives /tmp/x to a shell and /private/tmp/x to getcwd, so a path
+// recorded one way and a cwd passed the other way are the same place. A symlink makes the pair here.
+const ctxLink = path.join(ctxRoot2, 'link-to-somefolder');
+fs.symlinkSync(ctxSyncedDir, ctxLink);
+const ctxL = core.resolveContext(path.join(ctxLink, 'sub'));
+ok(ctxL.project === 'custom-name' && ctxL.via === 'path', `context path-match: a cwd through a symlink resolves via the real recorded path (got ${ctxL.project}, ${ctxL.via})`);
+const ctxOtherReal = path.join(ctxRoot2, 'other-real');
+fs.mkdirSync(ctxOtherReal);
+const ctxOtherLink = path.join(ctxRoot2, 'other-link');
+fs.symlinkSync(ctxOtherReal, ctxOtherLink);
+core.runSync({ path: ctxOtherLink, name: 'Other Name', digest: 'd', agent: 'test' });
+const ctxR = core.resolveContext(ctxOtherReal);
+ok(ctxR.project === 'other-name' && ctxR.via === 'path', `context path-match: a real cwd resolves a path recorded through a symlink (got ${ctxR.project}, ${ctxR.via})`);
+ok(core.resolveContext(path.join(ctxLink, 'sub'), { local: false }).via !== 'path',
+  'context path-match: a remote cwd is compared as given — the server never resolves it on its own disk');
 fs.rmSync(ctxRoot2, { recursive: true, force: true });
 
 const ctxRoot3 = mktmp();
@@ -153,6 +176,24 @@ ok(Array.isArray(ctxFull.journalTail) && ctxFull.journalTail.length >= 1 && ctxF
   ok(P('app', 'app') && P('app', 'app/deep/file.js') && !P('app', 'application.js'), 'claim glob: a bare name covers itself and everything under it, not a prefix of another name');
   ok(P('sections/{03,04}.tex + LINEAGE.md', 'LINEAGE.md') && P('sections/{03,04}.tex + LINEAGE.md', 'sections/04.tex'), 'claim glob: several patterns joined with " + "');
   ok(core.areaPatterns('the whole article and its figures') === null, 'claim glob: prose is not matchable');
+  // Two areas overlap when one covers a file of the other: the warning used to fire on equal strings only.
+  const O = (x, y) => core.areasOverlap(x, y) && core.areasOverlap(y, x);
+  ok(O('src/**', 'src/cart.ts') && O('src', 'src/cart.ts') && O('src/**', 'src/checkout/**') && O('docs/{a,b}.md', 'docs/b.md') && O('src/**/*.ts', 'src/cart.ts'),
+    'claim overlap: a glob and a path under it, a directory and a file in it, nested globs, braces');
+  ok(!O('src/**', 'lib/**') && !O('src/*.ts', 'src/x.js') && !O('*.md', 'docs/a.md') && !O('task:oak-3', 'task:oak-30') && !O('timeout fix', 'src/**'),
+    'claim overlap: disjoint globs, other extensions, other tasks and prose do not');
+  {
+    const g = core.runClaim({ project: 'ovl', area: 'src/**', agent: 'agent-g', ttlMin: 60 });
+    const f = core.runClaim({ project: 'ovl', area: 'src/cart.ts', agent: 'agent-f' });
+    ok(/^area overlaps src\/\*\*, claimed by agent-g until \d{4}-\d\d-\d\d \d\d:\d\d$/.test(f.warning || '') && f.overlaps.length === 1 && f.overlaps[0].agent === 'agent-g',
+      `claim: a file inside another session's glob is warned, with the glob named (got ${f.warning})`);
+    const e = core.runClaim({ project: 'ovl', area: 'src/**', agent: 'agent-e' });
+    ok(/^area already claimed by agent-g until/.test(e.warning || '') && !e.overlaps, 'claim: the same area keeps its own wording');
+    core.runRelease({ id: e.claim.id });
+    ok(core.runClaim({ project: 'ovl', area: 'src/util.ts', agent: 'agent-g' }).warning === undefined && core.runClaim({ project: 'ovl', area: 'lib/**', agent: 'agent-f' }).warning === undefined,
+      'claim: a session inside its own glob, and an area nobody holds, are not warned');
+    for (const c of [g, f]) core.runRelease({ id: c.claim.id });
+  }
   const cA = core.runClaim({ project: 'proj5', area: 'src/**/*.ts', agent: 'agent-a' });
   ok(cA.matchable === true && cA.hint === undefined, 'claim: a glob area reports matchable');
   const cP = core.runClaim({ project: 'proj5', area: 'everything about deic', agent: 'agent-p' });

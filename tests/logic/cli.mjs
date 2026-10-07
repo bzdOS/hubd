@@ -100,6 +100,17 @@ const HL = mktmp();
   ok(i2.code === 0 && /exists/i.test(i2.out), 'init again: exit 0, and it says the files exist');
   ok(kept.every((f, k) => fs.readFileSync(path.join(team, f), 'utf8') === before[k]), 'init again: AGENTS.md, INBOX.md and queues/README.md are byte-for-byte what they were');
   ok(cli(['init', path.join(IN, 'nope')]).code !== 0, 'init: a folder that does not exist is an error');
+  // The connect line is pasted as printed, so it names an author and the hub this shell is using:
+  // without HUBD_AGENT every MCP write is refused or floored, without HUBD_DIR it is ~/.hubd.
+  const connect = (env) => (cli(['init', team], { env }).stdout.match(/Connect an agent: +(.+)/) || [])[1] || '';
+  const c1 = connect({ HUBD_DIR: team, HUBD_TEAM_DIR: undefined, HUBD_NODE: 'oak', HUBD_AGENT: 'someone-else' });
+  ok(c1 === `claude mcp add --scope user hubd --env HUBD_AGENT=dev-<project> --env HUBD_DIR=${team} --env HUBD_NODE=oak -- npx -y @bzdos/hubd`,
+    `init: the connect line carries HUBD_AGENT and the hub's own env (got ${c1})`);
+  const c2 = connect({ HUBD_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined, PROJECT_HUB_DIR: undefined, HOME: IN });
+  ok(c2 === 'claude mcp add --scope user hubd --env HUBD_AGENT=dev-<project> -- npx -y @bzdos/hubd', `init: with the default hub only the author is added (got ${c2})`);
+  const spaced = path.join(IN, 'a team'); fs.mkdirSync(spaced);
+  const c3 = connect({ HUBD_DIR: spaced, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined });
+  ok(c3.includes(`--env 'HUBD_DIR=${spaced}'`), `init: a value with a space is quoted for the shell (got ${c3})`);
 }
 
 // ── an unknown command is an error; no arguments is the help ──

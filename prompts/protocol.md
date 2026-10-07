@@ -372,8 +372,9 @@ exits non-zero with nothing written: a delivery that "succeeded" with the wrong 
 failure this guards against.
 
 A message is prose, not cargo. A queue message, a report or a task text over 16 KB is refused,
-and so is a base64 or hex run over 2 KB, a git diff, a git bundle or a PEM block at any size: put
-the artifact in a file on your node and send its path, size and `sha256sum`. A role whose queue
+and so is a base64 or hex run over 2 KB, a diff (git's or `diff -u`'s, indented or quoted
+too), a git bundle or a PEM block at any size: put the artifact in a file on your node and send
+its path, size and `sha256sum`. A role whose queue
 already holds 50 unread messages or 256 KB takes no more until its reader catches up — the
 refusal names it; look at that reader (`hub queue status <role>`), do not resend. The refusal
 carries the code `queue-full` (the CLI exits 4) and leaves one line of that kind in your project's

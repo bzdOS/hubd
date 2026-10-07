@@ -170,12 +170,15 @@ EOF
 ```
 
 ```text
-Reported to shop: 1 fact, closed #oak-3
+Reported to shop: 1 fact, closed #oak-3, released 1 task claim
   warning: NOT closed: #oak-9 (no such task) — check the id with `hub task list`. Write "DONE: <id>[, <id>]" on a line of its own, each id as hub_task_list shows it ("DONE: pine-471"), "#" optional, or the bare number when one task ends in it ("DONE: 471").
 ```
 
 `oak-9` was a typo. hubd closes what it can find and names what it could not; it
-never guesses which task you meant.
+never guesses which task you meant. Closing `oak-3` also released the claim that
+started it, whoever held it: finished work holds nothing. The claim on
+`src/checkout/**` stays until it expires or `hub release` drops it, because files
+outlive a task.
 
 ## The owner presses the button
 

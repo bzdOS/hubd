@@ -1,7 +1,7 @@
 // tasks.mjs — the task log: the fold, ids across nodes, closing, paging, one next thing
 import fs from 'node:fs';
 import path from 'node:path';
-import { REPO, ok, mktmp, T0, core, done } from './_h.mjs';
+import { REPO, ok, mktmp, cli, T0, core, done } from './_h.mjs';
 
 // Bug: a deleted id must not be reused by another node and then corrupted by the
 // original node's later `set` (set-after-del lands on the wrong task).
@@ -132,7 +132,53 @@ ok(/area/.test(mClaim || '') && !/project/.test((mClaim || '').split('(')[0]),
 
 const mUpd = threw(() => core.runTaskUpdate({ status: 'done' }));
 ok(/id required/.test(mUpd || ''), `task update: omitted id says so, not "no task #undefined" (got ${mUpd})`);
+
+// A task with no text was filed as "undefined": the engine took whatever it was given.
+for (const [what, text] of [['an absent', undefined], ['a blank', '  \n '], ['a non-string', 42]]) {
+  const m = threw(() => core.runTaskAdd({ project: 'p', by: 'dev-t', text }));
+  ok(/^text required: what the task is/.test(m || ''), `task add: ${what} text is refused (got ${m})`);
+}
+ok(core.runTaskList({ status: 'all' }).tasks.length === 0, 'task add: and nothing was filed');
+const tKeep = core.runTaskAdd({ project: 'p', by: 'dev-t', text: 'keep this text' }).task;
+ok(/^text required/.test(threw(() => core.runTaskUpdate({ id: tKeep.id, by: 'dev-t', text: '' })) || '') &&
+  core.runTaskGet({ id: tKeep.id }).task.text === 'keep this text', 'task update: blanking the text is refused and the text stays');
 fs.rmSync(TE, { recursive: true, force: true });
+
+// ── closing a task releases the claims on it ──────────────────────────────────
+// `hub claim --task` marks a task started; closing it left the mark live until its TTL ran out,
+// so a finished task still read as somebody's.
+{
+  const TR = mktmp();
+  core.setHubBase(TR); core.ensureHubDirs();
+  const env = { HUBD_DIR: TR, HUBD_TEAM_DIR: TR, HUBD_NODE: 'cedar' };
+  const live = (id) => core.activeClaims(core.loadClaims().claims).filter(c => c.area === core.taskClaimArea(id)).length;
+  const a = core.runTaskAdd({ project: 'p', text: 'close by update', by: 'dev-t' }).task.id;
+  const b = core.runTaskAdd({ project: 'p', text: 'close by report', by: 'dev-t' }).task.id;
+  const c = core.runTaskAdd({ project: 'p', text: 'still open', by: 'dev-t' }).task.id;
+  core.runClaim({ task: a, agent: 'dev-a' }); core.runClaim({ task: a, agent: 'dev-b' });
+  core.runClaim({ task: b, agent: 'dev-a' }); core.runClaim({ task: c, agent: 'dev-a' });
+  core.runClaim({ project: 'p', area: 'src/**', agent: 'dev-a' });
+  const ua = core.runTaskUpdate({ id: a, status: 'done', by: 'dev-a' });
+  ok(ua.released === 2 && live(a) === 0, `task done: every claim on the task is released, whoever held it (released ${ua.released}, left ${live(a)})`);
+  ok(live(c) === 1 && core.loadClaims().claims.some(x => x.area === 'src/**'), 'task done: claims on other tasks and on files stay');
+  const rb = core.runReport({ project: 'p', by: 'dev-a', text: `DONE: ${b}` });
+  ok(rb.done.includes(b) && rb.released === 1 && live(b) === 0, `report DONE: the closed task's claim is released and counted (released ${rb.released})`);
+  // A claim that outlived the first close (or was taken by a stale writer) goes with a reclose.
+  const db = core.loadClaims(); db.claims.push({ id: 'stale', project: 'p', area: core.taskClaimArea(a), agent: 'dev-c', since: core.now(), ttlMin: 60 });
+  fs.writeFileSync(path.join(TR, 'claims.json'), JSON.stringify(db));
+  const re = core.runTaskUpdate({ id: a, status: 'done', by: 'dev-c' });
+  ok(re.noop === 'already-done' && re.released === 1 && live(a) === 0, 'task done: a reclose is still a no-op on the task, and still releases');
+  ok(core.runTaskUpdate({ id: c, importance: 'high', by: 'dev-a' }).released === undefined && live(c) === 1, 'task update: an edit that does not close releases nothing');
+  // the CLI says so, on both closing paths
+  core.runClaim({ task: c, agent: 'dev-b' });
+  const out1 = cli(['task', 'done', String(c), '--by', 'dev-a'], { env });
+  ok(out1.code === 0 && /closed\n  released 2 claims on it/.test(out1.stdout), `hub task done: prints the release (got ${out1.stdout.trim().replace(/\n/g, ' | ')})`);
+  const d = core.runTaskAdd({ project: 'p', text: 'close from a shell report', by: 'dev-t' }).task.id;
+  core.runClaim({ task: d, agent: 'dev-a' });
+  const out2 = cli(['report', '-p', 'p', '--agent', 'dev-a'], { env, input: `DONE: ${d}\n` });
+  ok(out2.code === 0 && new RegExp(`closed #${d}, released 1 task claim$`, 'm').test(out2.stdout), `hub report: names the release beside the close (got ${out2.stdout.trim().replace(/\n/g, ' | ')})`);
+  core.setHubBase(T0); core.ensureHubDirs();
+}
 
 // The queue long-poll default must stay under a typical MCP client's own tool-call
 // timeout: every recorded call above ~60s was aborted by the client, and the old

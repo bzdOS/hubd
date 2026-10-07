@@ -191,8 +191,9 @@ is the whole shape.
 A message is prose. The artifact belongs in a file on the sender's node; the message
 carries its path, size and sha256.
 
-**Cargo, at any size.** A git diff, a git bundle, a PEM block, or a base64 or hex
-run over 2 KB. A change in progress, pasted into a message:
+**Cargo, at any size.** A diff (git's or `diff -u`'s, wherever it starts), a git
+bundle, a PEM block, or a base64 or hex run over 2 KB. A change in progress, pasted
+into a message:
 
 ```bash
 echo "batch the cart query" >> README.md

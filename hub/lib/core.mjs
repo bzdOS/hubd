@@ -138,14 +138,25 @@ const AUTHOR_REFUSED = new Set([
   'opencode', 'cursor', 'copilot', 'windsurf', 'antigravity', 'aider',
 ]);
 
+/* The remedy for a missing author depends on where the call came from. On the CLI and over stdio
+ * HUBD_AGENT fills it in. Over HTTP the variable names whoever started the server, not any caller
+ * (the MCP server sets no floor there), so the advice to set it pointed a remote caller at a
+ * setting it does not have. The MCP server says which transport it serves, once, at start. */
+let AUTHOR_TRANSPORT = 'local';
+export function setAuthorTransport(mode) { AUTHOR_TRANSPORT = mode === 'http' ? 'http' : 'local'; }
+
 export function requireAuthor(value, field = 'agent') {
   const v = String(value ?? '').trim();
   if (!v) throw new Error(
     `${field} required: the function you are performing, e.g. "dev-hubd" or "reviewer-bsdos". ` +
-    `Set HUBD_AGENT to give every call a default.`);
+    (AUTHOR_TRANSPORT === 'http'
+      ? `Over HTTP every call names its own author: the server's HUBD_AGENT does not apply to remote callers.`
+      : `Set HUBD_AGENT to give every call a default.`));
+  /* The advice names a function, as the first error does. It used to suggest "<model>-<project>",
+   * which passes the check and still says nothing about which session acted. */
   if (AUTHOR_REFUSED.has(v.toLowerCase())) throw new Error(
     `${field} "${v}" names a model, a client or a placeholder, not a session — many sessions ` +
-    `share it, so nothing can tell them apart later. Say what you are working on: "${v.toLowerCase()}-<project>". ` +
+    `share it, so nothing can tell them apart later. Name the function you perform: "dev-<project>", "reviewer-<project>". ` +
     `Which model you are is read from the transcript, not from here.`);
   return v;
 }
@@ -172,7 +183,11 @@ const MSG_MAX_DEFAULT = 16384;
 // default) are one run; a run with no digit or no letter in it is a ruler, not an encoding.
 const B64_RUN = /(?:[A-Za-z0-9+/=_-]{60,}\r?\n)+[A-Za-z0-9+/=_-]+(?=\r?\n|$)|[A-Za-z0-9+/=_-]{2049,}/g;
 const CARGO_SHAPES = [
-  { what: 'a git diff', re: /^diff --git \S/m },
+  // A diff counts wherever a line of it starts, prose above it or not, and indented or quoted
+  // ("> ") too. Its `diff --git` header can sit after prose on one line ("the patch: diff --git
+  // a/x b/x"), and `diff -u` writes none, so a unified hunk's three header lines count on their own.
+  { what: 'a git diff', re: /^[ \t>]*diff --git \S/m },
+  { what: 'a diff', re: /^[ \t>]*--- \S[^\n]*\r?\n[ \t>]*\+\+\+ \S[^\n]*\r?\n[ \t>]*@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m },
   { what: 'a git bundle', re: /^# v[23] git bundle\s*$/m },
   { what: 'a PEM block (a key or a certificate)', re: /^-----BEGIN [A-Z0-9 ]+-----\s*$/m },
 ];
@@ -1822,6 +1837,15 @@ function cardFrontmatter(text) {
   return '';
 }
 
+/** The folder a card's meta block records (`- path:`, written by hub_sync), or null. Read above
+ *  the first section only, so a hand-written "- path:" line in a section is never taken for it. */
+function cardRecordedPath(text) {
+  if (!text) return null;
+  const head = text.split(/^## /m)[0];
+  const m = head.match(/^- path: (.+)$/m);
+  return m ? m[1].trim() || null : null;
+}
+
 // The writer regenerates ONLY the meta block, ## Digest and (on sync) ## Facts (auto).
 // EVERY other section the owner wrote — the plain "## Facts" plus any hand sections
 // (roadmap, gates, market, decisions, ...) — must survive a rewrite verbatim, in order.
@@ -2406,9 +2430,13 @@ export function runCardSet(a) {
   }
   const preserved = cardPreservedSections(prev, new Set(['## Digest']));
   const ownerBody = prev ? preserved : cardScaffold();   // new card → scaffold template; existing → keep its sections verbatim
+  /* The meta block is rewritten, and the folder hub_sync recorded in it is not this write's to
+   * drop: it is how hub_context resolves a checkout "via path". Without it a patched card read as
+   * a guess from the folder name until the next sync. */
+  const recordedPath = cardRecordedPath(prev);
   const card = cardFrontmatter(prev) +
     `# ${pname}\n\n` +
-    `- slug: ${slug}\n- set: ${now()} by ${author}\n\n` +
+    `- slug: ${slug}\n${recordedPath ? `- path: ${recordedPath}\n` : ''}- set: ${now()} by ${author}\n\n` +
     `## Digest\n\n${digest}\n\n` +
     (ownerBody ? ownerBody + '\n' : '');
   const rot = rotateCardOverflow(card, slug, author, lim);
@@ -2904,6 +2932,7 @@ export function runReport(a) {
       try {
         const r = runTaskUpdate({ id, status: 'done', by });
         (r.noop === 'already-done' ? summary.doneAlready : summary.done).push(id);
+        if (r.released) summary.released = (summary.released || 0) + r.released;
       } catch { summary.doneMissed.push(id); }
     }
   }
@@ -3321,17 +3350,23 @@ function findHubdMarker(startDir) {
   return null;
 }
 
-// Cards written by hub_sync carry `- path: <dir>` (see runSync below); harvested /
-// hub_card_set cards do not, so this only ever matches a real prior sync, never a guess.
-function findProjectByPath(root) {
+// Cards written by hub_sync carry `- path: <dir>` (see runSync below), and hub_card_set keeps
+// the line; harvested cards do not, so this only ever matches a real prior sync, never a guess.
+// One folder has two spellings when a symlink leads to it: on macOS /tmp is /private/tmp, and
+// a shell's cwd says one where node's process.cwd() says the other. Locally both sides are
+// compared as written and resolved; a remote resolve leaves the server's disk alone.
+function findProjectByPath(root, { local = true } = {}) {
   let files;
   try { files = fs.readdirSync(PROJ).filter(f => f.endsWith('.md')); } catch { return null; }
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+  const within = (r, p) => r === p || r.startsWith(p + path.sep);
+  const roots = local ? [...new Set([root, real(root)])] : [root];
   for (const f of files) {
     let text; try { text = fs.readFileSync(path.join(PROJ, f), 'utf8'); } catch { continue; }
     const m = text.match(/^- path: (.+)$/m);
     if (!m) continue;
     const p = m[1].trim();
-    if (p === root || root.startsWith(p + path.sep)) return f.replace(/\.md$/, '');
+    if (roots.some(r => within(r, p)) || (local && roots.some(r => within(r, real(p))))) return f.replace(/\.md$/, '');
   }
   return null;
 }
@@ -3347,7 +3382,7 @@ export function resolveContext(cwd, { local = true } = {}) {
   const marker = local ? findHubdMarker(start) : null;
   if (marker) return { project: marker.slug, via: 'marker', root: marker.root, guessed: false, ...(marker.inventory ? { inventory: marker.inventory } : {}) };
 
-  const byPath = findProjectByPath(root);
+  const byPath = findProjectByPath(root, { local });
   if (byPath) return { project: byPath, via: 'path', root, guessed: false };
 
   const guess = slugify(path.basename(root));
@@ -3524,8 +3559,16 @@ export function normalizeCat(cat, tags) {
   return { cat: null, tags: clean.includes(tag) ? clean : [...clean, tag], moved: tag };
 }
 
+/* A task is its text. One filed over MCP with the field misspelled (`title`) or left out was
+ * stored with none and announced as "+ task #oak-6: undefined", an open task nobody can read. */
+function requireTaskText(text) {
+  if (typeof text !== 'string' || !text.trim())
+    throw new Error('text required: what the task is, in a line or two, e.g. "fix the checkout timeout on carts of 50+ items"');
+}
+
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
+  requireTaskText(a.text);
   assertProse(a.text, 'task text');
   return withLock(TASK_EVENTS, () => {
     const id = `${TASK_ID_PREFIX}-${nextLocalSeq()}`;
@@ -3608,8 +3651,8 @@ export function runTaskUpdate(a) {
   // wrong place.
   if (a.id == null || a.id === '') throw new Error('id required: the task id as hub_task_list reports it');
   const author = requireAuthor(a.by, 'by');
-  if (a.text != null) assertProse(a.text, 'task text');
-  return withLock(TASK_EVENTS, () => {
+  if (a.text != null) { requireTaskText(a.text); assertProse(a.text, 'task text'); }
+  const res = withLock(TASK_EVENTS, () => {
     const db = loadTasks();
     const t = db.tasks.find(x => String(x.id) === String(a.id));
     if (!t) throw new Error('no task #' + a.id);
@@ -3705,6 +3748,16 @@ export function runTaskUpdate(a) {
     const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
     return { ok: true, task: { ...t, ...patch }, ...(resourceHint ? { resourceHint } : {}) };
   });
+  /* A closed task holds nothing. `hub claim --task` marks a task started, and closing it used to
+   * leave that mark live until its TTL ran out: the role's work queue still showed the task as
+   * somebody's, and hub_context listed a claim on work that was finished. A reclose releases too —
+   * a claim taken after the first close (or one that outlived it) is just as stale. Taken after
+   * the task lock is let go, so the two locks are never held together. */
+  if (a.status === 'done') {
+    const released = releaseTaskClaims(res.task.id);
+    if (released) res.released = released;
+  }
+  return res;
 }
 
 /* Soft migration for the off-enum categories already in a base: move each one into `tags`.
@@ -4177,15 +4230,35 @@ function globToRe(g) {
   const plain = !/[*?[{]/.test(g);
   return new RegExp('^' + re + (plain ? '(?:/.*)?' : '') + '$');
 }
-/** RegExps for a claim area, or null when the area is prose that no path can match. */
-export function areaPatterns(area) {
+/** The globs a claim area stands for, braces expanded, or null when the area is prose. */
+function areaGlobs(area) {
   const a = String(area || '').trim();
   if (!a) return null;
   const tokens = a.split(/\s*\+\s*|,(?![^{]*\})\s*/).map(t => t.trim()).filter(Boolean);
   if (!tokens.length || tokens.some(t => /\s/.test(t))) return null;
-  const pats = [];
-  for (const t of tokens) for (const alt of expandBraces(t)) pats.push(globToRe(alt.replace(/^\.\//, '').replace(/\/+$/, '')));
-  return pats;
+  const globs = [];
+  for (const t of tokens) for (const alt of expandBraces(t)) globs.push(alt.replace(/^\.\//, '').replace(/\/+$/, ''));
+  return globs;
+}
+/** RegExps for a claim area, or null when the area is prose that no path can match. */
+export function areaPatterns(area) {
+  const globs = areaGlobs(area);
+  return globs && globs.map(globToRe);
+}
+/* Do two claim areas cover a file in common? `src/**` and `src/cart.ts` do, and a claim warned
+ * only when the areas were the same string, so the second session took the file inside the
+ * first one's glob with no word said. Each side's globs are tried against the other's patterns,
+ * as written and with every wildcard filled in by a name, which settles the cases claims are
+ * made of: a directory and a file in it, a glob and a path under it, two globs where one holds
+ * the other. Two globs that only meet somewhere in the middle can still slip past; this is a
+ * warning, and a missed one costs what it cost before. Prose overlaps only itself. */
+export function areasOverlap(x, y) {
+  if (String(x || '').trim() === String(y || '').trim()) return true;
+  const gx = areaGlobs(x), gy = areaGlobs(y);
+  if (!gx || !gy) return false;
+  const filled = (g) => g.replace(/\*\*|\*|\?/g, 'x');
+  const hits = (globs, pats) => globs.some(g => pats.some(re => re.test(g) || re.test(filled(g))));
+  return hits(gx, gy.map(globToRe)) || hits(gy, gx.map(globToRe));
 }
 const relTo = (root, p) => {
   const abs = path.isAbsolute(p) ? path.normalize(p) : p;
@@ -4258,6 +4331,20 @@ export function claimsTouched({ root, project, agent = null, minutes = 30 } = {}
  *  queue (see roleWork in queue.mjs). */
 export const taskClaimArea = (id) => 'task:' + String(id);
 
+/** Drop every claim on task `id`, whoever holds it; returns how many went. */
+function releaseTaskClaims(id) {
+  const area = taskClaimArea(id);
+  if (!fs.existsSync(CLAIMS)) return 0;
+  return withLock(CLAIMS, () => {
+    const db = loadClaims();
+    const before = db.claims.length;
+    db.claims = db.claims.filter(c => c.area !== area);
+    if (db.claims.length === before) return 0;
+    atomicWrite(CLAIMS, db);
+    return before - db.claims.length;
+  });
+}
+
 export function runClaim(a) {
   if (a.task != null && a.task !== '') {
     const t = runTaskGet({ id: a.task }).task;
@@ -4273,7 +4360,9 @@ export function runClaim(a) {
   return withLock(CLAIMS, () => {
     const db = loadClaims();
     db.claims = activeClaims(db.claims);
-    const existing = db.claims.find(c => c.project === a.project && c.area === a.area && c.agent !== a.agent);
+    const others = db.claims.filter(c => c.project === a.project && c.agent !== a.agent);
+    const existing = others.find(c => c.area === a.area);
+    const overlapping = existing ? [] : others.filter(c => areasOverlap(c.area, a.area));
     const ttlMin = a.ttlMin ?? 240;
     const claim = { id: crypto.randomUUID(), project: a.project, area: a.area, agent: a.agent, since: now(), ttlMin };
     if (a.note) claim.note = a.note;
@@ -4282,12 +4371,14 @@ export function runClaim(a) {
     const matchable = areaPatterns(a.area) !== null;
     const result = { ok: true, claim, matchable,
       ...(matchable ? {} : { hint: 'this area is prose, so `hub claim check <path>` cannot match files against it — a glob like "src/**/*.ts" or "docs/{a,b}.md" would' }) };
-    if (existing) {
-      // `?? 240` as activeClaims reads it: a claim written without ttlMin made this NaN, and
-      // toISOString() on an Invalid Date throws — the new claim was saved and the call still failed.
-      const exp = new Date(parseTs(existing.since).getTime() + (existing.ttlMin ?? 240) * 60000)
-        .toISOString().slice(0, 16).replace('T', ' ');
-      result.warning = `area already claimed by ${existing.agent} until ${exp}`;
+    // `?? 240` as activeClaims reads it: a claim written without ttlMin made this NaN, and
+    // toISOString() on an Invalid Date throws — the new claim was saved and the call still failed.
+    const until = (c) => new Date(parseTs(c.since).getTime() + (c.ttlMin ?? 240) * 60000)
+      .toISOString().slice(0, 16).replace('T', ' ');
+    if (existing) result.warning = `area already claimed by ${existing.agent} until ${until(existing)}`;
+    else if (overlapping.length) {
+      result.overlaps = overlapping.map(c => ({ agent: c.agent, area: c.area, until: until(c) }));
+      result.warning = 'area overlaps ' + result.overlaps.map(o => `${o.area}, claimed by ${o.agent} until ${o.until}`).join('; ');
     }
     return result;
   });

@@ -165,6 +165,13 @@ const throwsA = (fn) => { try { fn(); return null; } catch (e) { return e.messag
 const noAuthor = throwsA(() => core.runTaskAdd({ project: 'p', text: 'x' }));
 ok(/by required/.test(noAuthor || ''), `author: an omitted author is refused, not defaulted (got ${noAuthor})`);
 ok(!/unknown/.test(noAuthor || ''), 'author: the error does not offer "unknown" as a way out');
+ok(/Set HUBD_AGENT/.test(noAuthor || '') && !/Over HTTP/.test(noAuthor || ''), 'author: on the CLI and over stdio the remedy is HUBD_AGENT');
+// The refusal of a model name names a function, as its own rule says; it used to suggest
+// "claude-<project>", a model name with a suffix.
+{
+  const m = throwsA(() => core.runSync({ path: AU, agent: 'claude' })) || '';
+  ok(/"dev-<project>"/.test(m) && !/claude-</.test(m), `author: the refusal of "claude" suggests a function, not the model again (got ${m.slice(0, 200)})`);
+}
 
 // A bare model or client family says nothing about WHO acted — many sessions share it.
 for (const bad of ['claude', 'Claude', 'opencode', 'gpt', 'cursor', 'unknown', 'cli', 'root']) {
@@ -250,6 +257,38 @@ const badFloor = (() => {
 })();
 ok(/by required/.test(badFloor),
   'floor: a refused name as HUBD_AGENT is not laundered by the session suffix');
+
+// ── a tool's required arguments are checked before the engine runs ──
+// hub_task_add with `title` instead of `text` filed "+ task #oak-6: undefined": nothing read the
+// schema's `required`. The floor still fills the author, so only the real gap is named.
+{
+  const rawCall = (tool, args) => {
+    const reqs = [
+      JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }),
+      JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool, arguments: args } }),
+    ].join('\n') + '\n';
+    const env = { ...process.env, HUBD_DIR: FL, HUBD_TEAM_DIR: FL, HUBD_AGENT: 'dev-hubd', HUBD_SESSION: 'req' };
+    let out = '';
+    try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env, timeout: 15000 }); }
+    catch (e) { out = (e.stdout || ''); }
+    for (const l of out.split('\n')) { try { const m = JSON.parse(l); if (m.id === 2) return m.result; } catch {} }
+    return null;
+  };
+  const tasksIn = () => { try { return fs.readFileSync(path.join(FL, 'tasks.json'), 'utf8'); } catch { return ''; } };
+  const before = tasksIn();
+  const misspelt = rawCall('hub_task_add', { project: 'p', title: 'the field is text' });
+  ok(misspelt.isError && /^Error: text required: what the task is/.test(misspelt.content[0].text) && /got title, which hub_task_add does not take/.test(misspelt.content[0].text),
+    `required: hub_task_add with title instead of text is refused and names the stray field (got ${misspelt.content[0].text})`);
+  const blank = rawCall('hub_task_add', { project: 'p', text: '   ' });
+  ok(blank.isError && /text required/.test(blank.content[0].text), 'required: a blank text is as missing as an absent one');
+  ok(tasksIn() === before && !/undefined/.test(tasksIn()), 'required: and no task was filed');
+  const two = rawCall('hub_section_add', { by: 'dev-hubd' });
+  ok(two.isError && /^Error: missing required: project, section, text$/.test(two.content[0].text), `required: several gaps are listed together (got ${two.content[0].text})`);
+  const rep = rawCall('hub_report', { text: 'FACT: lands nowhere' });
+  ok(rep.isError && /^Error: project required: the project slug/.test(rep.content[0].text), `required: hub_report without a project is refused, not filed under "general" (got ${rep.content[0].text})`);
+  const fine = rawCall('hub_task_add', { project: 'p', text: 'a real task' });
+  ok(fine.isError === false && /"textPreview": "a real task"/.test(fine.content[0].text), 'required: a complete call is untouched, its author still from the floor');
+}
 fs.rmSync(FL, { recursive: true, force: true });
 
 // ── environment checks: an upgrade can need something OUTSIDE the code ─────────
@@ -383,6 +422,18 @@ const httpCall = async (name, args) => {
 const htAdd = await httpCall('hub_task_add', { project: 'p', text: 'no author given' });
 ok(htAdd.isError === true && /by required/.test(htAdd.content[0].text),
   `http: no author floor — an omitted author is an error, not the server owner's name (got ${htAdd.content[0].text.slice(0, 60)})`);
+// The remedy is per transport: HUBD_AGENT is the server owner's variable, a caller cannot set it.
+ok(/Over HTTP every call names its own author/.test(htAdd.content[0].text) && !/Set HUBD_AGENT/.test(htAdd.content[0].text),
+  `http: the missing-author error does not send a remote caller to HUBD_AGENT (got ${htAdd.content[0].text})`);
+const htNoText = await httpCall('hub_task_add', { project: 'p', title: 'misspelt', by: 'remote-dev' });
+ok(htNoText.isError === true && /text required/.test(htNoText.content[0].text), 'http: a task with no text is refused over HTTP too');
+// A remote sender gets the queue's depth, not a path on the server's disk or a verdict about "this node".
+await httpCall('hub_queue_send', { role: 'rq', text: 'first', from: 'remote-dev' });
+const htQ = await httpCall('hub_queue_send', { role: 'rq', text: 'second', from: 'remote-dev' });
+const htQr = htQ.isError ? {} : JSON.parse(htQ.content[0].text);
+ok(htQ.isError === false && htQr.pending === 2 && !('file' in htQr) && !('consumedHere' in htQr) && !htQ.content[0].text.includes(HT),
+  `http: hub_queue_send returns no server path and no consumedHere (got ${JSON.stringify(htQr).slice(0, 200)})`);
+ok(/the server/.test(htQr.note || '') && !/this node/i.test(htQr.note || ''), `http: its note speaks of the server's node, not "this node" (got ${htQr.note})`);
 const htNew = await httpCall('hub_whatsnew', { agent: 'remote-dev' });
 ok(htNew.isError === false && !/author-floor/.test(htNew.content[0].text),
   'http: whatsnew does not report the server\'s own HUBD_AGENT state to a remote caller');

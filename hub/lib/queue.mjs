@@ -1853,7 +1853,7 @@ export function briefWithQueues({ root, ...a } = {}) {
 /** queueSend, and what the sender needs to know about it: whether the task it names exists, and
  *  what now waits in the role's queue. The task ref is checked but never refuses the send: the
  *  message is the urgent thing, a mistyped id a warning the caller can act on at once. */
-export function queueSendChecked(role, text, { from, root, task } = {}) {
+export function queueSendChecked(role, text, { from, root, task, remote = false } = {}) {
   const r = root ?? resolveQueueRoot();
   let taskKnown;
   if (task != null && task !== '') { try { runTaskGet({ id: task }); taskKnown = true; } catch { taskKnown = false; } }
@@ -1871,14 +1871,19 @@ export function queueSendChecked(role, text, { from, root, task } = {}) {
   const seenHere = (() => { try { return everConsumedHere(role, { root: r }); } catch { return false; } })();
   const readOn = seenHere ? [] : (() => { try { return whereRead(role, { root: r }); } catch { return []; } })();
   const head = depth ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver.` : '';
+  /* A remote caller (hub_queue_send over HTTP) is on another machine: "this node" would read as
+   * its own, and the queue file's path is a place on the server's disk it has no use for. It
+   * gets the same verdict about the server's node, and no path. */
+  const here = remote ? "the server's node" : 'this node';
+  const Here = remote ? "The server's node" : 'This node';
   const note = !depth || depth.pending <= 1 ? null
     : seenHere
-      ? `${head} This role IS consumed on this node, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
+      ? `${head} This role IS consumed on ${here}, so a depth that keeps climbing means its consumer stopped: check it is waiting, and run hub doctor there for a cursor it cannot write.`
       : readOn.length
-        ? `${head} This node has never consumed this role; it is read on ${readOn.map(x => x.node).join(', ')} (last read ${readOn[0].at || 'at an unknown time'}), counted here as of the last mesh sync. A depth that keeps climbing means that reader stopped: check it there.`
-        : `${depth.pending} message(s) are in this role's queue as seen FROM HERE, oldest ${depth.oldestWaiting}. This node has never consumed this role, and no node has left a read mark for it — so either nobody reads it, or its reader runs a hubd from before read marks and its cursor never leaves that node. Check on the node that runs the role.`;
-  return { file, ...(taskKnown === undefined ? {} : { task, taskKnown }),
-    ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, consumedHere: seenHere,
+        ? `${head} ${Here} has never consumed this role; it is read on ${readOn.map(x => x.node).join(', ')} (last read ${readOn[0].at || 'at an unknown time'}), counted ${remote ? 'on the server' : 'here'} as of the last mesh sync. A depth that keeps climbing means that reader stopped: check it there.`
+        : `${depth.pending} message(s) are in this role's queue as seen ${remote ? "from the server" : 'FROM HERE'}, oldest ${depth.oldestWaiting}. ${Here} has never consumed this role, and no node has left a read mark for it — so either nobody reads it, or its reader runs a hubd from before read marks and its cursor never leaves that node. Check on the node that runs the role.`;
+  return { ...(remote ? {} : { file }), ...(taskKnown === undefined ? {} : { task, taskKnown }),
+    ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, ...(remote ? {} : { consumedHere: seenHere }),
       ...(readOn.length ? { readOn: readOn.map(x => x.node) } : {}),
       unacked: depth.unacked || 0, ...(note ? { note } : {}) } : {}) };
 }
