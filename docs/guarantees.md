@@ -182,6 +182,14 @@ Violating these means it is not this product.
   or an answer that named it named any of them. It is `<node>-<N>` (`pine-12`) now,
   counted by the node across every queue, as a task id is. Bare ids from before are
   still read and acked.
+- **A message is handed out once, even when its file is cut short** (0.9.57). A
+  reader was handed the same 411 bytes twice in one afternoon, the tail of a message
+  without its header: its shard had stood cut inside the last block handed out and
+  was whole a minute later, and the cursor had followed the cut. A shorter file that
+  holds nothing past the last block handed out now leaves the cursor where it was, a
+  file that is not shorter is checked against that block's header before anything is
+  read, and a markdown heading inside a message no longer ends it. How: [the queue
+  invariant](queue-invariant.md#cut-short--a-file-caught-while-it-is-written).
 - **When a queue conflicts** — append-only by contract, but without union merge two
   sides that both appended do collide. `hub queue resolve` keeps ours in place and
   appends theirs at the end, which leaves every byte cursor in the hub valid. Why not
