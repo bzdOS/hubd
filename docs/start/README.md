@@ -19,6 +19,7 @@ You need Node 18 or later and git. Tutorial 7 also uses `curl`, `jq` and `uuidge
 
 Each tutorial ends with what hubd refuses at that level, and why: the refusals are
 how it keeps the promises in [Guarantees](../guarantees.md). The words used
-throughout are in [Concepts](../concepts.md).
+throughout are in [Concepts](../concepts.md); every command, tool, variable and file
+is in the [Reference](../reference/README.md).
 
 When you are done, `rm -rf /tmp/hub-tour*` removes every trace.

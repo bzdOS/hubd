@@ -39,6 +39,19 @@ Find what you want to do; the link is the place to read about it.
 | know how a queue crosses machines, and which transport is on | [interop → Transport](interop.md#transport-how-a-queue-crosses-machines) |
 | a weekly chronicle and check-ins with the operator | [The narrative layer](narrative-layer.md) |
 
+## Look it up
+
+Generated from the code, and checked against it by a test.
+
+| I want | Read |
+|---|---|
+| every `hub` command, its forms and its flags | [Reference → CLI](reference/cli.md) |
+| every MCP tool, its parameters, and the prompts | [Reference → MCP tools](reference/mcp.md) |
+| every environment variable and its default | [Reference → Environment](reference/env.md) |
+| every file in a hub folder, what writes it, whether it syncs | [Reference → Files](reference/files.md) |
+| the report prefixes, the reflection fields, how a rule becomes a law | [Reference → Reports](reference/report.md) |
+| the role templates, their variables and fragments | [Reference → Prompts](reference/prompts.md) |
+
 ## Trust it
 
 | I want to | Read |

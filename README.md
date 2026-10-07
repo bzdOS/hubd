@@ -288,13 +288,15 @@ format is the stable contract; everything else is negotiable.
 
 ## Documentation
 
-[docs/index.md](docs/index.md) maps the documentation by what you want to do. The npm
-package carries the binaries, `prompts/`, `contrib/`, the mesh scripts, this README,
-the changelog, `HARVEST.md`, and of `docs/` the map,
-[the tutorials](docs/start/README.md), [recipes](docs/recipes.md),
-[concepts](docs/concepts.md), [guarantees](docs/guarantees.md),
-[interop](docs/interop.md) and [self-hosting](docs/self-hosting.md). The rest of
-`docs/`, and `hubd-company/`, are in the repo.
+[docs/index.md](docs/index.md) maps the documentation by what you want to do;
+[the reference](docs/reference/README.md) lists every command, tool, variable and
+file, generated from the code. The npm package carries the binaries, `prompts/`,
+`contrib/`, the mesh scripts, this README, the changelog, `HARVEST.md`, and of
+`docs/` the map, [the tutorials](docs/start/README.md), the reference,
+[recipes](docs/recipes.md), [concepts](docs/concepts.md),
+[guarantees](docs/guarantees.md), [interop](docs/interop.md) and
+[self-hosting](docs/self-hosting.md). The rest of `docs/`, and `hubd-company/`, are
+in the repo.
 
 ## Pricing
 

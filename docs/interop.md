@@ -21,6 +21,7 @@ Everything human-facing is Markdown. The append-only logs (tasks, structured
 journal) are JSONL — still plain text you can read and `grep`, just a log rather
 than a document a Markdown reader renders. They're JSONL on purpose: each machine
 appends to its own file, so several machines syncing one hub never conflict.
+Every file, what writes it and whether it syncs: [Reference → Files](reference/files.md).
 
 ## Open it in…
 
