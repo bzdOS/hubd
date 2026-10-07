@@ -342,6 +342,41 @@ core.ackEnvNotices('s1');
 ok(!has(core.envChecks({ session: 's1' }), 'protocol-changed'), 'envChecks: and not told twice');
 ok(has(core.envChecks({ session: 's2' }), 'protocol-changed'), 'envChecks: a second session on the same host is still told');
 
+// The same, through the line every MCP result carries. It asked as nobody, so a session told by
+// hub_whatsnew was told again on every result until the next release. One long-lived server, call
+// by call, because the line is also cached for minutes.
+{
+  const child = reap(spawn('node', [path.join(REPO, 'hub/index.mjs')], {
+    env: { ...process.env, HUBD_DIR: EV, HUBD_TEAM_DIR: EV, HUBD_AGENT: 'dev-hubd', HUBD_SESSION: 'footer' },
+    stdio: ['pipe', 'pipe', 'ignore'] }));
+  const waiting = new Map();
+  let buf = '';
+  child.stdout.on('data', d => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const l = buf.slice(0, i); buf = buf.slice(i + 1);
+      try { const m = JSON.parse(l); waiting.get(m.id)?.(m); } catch {}
+    }
+  });
+  let nextId = 1;
+  const ask = (method, params) => new Promise((res, rej) => {
+    const id = nextId++;
+    const t = setTimeout(() => rej(new Error('no answer to ' + method)), 15000);
+    waiting.set(id, m => { clearTimeout(t); res(m); });
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+  const footer = async () => (await ask('tools/call', { name: 'hub_presence', arguments: {} }))
+    .result.content.slice(1).map(c => c.text).join('\n');
+  await ask('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } });
+  const before = await footer();
+  ok(/protocol-changed/.test(before), `footer: a session not yet told sees the protocol change (got ${before})`);
+  await ask('tools/call', { name: 'hub_whatsnew', arguments: { agent: 'dev-hubd' } });
+  const after = await footer();
+  ok(!/protocol-changed/.test(after), `footer: once hub_whatsnew told it, the session is not told again (got ${after})`);
+  child.kill();
+}
+
 // The floor check reads the environment it actually runs in.
 delete process.env.HUBD_AGENT;
 ok(has(core.envChecks(), 'author-floor'), 'envChecks: an unset HUBD_AGENT is reported');

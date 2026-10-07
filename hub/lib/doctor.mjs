@@ -812,7 +812,9 @@ export function runDoctor() {
         // hub; an unset variable in some MCP client's config is not the hub's fault and
         // must not fail `hub doctor` in a shell or a CI step that never uses that client.
         // It is still printed, and it is still HIGH in the agent-facing list.
-        if (it.actor === 'agent') warnings++;
+        // Nor is a protocol change: it is news to read, nothing in the hub clears it, and
+        // doctor has no session to acknowledge it, so it failed doctor for a whole release.
+        if (it.actor === 'agent' && it.id !== 'protocol-changed') warnings++;
         console.log(`  ${it.severity.toUpperCase().padEnd(4)} [${it.actor}] ${it.what}`);
         console.log(`       → ${it.remedy}`);
       }

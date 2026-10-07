@@ -605,13 +605,16 @@ function missingRequired(name, args, raw) {
 // how a notice stops being read. Recomputed at most every 5 minutes (was: once per
 // process) — a long-lived server otherwise kept nagging about a condition fixed an
 // hour ago, and stayed silent about one that appeared after startup, until a restart.
+// Asked as THIS session, the one hub_whatsnew acknowledges: asked as nobody, a session that
+// had already been told about a protocol change was told again on every result until the
+// next release, because "nobody" never acknowledges anything.
 let envNudgeLine = null, envNudgeAt = 0;
 function envNudge() {
   if (envNudgeAt && Date.now() - envNudgeAt < 5 * 60000) return envNudgeLine;
   envNudgeAt = Date.now();
   let n = null;
   try {
-    const env = envChecks();
+    const env = envChecks({ session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE });
     if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — hub_whatsnew lists them with what to do.`;
   } catch {}
   return (envNudgeLine = n);
@@ -689,7 +692,7 @@ async function handleMessage(msg, mode = 'stdio') {
       // A session that never heartbeats still says its node is up (refreshPresenceSnapshot).
       if (mode === 'stdio') refreshPresenceSnapshot();
       if (name === 'hub_onboarding') onboarded = true;
-      if (name === 'hub_whatsnew') whatsnewChecked = true;
+      if (name === 'hub_whatsnew') { whatsnewChecked = true; envNudgeAt = 0; }   // it just acknowledged
       const extra = mode === 'stdio' ? nudges(name) : [];
       // One choke point for every tool's size, so no new tool can forget it.
       const capped = OUTPUT_PLANS[name] ? capOutput(r, OUTPUT_PLANS[name], { full: !!argv.full }) : r;

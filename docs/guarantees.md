@@ -190,6 +190,12 @@ Violating these means it is not this product.
   file that is not shorter is checked against that block's header before anything is
   read, and a markdown heading inside a message no longer ends it. How: [the queue
   invariant](queue-invariant.md#cut-short--a-file-caught-while-it-is-written).
+- **A message still being written is not handed out** (0.9.58). A shard rewritten in
+  place could be caught longer than its cursor with its newest block cut, and that
+  block went out in two parts, the second without its header. A tail without the
+  newline every block ends with is now a block still being written: it waits, and the
+  whole blocks before it go out. How: [the queue
+  invariant](queue-invariant.md#cut-short--a-file-caught-while-it-is-written).
 - **When a queue conflicts** — append-only by contract, but without union merge two
   sides that both appended do collide. `hub queue resolve` keeps ours in place and
   appends theirs at the end, which leaves every byte cursor in the hub valid. Why not
