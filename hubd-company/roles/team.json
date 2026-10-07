@@ -1,0 +1,41 @@
+{
+  "project": "PRODUCT_SLUG",
+  "company": "company",
+  "owner": {
+    "role": "owner",
+    "people": ["OWNER_NAME"],
+    "digest": "The owner's desk: what only the owner decides waits here, and is answered in the company card's Owner decisions."
+  },
+  "vars": {
+    "kind": "claude-code",
+    "cwd": "/path/to/PRODUCT_REPO",
+    "allowed_paths": ["/path/to/PRODUCT_REPO", "/path/to/this/company/folder"],
+    "base_ref": "origin/main",
+    "private_patterns": "API keys, customer emails, internal host names",
+    "private_check": "git log -p origin/main.. | grep -nE 'sk_live_|@CUSTOMER_DOMAIN'"
+  },
+  "roles": {
+    "product": {
+      "rank": "head", "head": "owner",
+      "digest": "Owns WHAT and WHY: priorities, the PRDs, acceptance against the product goal.",
+      "vars": {
+        "plan_file": "the roadmap in docs/PRODUCT.md",
+        "verdict_cmd": "hub report \"ACCEPT #<id>: <how it serves the PRD>\" -p PRODUCT_SLUG --agent product (REJECT and the reason when it does not)"
+      }
+    },
+    "cto": {
+      "rank": "head", "head": "owner",
+      "digest": "Owns HOW: specs, acceptance by the spec's tests, the only one who merges to main.",
+      "vars": {
+        "plan_file": "the PRDs product has accepted, docs/PRD_*.md",
+        "verdict_cmd": "hub report \"ACCEPT #<id>: <the acceptance command and its result>\" -p PRODUCT_SLUG --agent cto (REJECT and the failing test when it fails), then merge"
+      }
+    },
+    "pm": { "rank": "worker", "head": "product", "digest": "Owns the funnel and the numbers: metrics, PRDs, copy." },
+    "dev": { "rank": "worker", "head": "cto", "digest": "Writes code strictly to spec, on a task branch." },
+    "reviewer": { "rank": "worker", "head": "cto", "digest": "Reads the code whole before acceptance: bugs, contract drift, risks." },
+    "qa": { "rank": "worker", "head": "cto", "digest": "Runs the spec's numbered tests as cases, with evidence." },
+    "sre": { "rank": "worker", "head": "cto", "digest": "Builds, deploys and runs; fixes the broken build." },
+    "runner": { "rank": "worker", "head": "cto", "digest": "Rote work by instruction: format, bulk edits, collection." }
+  }
+}

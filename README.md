@@ -109,8 +109,9 @@ sessions share them.
 - **Starting a company from scratch?** One command drops
   [`hubd-company/`](hubd-company/) into a folder of your own:
   `npx degit bzdOS/hubd/hubd-company my-company` (then `git init` in it). You get a
-  ready org structure: a constitution (AGENTS.md), role onboardings, project cards,
-  an operator card, queues, recipes, and a weekly agent-written `chronicle/`
+  ready org: the company's rules (AGENTS.md), two heads and their workers declared
+  from one `roles/team.json`, each role's rules rendered from `prompts/meta/`, a spec
+  template, recipes, and a weekly agent-written `chronicle/`
   ([the narrative layer](docs/narrative-layer.md)). Hiring an agent = a fresh session
   reads a role file. The template comes from the repo, not the npm package.
 

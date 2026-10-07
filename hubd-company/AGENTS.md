@@ -1,129 +1,138 @@
-# AGENTS.md — the constitution
+# AGENTS.md — the company's rules
 
-*Any agent working in this repository reads this file FIRST.
-Template note: replace ALL-CAPS placeholders, delete roles you don't use.*
+*Every agent working here reads this file first, then its rules in
+`roles/rules/<role>.md`. Template note: replace the ALL-CAPS placeholders, and
+delete the roles you do not use, here and in `roles/team.json`.*
+
+This file is the company's: who does what, in what order, and who decides. How the
+hub works (reports, claims, queues, cards) is in `HUBD.md`, which hubd regenerates
+to match the installed version. Read it there; do not copy it here, where it would
+go stale.
 
 ## Org structure
 
-- **OWNER — the human.** Final word on money, strategy, hiring, design choices.
-  Holds credentials (git push, registries, deploys to paid infra) — agents don't.
-  Veto and rollback rights on any release. Disagreements between roles land here.
-- **product** — owns WHAT and WHY: priorities, narrative, acceptance against the
-  product goal. Writes no code and no specs-for-code. Onboarding: `roles/product.md`.
-- **cto** — owns HOW: architecture, specs for dev, code acceptance by tests,
-  **all git commits in this repo**. Onboarding: `roles/cto.md`.
-- **dev** — writes code strictly to spec. Decisions outside the spec are not
-  theirs to make: questions go to the journal, not guesses into code.
-  Onboarding: `roles/dev.md`.
-- **pm** — owns funnel, metrics, PRDs, copy. Onboarding: `roles/pm.md`.
+| Role | Owns | Answers to | Rules |
+| --- | --- | --- | --- |
+| OWNER_NAME | money, strategy, hiring, naming, dates, push and publish; veto on any release | | |
+| `owner` | the owner's desk: what only OWNER_NAME decides waits in its queue | | |
+| `product` | WHAT and WHY: priorities, PRDs, acceptance against the product goal | `owner` | head |
+| `cto` | HOW: specs, acceptance by the spec's tests, the only one who merges to main | `owner` | head |
+| `pm` | the funnel and the numbers: metrics, PRD drafts, copy | `product` | worker |
+| `dev` | code, strictly to spec | `cto` | worker |
+| `reviewer` | reads the code whole before acceptance | `cto` | worker |
+| `qa` | runs the spec's numbered tests as cases, with evidence | `cto` | worker |
+| `sre` | build, deploy, run; fixes the broken build | `cto` | worker |
+| `runner` | rote work by instruction | `cto` | worker |
 
-Optional specialists for larger teams (delete the ones you don't need):
+reviewer, qa, sre and runner are for larger teams: delete the ones you do not need.
 
-- **reviewer** — reads code whole before acceptance: bugs, contract drift, risks. Onboarding: `roles/reviewer.md`.
-- **qa** — independent acceptance: the spec's numbered tests as executed cases with evidence. Onboarding: `roles/qa.md`.
-- **sre** — build, deploy, run, fix broken builds; verifies a change is deployable. Onboarding: `roles/sre.md`.
-- **runner** — cheap, fast, rote work by instruction (format, bulk edits, collection). Onboarding: `roles/runner.md`.
+A role is a card and two files:
 
-Roles are files. A vacancy is an onboarding doc nobody has read yet.
-Hiring = a fresh session reads the role file. Replacing a model = the new
-session reads the same file. See `roles/_vacancy.md` to add roles.
+- **The card**, from `roles/team.json` (`node scripts/team.mjs declare --by <you>`):
+  its rank, project and head. The board, the escalations and the laws read it.
+- **Its rules**, `roles/rules/<role>.md`, rendered from hubd's templates
+  (`node scripts/team.mjs render`) with the track's goal, its facts and the owner's
+  decisions. Never edited by hand: a rule changes in the template, a fact on the card.
+- **Its zone**, `roles/<role>.md`: what is its, what is not, whom it hands in to.
+
+Hiring is a fresh session that reads the last two. Replacing a model is the same.
+A new role: `roles/_vacancy.md`.
 
 ## Delivery chain
 
-idea/signal → **PRD** (product/pm: problem, who it's for, success metric, scope &
-non-scope) → **spec** (cto: how, files, numbered acceptance tests, what NOT to do)
-→ **code** (dev) → **acceptance** (cto, by the spec's tests) → **accept**
-(product: does it serve the PRD) → **deploy** (cto) → push/release (OWNER, veto).
-Hotfixes ≤10 lines: dev → cto acceptance, no PRD.
+signal → **PRD** (pm drafts, product accepts: the problem, who it is for, the success
+metric, scope and non-scope) → **spec** (cto: `specs/SPEC_<name>.md` with numbered
+acceptance tests and what not to do; one task per spec) → **code** (dev, on a branch
+`task/<slug>`) → **review** (reviewer) and **test cases** (qa) → **acceptance** (cto,
+by the spec's tests: `ACCEPT #<id>`, then the merge to main) → **product acceptance**
+(product: does it serve the PRD) → **deploy** (sre) → **push and release**
+(OWNER_NAME).
 
-Larger teams slot specialists into the chain: code (dev) → **review** (reviewer)
-→ **acceptance** (cto, with qa for independent test-cases) → **deploy** (sre);
-route rote work to runner. Keep just the core chain if you don't need them.
+A hotfix of 10 lines or fewer: dev → cto, no PRD. Without the specialists the chain
+is PRD → spec → code → acceptance → product acceptance.
 
-## Channels (descending authority)
+## Channels, by authority
 
-1. **git** — the only truth about code. Done = committed. Commits: cto only.
-2. **spec files** (`specs/SPEC_*.md`) — assignments. The executor appends
-   `## Report` (what was done, deviations, test output); cto appends `## Acceptance`.
-3. **INBOX.md** — the team journal: append-only, newest entries ON TOP.
-4. **queues/** — addressed delivery (`queue send`, `queue wait`). A queue carries
-   short assignments or links to spec files, not essays.
+1. **git**: the truth about code. Done means merged to main by cto.
+2. **Spec files**: the assignment. The executor appends `## Report` (what was done,
+   deviations, test output); cto appends `## Acceptance`.
+3. **The hub**: tasks (what needs doing), reports (what is now true: they land in the
+   journal and on the card), cards (the project, the roles, the machines). HUBD.md
+   says which to use when.
+4. **Queues**: dispatches and hand-ins, addressed to a role. A dispatch names its task
+   and its acceptance command; an artifact travels as its path, size and sha256.
+5. **INBOX.md**: a person's handoff line, newest on top. Agents report to the hub.
 
-Every write names its author: journal entries carry the sender, and
-`hub queue send` requires `--from`. A queue role is a mailbox — the author is
-whoever is at it (details and refused placeholder names: HUBD.md).
+## A session
 
-## Session start ritual (every agent, in order)
+1. Read this file, then `roles/rules/<role>.md` and `roles/<role>.md`. They are in
+   the company folder, `$HUBD_DIR`; you work in the product's repository.
+2. `hub_context({cwd})` (CLI `hub whereami`): the project, its laws, who holds what.
+   Back after a compaction: `hub_whatsnew({since: "session"})` as well.
+3. `git log --oneline -10` and `git status --short`.
+4. Work: `hub queue wait <role> --tasks` returns your open tasks and the dispatches
+   about them. Start a task by claiming it (`hub claim --task <id> --agent <role>
+   -t <minutes>`); a claim that lapses offers the task again.
+5. `hub_heartbeat` each turn, so the board shows you.
+6. End the turn as your rules say: one report, the reflection last. A worker hands in
+   (`-k done`, the artifact named) and does not close its task; the head closes it
+   with its verdict.
 
-1. Read this file.
-2. `git log --oneline -10` and `git status --short` — what changed.
-3. Read the top of `INBOX.md` (last ~5 entries).
-4. Taking a spec? Read the spec file IN FULL, then claim it in the journal:
-   `taking SPEC_X · claim: <files I will touch> · until <time>`.
-5. hubd connected? `hub_whatsnew` (MCP) or `hub doctor` — protocol changes and
-   environment items don't show up in the files alone.
+Every write names its author, and the author is your role: `--by cto`,
+`--agent cto`, `--from cto`.
 
-## Session end ritual
+A head need not wait on its queue: `hub sense <role>` prints what needs it (an idle
+worker, a hand-in, a branch to accept) and exits 1 when nothing does, so a loop that
+wakes the head only on exit 0 spends no model call while nothing happens.
 
-1. Hand off your files (cto: commit only YOUR files — never include someone
-   else's uncommitted work; message format `<scope>: <what>`).
-2. Append `## Report` to your spec file (or progress, if unfinished).
-3. Journal entry (format below).
+## Conflicts and blocks
 
-## Journal entry format (strict)
+- **A claimed file** (`hub claim check <path>`) is its holder's until the claim
+  lapses: take other work. An edit conflict always costs more than waiting.
+- **Blocked**: a `-k blocked` report with what you tried and the exact error, a line
+  in your head's queue, then other work. Never invent the answer.
+- **A deviation from the spec** only toward strictness or reliability, and recorded
+  in the report.
+- **Never touch**: the owner's personal files (list them here: ___), another role's
+  uncommitted changes, `.gitignore` without a task.
+- **Words the product must not use** (compliance, brand), if any: ___. Acceptance
+  includes a grep for them.
 
-```
-## YYYY-MM-DD HH:MM · from → to
-Topic: <SPEC_X / question / status>. Status: <taken / done / blocked / question>.
-<1–4 lines of substance: what was done, deviations, what's needed>
-```
+## Escalations and the owner's decisions
 
-## Conflict rules
+What a head cannot decide (money, hardware, a security boundary, a release) goes to
+the `owner` queue as one message: the problem with a measurement, the options with
+the risk of each, the head's choice. It waits on the board, under WAITING FOR YOU,
+until OWNER_NAME answers on the company card, quoting the message's header:
 
-- **File is claimed** (fresh claim in the journal): don't touch it. Note it in
-  the journal, take other work. An edit conflict always costs more than waiting.
-- **Blocking question**: journal entry with an addressee (`→ OWNER` or `→ product`),
-  STOP on that spec, switch to the next one. Never invent the answer.
-- **Deviation from spec** is allowed only toward strictness/reliability, and must
-  be recorded in the report.
-- **Never touch**: OWNER's personal files (list them here: ___), anyone's
-  uncommitted changes, `.gitignore` without an assignment.
-- **Lexicon rules (optional)**: if your product has words it must not use
-  (compliance, brand), list them here — acceptance includes a grep for them.
+    hub section add company owner-decisions "<date> · from <role> · id <id> — <the answer>" --by OWNER_NAME
 
-## Daemon mode: queues and patient waiting
+The next render carries the answer into every role's rules, and nobody asks it
+again. Work only OWNER_NAME can do (push, publish, sign, pay) is a task assigned to
+OWNER_NAME, and the board lists it among the owner's tasks. Agents never push and
+never publish.
 
-Every role has a queue — on disk one file per role PER HOST,
-`queues/<role>.<node>.queue.md`, created on first send (the legacy shared
-`<role>.queue.md` is still read, never written).
+## Laws
 
-- **Send:** `hub queue send dev "Take SPEC_X.md" --from cto` — `--from` is
-  required: a delivered block says "from <sender>" forever.
-- **Wait:** `hub queue wait dev` — blocks until new lines arrive (printed, exit 0)
-  or timeout (exit 2). Read position is tracked; nothing is delivered twice.
-
-**The loop:** start ritual → drain your queue → wait → on work: do it → report →
-journal → `hub heartbeat <you> --role <role>` (so presence shows who is at this
-mailbox) → wait again. After **3 empty timeouts in a row**: journal entry
-"sleeping, wake me with a send" and END the session — don't burn tokens idling.
-
-Routes: OWNER → anyone; product → cto; cto → dev, product; dev → cto.
-Queue smoke-tests (`hub queue send`/`hub queue wait`) run ONLY against the
-throwaway role `smoketest` — never against a live queue (offsets are state).
+Every turn's report ends with a reflection. A rule said three times by one role, or
+by two roles, within a week is a candidate (`hub reflect --promote --project
+PRODUCT_SLUG`), and a head of the track accepts or rejects it in the same turn. An
+accepted rule is a law: `hub_context` returns it to every role of the track.
 
 ## Publicity rule
 
-If this repo (or any part of it) may ever become public: code, commit messages
-and docs are written in English and neutral tone from day one, with no personal
-data and no internal kitchen. Operational files (journal, queues, role files
-with real context) go to `.gitignore` — check before every commit.
+If the product, or any part of it, may ever become public: code, commit messages and
+docs are in English and a neutral tone from day one, with no personal data and no
+internal kitchen. Each role's rules name the check it runs before a hand-in. This
+company folder is not that: it holds the journal, the queues and the owner's
+decisions, so keep it private.
 
-## Upgrades & migrations
+## Upgrades and migrations
 
-Upgrading hubd to a new version **never deletes task or card fields.** The event
-logs (`tasks.*.events.jsonl`) are append-only truth: a migration **appends**
-`set`/backfill events (rename, fill gaps) — it never rewrites a file or strips
-fields. The data is intentionally richer than the engine's schema (harvest
-captures fields the tools don't yet surface — `channel`, `owner_kind`, `note`, …);
-an unrecognized field is meaning, not cruft. Any "migration" that drops fields is
-a bug — refuse it. `hub doctor` flags a non-append-only rewrite.
+Upgrading hubd **never deletes task or card fields.** The event logs
+(`tasks.*.events.jsonl`) are append-only truth: a migration **appends** `set` and
+backfill events (a rename, a gap filled); it never rewrites a file or strips a field.
+The data is intentionally richer than the engine's schema (a harvest records fields
+the tools do not show yet: `channel`, `owner_kind`, `note`, …), and an unrecognized
+field is meaning, not cruft. A migration that drops fields is a bug: refuse it.
+`hub doctor` flags a rewrite that was not an append.
