@@ -116,8 +116,9 @@ sessions share them.
 
 The [tutorials](docs/start/README.md) walk the whole path, a level at a time: memory
 → work → queues → a second machine → roles → laws → a server.
-[Recipes](docs/recipes.md) gives complete scenarios: a standing worker, an
-orchestrator fleet, owner buttons, harvesting a chat, infra topology. [All the
+[Scenarios](docs/scenarios/README.md) are whole setups, each from an empty hub to
+what goes wrong in it: a night worker, a track with a head, the owner's day, a node
+that stopped syncing, a company server, and more. [All the
 documentation](docs/index.md) is mapped by what you want to do.
 
 ## The board
@@ -293,7 +294,7 @@ format is the stable contract; everything else is negotiable.
 file, generated from the code. The npm package carries the binaries, `prompts/`,
 `contrib/`, the mesh scripts, this README, the changelog, `HARVEST.md`, and of
 `docs/` the map, [the tutorials](docs/start/README.md), the reference,
-[recipes](docs/recipes.md), [concepts](docs/concepts.md),
+[the scenarios](docs/scenarios/README.md), [concepts](docs/concepts.md),
 [guarantees](docs/guarantees.md), [interop](docs/interop.md) and
 [self-hosting](docs/self-hosting.md). The rest of `docs/`, and `hubd-company/`, are
 in the repo.

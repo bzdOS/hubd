@@ -154,7 +154,8 @@ mesh-sync: ok (oak 2026-10-07 13:00, main)
 
 Nothing stopped, nothing was guessed, and a line asks a person to look. Without the
 driver, the same edit stops the sync and waits for `hub card resolve`
-([Recipe 7](../recipes.md#7-two-machines-one-hub) has that path).
+([7. A node stopped syncing](../scenarios/07-node-stopped-syncing.md#cause-one-card-section-changed-on-two-nodes)
+has that path).
 
 ## Is the mesh healthy
 
@@ -263,7 +264,8 @@ background gc can crash and leave a lock that silently stops every gc after it.
 
 One hub on two nodes, a sync that refuses to spread damage, and cards that merge by
 section. When a folder turns out to have been a hub of its own all along, `hub absorb`
-joins it as a new node instead of a hand copy; the warnings about mixed filesystems
-and `merge=union` are in [Recipe 7](../recipes.md#7-two-machines-one-hub).
+joins it as a new node instead of a hand copy ([12. Absorb](../scenarios/12-absorb.md)).
+The warnings about mixed filesystems and `merge=union` are in
+[7. A node stopped syncing](../scenarios/07-node-stopped-syncing.md#what-can-go-wrong).
 
 Next: [5. Roles](5-roles.md) — a team with heads and workers, and the board that shows it.

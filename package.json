@@ -36,6 +36,7 @@
     "docs/quickstart.md",
     "docs/start/",
     "docs/reference/",
+    "docs/scenarios/",
     "docs/recipes.md"
   ],
   "engines": {

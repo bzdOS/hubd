@@ -241,8 +241,9 @@ agents and the people, made visible, not made for them.
 ## What you have now
 
 A project whose work is a graph, an answer to "what next" for agents and for you,
-and locks that expire. The longer scenarios: [Recipe 1](../recipes.md#1-solo-developer-several-agent-sessions)
-(several sessions, one project) and [Recipe 4](../recipes.md#4-owner-buttons--decisions-only-a-human-can-make)
-(owner buttons as queue messages).
+and locks that expire. The longer stories:
+[1. Three clients, one project](../scenarios/01-three-clients.md), several sessions on
+one project, and [6. The owner's day](../scenarios/06-owners-day.md), every decision
+that waits for you in one list.
 
 Next: [3. Queues](3-queues.md) — an agent that waits for work and does it.
