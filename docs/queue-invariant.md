@@ -105,6 +105,8 @@ On a shrink, the watermark decides:
 
 - **Watermark found in the new content** → the purge removed blocks before it. Set
   the offset just past that block. Nothing is re-delivered, nothing is skipped.
+  (Unless nothing follows that block: the file may be cut short, see
+  [Cut short](#cut-short--a-file-caught-while-it-is-written).)
 - **Watermark absent** → it was purged along with everything before it, so every
   remaining block postdates it and is genuinely undelivered. Offset `0` is correct.
   (A file that was truly *recreated* lands in the same branch and gets the same
@@ -189,6 +191,41 @@ Two fixes, either enough for this case:
   out, so it is skipped. Only a header with an id is unique enough for either rule.
   Without one, the rules above hold, and a file recreated with its ids from 1 again
   is told apart by its times.
+
+## Cut short — a file caught while it is written
+
+The fourth way a file shrinks, and the only one that undoes itself. Measured on a
+mesh node: a reader was handed the same 411 bytes twice in one afternoon, the tail
+of a message without its header. The node's git history had caught its shard cut
+at 9216 bytes, in the middle of a character inside the last block that reader had
+been handed, and whole again a minute later. Something on that node wrote the file
+in place instead of appending to it; hubd's own writers append. The shorter file
+still held the watermark, and the watermark's block ran to the cut, so the cursor
+went to the cut. Once the file was whole, the cursor stood inside that block, and
+the rest of the block went out as if it were new.
+
+Three fixes:
+
+- **A shorter file that holds nothing past the watermark is left alone, cursor and
+  all.** Its last header is the watermark, or a block not newer than it, so there
+  is nothing to hand out, and the cursor is right again the moment the file is
+  whole. Until then `hub doctor` reports the cursor past the end of the file, which
+  is true. A poll while the file stays short reads its last 64 KB. A shorter file
+  that holds a block newer than the watermark is a purge or a recreation, and the
+  rules above apply.
+- **A cursor is checked against its watermark when the file is not shorter.** The
+  last header before the offset must be the watermark. When it is not — a file
+  purged and written past the old offset before the next poll, one recreated, one
+  whose earlier blocks changed length — the offset points into some other block,
+  and the reader resumes after the watermark, as for a shorter file.
+- **A block ends at the next whole header.** Resuming after the watermark stopped
+  at the next line that started with `## `, so a message holding a markdown heading
+  was cut there, and the rest of it went out as a message of its own.
+
+What it cannot see: an edit in place that leaves the cursor inside the watermark's
+own block, where the last header before it is still the watermark. Telling that
+apart needs the bytes that were there before. A cursor an older hubd left at such a
+cut, with the file whole again and not yet read, is trusted the same way.
 
 ## Read marks — the position every node can see
 

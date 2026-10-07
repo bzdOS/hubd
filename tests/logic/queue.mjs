@@ -270,11 +270,12 @@ ok(parseInt(wmCur.trim(), 10) === fs.statSync(wmQ).size,
   'cursor file: an old reader parseInt()s it to exactly the byte offset, ignoring the watermark');
 
 // PURGE: drop the first block, keep the second — the watermark is still in the file.
+const wmEnd = fs.statSync(wmQ).size;
 fs.writeFileSync(wmQ, blk('2026-09-01 10:01', 'two'));
 ok(!(await queueLib.queueWait('w', { timeout: 0, root: WM })).changed,
   'watermark: after a purge that kept the last delivered block, nothing is re-delivered');
-ok(parseInt(fs.readFileSync(wmOff, 'utf8').trim(), 10) === fs.statSync(wmQ).size,
-  'watermark: and the cursor resumes at the end of that block, not at 0');
+ok(parseInt(fs.readFileSync(wmOff, 'utf8').trim(), 10) === wmEnd,
+  'watermark: and the cursor is not sent back to 0: with nothing past the watermark, it stays where it was');
 fs.appendFileSync(wmQ, blk('2026-09-01 10:02', 'three'));
 const wmNext = await queueLib.queueWait('w', { timeout: 0, root: WM });
 ok(wmNext.changed && /three/.test(wmNext.text) && !/two/.test(wmNext.text),
@@ -348,15 +349,15 @@ ok(await fmWait() === '1,2,3', 'failed merge: before it, the queue is read to it
 ok(fmMerge() === 'conflict' && /message 4/.test(fs.readFileSync(fmQ, 'utf8')),
   'failed merge: the merge stops on a conflict elsewhere, with the longer queue file in the hub');
 ok(await fmWait() === '4', 'failed merge: a reader takes the new block while it stands open, and only that block');
+const fmLong = fs.statSync(fmQ).size;
 fmGit('merge --abort');
-const fmShort = fs.statSync(fmQ).size;
 const fmAbort = await fmWait();
 ok(fmAbort === '', `failed merge: after the abort put the shorter file back, nothing is handed out again (got ${fmAbort})`);
-ok(fmOff() === fmShort, `failed merge: and the cursor is at the end of that file, not at 0 (got ${fmOff()} of ${fmShort})`);
+ok(fmOff() === fmLong, `failed merge: and the cursor stays where it was, not at 0: the shorter file holds nothing newer (got ${fmOff()} of ${fmLong})`);
 ok(fmMerge() === 'conflict' && await fmWait() === '',
   'failed merge: the next failed try hands out nothing — its one new block was had the first time');
 fmGit('merge --abort');
-ok(await fmWait() === '' && fmOff() === fmShort, 'failed merge: nor does its abort');
+ok(await fmWait() === '' && fmOff() === fmLong, 'failed merge: nor does its abort');
 fmMerge(); fs.writeFileSync(path.join(FM, 'notes.md'), 'merged\n'); fmGit('commit -q -am merged');
 ok(await fmWait() === '', 'failed merge: the merge that is made hands out nothing new');
 fs.appendFileSync(fmQ, fmBlk(5));
@@ -383,6 +384,68 @@ fs.writeFileSync(path.join(FM, '.qstate', 'w.n1.queue.md.offset'), `0\n## 2026-1
 const fmNoId = await queueLib.queueWait('w', { timeout: 0, root: FM });
 ok(fmNoId.changed && /legacy 1/.test(fmNoId.text) && /legacy 2/.test(fmNoId.text),
   'ahead: a watermark without an id is not trusted to skip anything');
+
+/* ── a file caught while it is written ──
+ * A shard stood cut at 9216 bytes, in the middle of a character inside the last block its reader
+ * had been handed, and was whole again a minute later. The cursor went to the cut, and once the
+ * file was whole the rest of that block went out a second time, without its header: the same 411
+ * bytes, twice in one afternoon. */
+{
+  const CW = mktmp();
+  fs.mkdirSync(path.join(CW, 'queues'), { recursive: true });
+  const cwQ = path.join(CW, 'queues', 'w.n2.queue.md');
+  const cwOff = () => parseInt(fs.readFileSync(path.join(CW, '.qstate', 'w.n2.queue.md.offset'), 'utf8'), 10);
+  const cwBlk = (n, body) => `\n## 2026-10-05 22:0${n} · from fir · id fir-${n}\n${body}\n`;
+  const handed = [];
+  const cwWait = async () => {
+    const r = await queueLib.queueWait('w', { timeout: 0, root: CW });
+    if (r.changed) handed.push(r.text);
+    return r.changed ? r.text : '';
+  };
+  const b1 = cwBlk(1, 'order one');
+  const b2 = cwBlk(2, 'probe written — 230112 bytes, the size of the file\nthe second fetch gave the same sha — the transfer holds');
+  const whole = Buffer.from(b1 + b2);
+  fs.writeFileSync(cwQ, whole);
+  ok(/order one/.test(await cwWait()), 'cut: before it, the queue is read to its end');
+  const end = cwOff();
+  const mid = whole.lastIndexOf(Buffer.from('—')) + 1;   // inside a three-byte character of the last block
+  for (const i of [1, 2]) {
+    fs.writeFileSync(cwQ, whole.subarray(0, mid));
+    const cut = await cwWait();
+    ok(cut === '' && cwOff() === end, `cut ${i}: a file cut inside the last block handed out hands out nothing, and the cursor stays (got ${cwOff()} of ${end})`);
+    fs.writeFileSync(cwQ, whole);
+    const back = await cwWait();
+    ok(back === '', `cut ${i}: once the file is whole again, nothing of that block goes out a second time (got ${JSON.stringify(back.slice(0, 60))})`);
+  }
+  for (const [what, n] of [['inside the block before it', Buffer.byteLength(b1) - 3], ['to nothing', 0]]) {
+    fs.writeFileSync(cwQ, whole.subarray(0, n));
+    const cut = await cwWait();
+    fs.writeFileSync(cwQ, whole);
+    const back = await cwWait();
+    ok(cut === '' && back === '' && cwOff() === end, `cut ${what}: nothing goes out, and the cursor is where it was`);
+  }
+  fs.writeFileSync(cwQ, whole.subarray(0, mid));
+  await cwWait();
+  const b3 = cwBlk(3, 'order three');
+  fs.writeFileSync(cwQ, Buffer.concat([whole, Buffer.from(b3)]));
+  const next = await cwWait();
+  ok(next === b3.trim(), `cut: the block written after it goes out whole, header and all, and alone (got ${JSON.stringify(next.slice(0, 60))})`);
+  // A purge, then a message longer than what it removed before the next poll: the old offset is
+  // now inside that message, and it goes out from its header.
+  const b4 = cwBlk(4, 'order four, longer than the first one was\n## Notes\nthis heading is part of the message');
+  fs.writeFileSync(cwQ, b2 + b3 + b4);
+  const purged = await cwWait();
+  ok(purged === b4.trim(), `purge: a message written past the old offset goes out whole, not from its middle (got ${JSON.stringify(purged.slice(0, 60))})`);
+  // The file shorter, with a block after the watermark: what goes out starts where the watermark's
+  // block ends, and a heading inside that block is not where it ends.
+  const b5 = cwBlk(5, 'order five');
+  fs.writeFileSync(cwQ, b3 + b4 + b5);
+  const after = await cwWait();
+  ok(after === b5.trim(), `purge: a heading inside the last message handed out does not end it (got ${JSON.stringify(after.slice(0, 60))})`);
+  const ids = handed.flatMap(t => [...t.matchAll(/· id fir-(\d+)/g)].map(m => m[1]));
+  ok(ids.join() === '1,2,3,4,5' && handed.every(t => t.startsWith('## ')),
+    `cut: every block went out once, and every handout starts with its header (got ${ids})`);
+}
 
 // this node's own shard (the tests run as node "cedar"), and an empty one of its own
 fs.writeFileSync(path.join(QG, 'queues', 'ghost.cedar.queue.md'), oldMsg);

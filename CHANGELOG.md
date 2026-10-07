@@ -4,6 +4,22 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.57 — 2026-10-07
+
+- **A message is handed out once, even when its file is cut short.** A reader was handed the
+  same 411 bytes twice in one afternoon: the tail of a message, without its header. Its shard
+  had stood cut at 9216 bytes, in the middle of a character inside the last block handed out,
+  and was whole again a minute later. The cursor had gone to the cut, and once the file was
+  whole the rest of that block went out as new. A shorter file that holds nothing past the
+  watermark now leaves the cursor where it was, so it is right again the moment the file is.
+  When the file is not shorter, the last header before the cursor must be the watermark; when it
+  is not (a file purged and written past the old offset before the next poll, or recreated),
+  the reader resumes after the watermark. And the watermark's block ends at the next whole
+  header: a markdown heading inside a message used to end it, and the rest went out as a
+  message of its own. What wrote the file in place was not hubd, whose writers append.
+  [The queue invariant](docs/queue-invariant.md#cut-short--a-file-caught-while-it-is-written)
+  has the details.
+
 ## 0.9.56 — 2026-10-07
 
 Ten fixes, found by running the tutorials in `docs/start/` end to end.

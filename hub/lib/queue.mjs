@@ -497,14 +497,14 @@ function writeAck(acksFile, id, status) {
  * of those. The ack log cannot settle it: it travels with the mesh, the abort rolled it back too,
  * and that is why the one block had three "delivered" lines. The cursor is this node's and
  * outlives the abort. A recreated file, or a purge past the watermark, leaves no such block and
- * resumes at 0 as before; so does a watermark without an id. */
+ * resumes at 0 as before; so does a watermark without an id.
+ *
+ * The watermark's block ends at the next whole header, not at the next line that starts with
+ * `## `: a message may hold a markdown heading, and a cursor put there was inside the block. */
 function offsetAfterShrink(text, mark) {
   if (!mark) return 0;
-  const at = text.lastIndexOf(mark);
-  if (at !== -1) {
-    const after = text.indexOf('\n## ', at + mark.length);
-    return Buffer.byteLength(after === -1 ? text : text.slice(0, after + 1), 'utf8');
-  }
+  const own = blockEndAt(text, mark);
+  if (own !== -1) return Buffer.byteLength(text.slice(0, own), 'utf8');
   const [w] = blocksIn(mark);
   if (!w || w.id == null) return 0;
   const heads = [...text.matchAll(BLOCK_RE)];
@@ -513,6 +513,22 @@ function offsetAfterShrink(text, mark) {
     if (m[3] && idCompare(idOf(m[3]), w.id) <= 0 && m[1] <= w.ts) end = i + 1 < heads.length ? heads[i + 1].index - 1 : text.length;
   });
   return Buffer.byteLength(text.slice(0, end), 'utf8');
+}
+
+/* Whether the block headed `head` was handed out no later than the watermark `mark`: the
+ * watermark's own block, or, both with ids, one with an id not above its id and a time not after
+ * its time. offsetAfterShrink's rule for a single header. */
+function notAfter(head, mark) {
+  if (head === mark) return true;
+  const [h] = blocksIn(head), [w] = blocksIn(mark);
+  return !!(h && w && h.id != null && w.id != null && idCompare(h.id, w.id) <= 0 && h.ts <= w.ts);
+}
+
+/* The last header in `full` before byte `off`: from the 64 KB before it, or from the whole start
+ * when those hold none (a message longer than that). */
+function headerBefore(full, off) {
+  const h = lastHeaderIn(readTail(full, Math.max(0, off - 65536), off));
+  return h === null && off > 65536 ? lastHeaderIn(readTail(full, 0, off)) : h;
 }
 
 /* A cursor this consumer cannot WRITE is the one failure that used to look exactly like an empty
@@ -567,9 +583,37 @@ function drainFile(qdir, stateDir, f, reader = null) {
       let { off, mark } = readCursor(offFile);
       const sz = sizeOf();   // both re-read under the lock
       if (sz < off) {        // the file shrank: resume after the watermark, and deliver from there now
+        /* A shorter file that holds nothing past the watermark is left alone, cursor and all: it
+         * may be one caught while it is written. Measured on a mesh node: a shard stood cut at 9216
+         * bytes, in the middle of a character inside the last block its reader had been handed,
+         * and was whole again a minute later. The cursor went to the cut, and once the file was
+         * whole the rest of that block was handed out a second time, without its header: the same
+         * 411 bytes, twice in one afternoon. Left where it is, the cursor is right again the moment
+         * the file is; until something past the watermark arrives there is nothing to hand out.
+         * The file's last header decides it, so a poll while the file stays short reads its tail. */
+        if (mark) {
+          let last = null;
+          try { last = sz ? lastHeaderIn(readTail(full, Math.max(0, sz - 65536), sz)) : null; } catch { return null; }
+          if (!sz || (last && notAfter(last, mark))) return null;
+        }
         let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
-        off = Math.min(offsetAfterShrink(text, mark), sz);
+        const to = Math.min(offsetAfterShrink(text, mark), sz);
+        if (mark && to === sz) return null;
+        off = to;
         writeCursor(offFile, off, mark);   // the watermark stays: it is still the last block handed out
+      } else if (mark && off > 0 && sz > off) {
+        /* Not shorter, but changed under the cursor: the last header before it is no longer the
+         * watermark. A file purged and written past the old offset before the next poll, one
+         * recreated, one whose earlier blocks changed length. The offset then points into some
+         * other block, and what follows it would go out without its header. Resume after the
+         * watermark, as for a shorter file. */
+        let before;
+        try { before = headerBefore(full, off); } catch { return null; }
+        if (before !== mark) {
+          let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
+          off = Math.min(offsetAfterShrink(text, mark), sz);
+          writeCursor(offFile, off, mark);
+        }
       }
       if (sz === off) return null;                    // a competitor drained it first
       let chunk = readTail(full, off, sz, { exact: true });
