@@ -41,13 +41,14 @@ import hashlib
 from functools import lru_cache
 DENY_IN_WORDS = {
     4: {'a969e98b3fb984d2', 'c3ea52707db9769e'},
-    5: {'ab99a5eb2155faf5'},
-    6: {'0c5eea7641f12bc4', '27b2bfe93c31bec0', '3196a7e487413f1f', '44f86611d4de6daf', '750bd39768d2b52a', 'fe67265f89d5214c'},
-    7: {'26b47209413e5776'},
-    8: {'e629845ad96eb5f1'},
+    5: {'24bbcd13b648ec19', 'ab99a5eb2155faf5'},
+    6: {'0c5eea7641f12bc4', '27b2bfe93c31bec0', '3196a7e487413f1f', '44f86611d4de6daf', '750bd39768d2b52a', '7aa6ac09b51e838e', 'fe67265f89d5214c'},
+    7: {'26b47209413e5776', 'e58717bf25d3edbe'},
+    8: {'e629845ad96eb5f1', 'f6d7120bbb740a4f'},
     9: {'fa3c5bcb2ee5eddb'},
 }
-DENY_WHOLE = {'06db35b7b9a30cd8', '5123c3006870ef8b', 'ae6c479d631d685b', 'b2d26135dccb88d1', 'd2c8e5f2a132ce0d', 'b872f890b2579d17', 'f7e060a45439112d'}
+DENY_WHOLE = {'06db35b7b9a30cd8', '5123c3006870ef8b', 'ae6c479d631d685b', 'b2d26135dccb88d1', 'd2c8e5f2a132ce0d', 'b872f890b2579d17', 'f7e060a45439112d',
+              'fb609bdcdece3f06', '137bc5d6c248c7bf', 'b51f63c44c7f828f', 'a7c08337eb52332a'}
 word_re = re.compile(r"[a-z0-9]+")
 whole_res = [re.compile(r"[a-z0-9-]+"), re.compile(r"[a-z0-9./_-]+")]
 
