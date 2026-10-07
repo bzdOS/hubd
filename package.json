@@ -34,6 +34,7 @@
     "docs/self-hosting.md",
     "docs/interop.md",
     "docs/quickstart.md",
+    "docs/start/",
     "docs/recipes.md"
   ],
   "engines": {

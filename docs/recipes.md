@@ -5,7 +5,7 @@ flow, and what you end up with. They compose — most teams run several at once.
 Commands are shown as the CLI; every one has an MCP twin (`hub_task_add`,
 `hub_queue_wait`, ...) that agents call directly.
 
-New to hubd? Do the [quick start](quickstart.md) first.
+New to hubd? Do the [tutorials](start/README.md) first, or at least [1. Memory](start/1-memory.md).
 
 ---
 

@@ -41,17 +41,19 @@ you are done.
 
 ## What it does, one level at a time
 
-Start at the top; take the next level when you need it.
+Start at the top; take the next level when you need it. Each level is a
+[tutorial](docs/start/README.md) of ten or fifteen minutes, with the real output
+of every command.
 
 | Level | What you get | Start with |
 |---|---|---|
-| **1. Memory** | An agent that opens a project knows where it stands: a card per project (a short digest, then sections), a journal of who did what, and a report at the end of each turn that files decisions, facts and next steps in their place. A session resumed after a compaction asks the hub, not its summary. | `hub_context`, `hub report`, `hub recall`, `hub whereami` |
-| **2. Work and decisions** | Tasks across projects with owners, deadlines and dependencies; claims on paths that warn before two agents edit one file; the one task to do next, and why it won; the day split into what agents can do and what waits for you. | `hub task add`, `hub now`, `hub agenda`, `hub plan`, `hub claim` |
-| **3. Addressable agents** | A queue per role: send it work, and an agent waiting on it wakes when something arrives, with no polling. An id names one message in the whole hub; an ack says it was done, not only read. In work mode a role's open tasks are its queue. | `hub queue send`, `hub queue wait`, `hub_queue_ack` |
-| **4. Several machines** | One hub in a git repository that every machine syncs. Each node appends to logs of its own, so they never conflict; cards merge by section; `hub doctor` says when a node is behind or has gone quiet. | `scripts/mesh-sync.sh`, `hub card merge-driver`, `hub doctor` |
-| **5. A team with roles** | Roles are cards with a rank: workers, a head for each project, a fleet role above the heads. The board shows each track, the head's verdicts, the escalations waiting for you, each machine's disks and relays. Each kind of role runs by one template of rules. | `hub resource set`, `hub board`, `hub serve`, `hub prompts render` |
-| **6. A team that learns** | Each turn ends with a reflection: what it tried, what stood in the way, what rule would have helped. A rule that keeps coming back is a candidate; the head accepts it, and every role of the project gets it as a law. | `hub reflect`, `hub reflect --promote` |
-| **7. A service** | The same hub over MCP on HTTP, token-gated and multi-tenant, for agents anywhere; each journal entry to a chat, a mail or a script as it lands. | `hubd --http`, `hub watch --exec` |
+| [**1. Memory**](docs/start/1-memory.md) | An agent that opens a project knows where it stands: a card per project (a short digest, then sections), a journal of who did what, and a report at the end of each turn that files decisions, facts and next steps in their place. A session resumed after a compaction asks the hub, not its summary. | `hub_context`, `hub report`, `hub recall`, `hub whereami` |
+| [**2. Work and decisions**](docs/start/2-work.md) | Tasks across projects with owners, deadlines and dependencies; claims on paths that warn before two agents edit one file; the one task to do next, and why it won; the day split into what agents can do and what waits for you. | `hub task add`, `hub now`, `hub agenda`, `hub plan`, `hub claim` |
+| [**3. Addressable agents**](docs/start/3-queues.md) | A queue per role: send it work, and an agent waiting on it wakes when something arrives, with no polling. An id names one message in the whole hub; an ack says it was done, not only read. In work mode a role's open tasks are its queue. | `hub queue send`, `hub queue wait`, `hub_queue_ack` |
+| [**4. Several machines**](docs/start/4-second-machine.md) | One hub in a git repository that every machine syncs. Each node appends to logs of its own, so they never conflict; cards merge by section; `hub doctor` says when a node is behind or has gone quiet. | `scripts/mesh-sync.sh`, `hub card merge-driver`, `hub doctor` |
+| [**5. A team with roles**](docs/start/5-roles.md) | Roles are cards with a rank: workers, a head for each project, a fleet role above the heads. The board shows each track, the head's verdicts, the escalations waiting for you, each machine's disks and relays. Each kind of role runs by one template of rules. | `hub resource set`, `hub board`, `hub serve`, `hub prompts render` |
+| [**6. A team that learns**](docs/start/6-laws.md) | Each turn ends with a reflection: what it tried, what stood in the way, what rule would have helped. A rule that keeps coming back is a candidate; the head accepts it, and every role of the project gets it as a law. | `hub reflect`, `hub reflect --promote` |
+| [**7. A service**](docs/start/7-server.md) | The same hub over MCP on HTTP, token-gated and multi-tenant, for agents anywhere; each journal entry to a chat, a mail or a script as it lands. | `hubd --http`, `hub watch --exec` |
 
 The words in this table — card, track, head, law — are defined in
 [Concepts](docs/concepts.md), each with the file it lives in.
@@ -112,11 +114,11 @@ sessions share them.
   ([the narrative layer](docs/narrative-layer.md)). Hiring an agent = a fresh session
   reads a role file. The template comes from the repo, not the npm package.
 
-The [quick start](docs/quickstart.md) walks the whole path — install → team folder
-→ first agent → queues → a second machine — and [recipes](docs/recipes.md) gives
-complete scenarios: a standing worker, an orchestrator fleet, owner buttons,
-harvesting a chat, infra topology. [All the documentation](docs/index.md) is mapped
-by what you want to do.
+The [tutorials](docs/start/README.md) walk the whole path, a level at a time: memory
+→ work → queues → a second machine → roles → laws → a server.
+[Recipes](docs/recipes.md) gives complete scenarios: a standing worker, an
+orchestrator fleet, owner buttons, harvesting a chat, infra topology. [All the
+documentation](docs/index.md) is mapped by what you want to do.
 
 ## The board
 
@@ -288,8 +290,8 @@ format is the stable contract; everything else is negotiable.
 
 [docs/index.md](docs/index.md) maps the documentation by what you want to do. The npm
 package carries the binaries, `prompts/`, `contrib/`, the mesh scripts, this README,
-the changelog, `HARVEST.md`, and of `docs/` the map and
-[quick start](docs/quickstart.md), [recipes](docs/recipes.md),
+the changelog, `HARVEST.md`, and of `docs/` the map,
+[the tutorials](docs/start/README.md), [recipes](docs/recipes.md),
 [concepts](docs/concepts.md), [guarantees](docs/guarantees.md),
 [interop](docs/interop.md) and [self-hosting](docs/self-hosting.md). The rest of
 `docs/`, and `hubd-company/`, are in the repo.
