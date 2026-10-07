@@ -2,20 +2,6 @@
 
 **The project tracker for teams of humans and AI agents — in plain files.**
 
-A tool for agents rarely fails by crashing. It fails by *answering* —
-confidently, and wrong. A list that ended early without saying so. A count that
-turns out to be mostly duplicates. A task close that lands on somebody else's
-id. A person would stop at "wait, fifteen hundred tasks? I didn't create
-fifteen hundred tasks." An agent has no such prior: it takes the number and
-builds on it, and every view downstream inherits the mistake, still sounding
-sure.
-
-hubd is built against that failure mode, and it shows in the boring parts. The
-logs are append-only and attributed, so a wrong view stays recoverable from data
-that was always right. Every truncation announces itself. Anything the hub
-cannot observe is reported as unobserved rather than estimated. Much of this
-codebase is not features — it is refusals to sound certain.
-
 You run two, three, five agent sessions — different tools, different vendors —
 across your projects. Each one is brilliant, and each one has no idea the
 others exist. You are the coordination layer: copy-pasting context,
@@ -23,87 +9,73 @@ re-explaining state, discovering on Monday what an agent did on Friday.
 
 hubd replaces you in that job with the most boring technology available:
 **plain files**. A shared headquarters for your whole team — agents *and*
-humans: a journal of what everyone did, task queues every agent can wait on,
-cross-project tasks, and a read-only kanban to watch it all. All markdown and
-JSONL, in a folder you own.
+humans: a card that says where each project stands, a journal of what everyone
+did, tasks and queues every agent can wait on, heads that accept or reject their
+workers' work, rules the team learns from its own turns, and a read-only board to
+watch it all. All markdown and JSONL, in a folder you own; git carries it between
+machines.
 
-![the hubd kanban: agents pick up, finish and file work while the activity log fills in](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/kanban.gif)
+![the board's Summary on the demo hub: an escalation waiting, a node with a full disk, work accepted, rejected, blocked and stalled](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/summary.png)
 
-*`hub serve` — the board is read-only and has exactly one button (**⚙ Rules**, it opens
-AGENTS.md). Cards move because agents move them; the page just re-reads the files.*
+*`hub serve` on the demo hub. Each track's goal and work in hand; what its head
+accepted, rejected, and why; what is blocked and on what; an escalation that waits
+for your answer; a machine whose disk is nearly full.*
 
 **Not a runner.** Orchestrators launch your coding agents and stream their
 output — that's making coding faster. hubd manages the *work*: which projects,
 what's next, who does it and when, what already happened. An orchestrator can
 run your agents; hubd runs your projects. They compose.
 
-## The Unix pair
-
-- **`hubd`** — the daemon: an MCP server (stdio, JSON-RPC 2.0) that agents talk to.
-- **`hub`** — the CLI: the same data for humans, no LLM required.
-
-Like `sshd` and `ssh`. The daemon serves agents; the CLI serves you.
-
-## Quick start
-
-**See it first.** The board shows what it is for on a hub a team has worked in for a
-week. `hub demo` writes such a week, invented, into a folder of its own and prints the
-commands to look at it; your own hub is not read or written.
+## Try it in a minute
 
 ```bash
 npm i -g @bzdos/hubd
 hub demo             # two tracks, six roles, three machines, a week of their work
 ```
 
-![the board's Summary on the demo hub: an escalation waiting, a node with a full disk, work accepted, rejected, blocked and stalled](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/summary.png)
+`hub demo` writes an invented week of a small team into a folder of its own and
+prints the commands to look at it: the board on a port beside your own,
+`hub board`, `hub agenda`, the rules about to become laws, `hub recall`. Your own
+hub is not read or written. Run it again for a fresh week; delete the folder when
+you are done.
 
-**Option A — start a company (copy the folder).** One command drops
-[`hubd-company/`](hubd-company/) into a folder of your own:
+## What it does, one level at a time
 
-```bash
-npx degit bzdOS/hubd/hubd-company my-company   # then: cd my-company && git init
-```
+Start at the top; take the next level when you need it.
 
-Or clone this repo and copy the folder — it doesn't have to be your repo root.
-You get a ready org structure:
-constitution (AGENTS.md), role onboardings, project cards, an operator card,
-queues, recipes, and a weekly agent-written `chronicle/`
-([the narrative layer](docs/narrative-layer.md)).
-Hiring an agent = a fresh session reads a role file. This template is NOT
-included in the npm package; it comes from the repo.
+| Level | What you get | Start with |
+|---|---|---|
+| **1. Memory** | An agent that opens a project knows where it stands: a card per project (a short digest, then sections), a journal of who did what, and a report at the end of each turn that files decisions, facts and next steps in their place. A session resumed after a compaction asks the hub, not its summary. | `hub_context`, `hub report`, `hub recall`, `hub whereami` |
+| **2. Work and decisions** | Tasks across projects with owners, deadlines and dependencies; claims on paths that warn before two agents edit one file; the one task to do next, and why it won; the day split into what agents can do and what waits for you. | `hub task add`, `hub now`, `hub agenda`, `hub plan`, `hub claim` |
+| **3. Addressable agents** | A queue per role: send it work, and an agent waiting on it wakes when something arrives, with no polling. An id names one message in the whole hub; an ack says it was done, not only read. In work mode a role's open tasks are its queue. | `hub queue send`, `hub queue wait`, `hub_queue_ack` |
+| **4. Several machines** | One hub in a git repository that every machine syncs. Each node appends to logs of its own, so they never conflict; cards merge by section; `hub doctor` says when a node is behind or has gone quiet. | `scripts/mesh-sync.sh`, `hub card merge-driver`, `hub doctor` |
+| **5. A team with roles** | Roles are cards with a rank: workers, a head for each project, a fleet role above the heads. The board shows each track, the head's verdicts, the escalations waiting for you, each machine's disks and relays. Each kind of role runs by one template of rules. | `hub resource set`, `hub board`, `hub serve`, `hub prompts render` |
+| **6. A team that learns** | Each turn ends with a reflection: what it tried, what stood in the way, what rule would have helped. A rule that keeps coming back is a candidate; the head accepts it, and every role of the project gets it as a law. | `hub reflect`, `hub reflect --promote` |
+| **7. A service** | The same hub over MCP on HTTP, token-gated and multi-tenant, for agents anywhere; each journal entry to a chat, a mail or a script as it lands. | `hubd --http`, `hub watch --exec` |
 
-**Option B — add the binaries to what you have:**
+The words in this table — card, track, head, law — are defined in
+[Concepts](docs/concepts.md), each with the file it lives in.
+
+## Get started
 
 ```bash
 npm i -g @bzdos/hubd   # installs both binaries: hubd (MCP server) + hub (CLI)
 hub init             # scaffold a team folder: AGENTS.md, INBOX.md, queues/
 hub version          # which hubd, and which copy of it is answering
-hub doctor           # hub base, team root, locks, queues, ghost queues, writer versions
+hub doctor           # hub base, team root, locks, queues, writer versions, the mesh
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
-hub queue gc         # list queues nobody ever consumed (--apply archives them)
-hub gc               # everything that piled up, by class; touches nothing without --apply --by
-                     # doctor also flags: work dispatched to a role with nobody
-                     # home, and queues trimmed outside hubd (which used to
-                     # re-deliver everything that survived the trim)
 hub now              # the ONE task to do next, and why it won
 hub agenda           # the day split by who can act: agent work vs owner buttons
 hub recall "<q>"     # ranked memory, every hit dated and flagged if stale
 hub usage --days 7   # what the work cost: supplied vs measured, never mixed
 hub audit            # what the cards declare vs what happened (--apply files incidents)
 hub lint             # which of your rules are checks, not just prose
-hub serve            # read-only kanban on localhost
+hub gc               # everything that piled up, by class; touches nothing without --apply --by
+hub serve            # the read-only board on localhost
 hub demo [dir]       # an invented team's week in a folder of its own, to look at first
 # one-off, without install: npx -p @bzdos/hubd hub status
 ```
-
-The npm package ships: `hub/` (binaries + lib), `prompts/`, `docs/`, `README.md`,
-`LICENSE`, and `HARVEST.md`. It does NOT include `hubd-company/`.
-
-New here? Two guides: the [quick start](docs/quickstart.md) walks the whole
-path — install → team folder → first agent → queues — and
-[recipes](docs/recipes.md) gives complete scenarios (a standing worker, an
-orchestrator fleet, owner buttons, harvesting a chat, infra topology).
 
 Connect your agent (any MCP client):
 
@@ -111,279 +83,104 @@ Connect your agent (any MCP client):
 claude mcp add --scope user hubd --env HUBD_AGENT=dev-<yourproject> -- npx -y @bzdos/hubd
 ```
 
-`HUBD_AGENT` is worth setting on day one. Every write names its author —
-journal entries, tasks, queue messages — and the field is required: an
-append-only log with an unattributed write in it stays unattributable forever. `HUBD_AGENT` is the floor: when a caller does
-not say who it is, the write is attributed to that name plus a short per-session
-suffix, instead of failing. Name the **function**, not the model — `dev-hubd`,
-`reviewer-bsdos` — because which model you are is already in your client's own
-transcript, while many sessions share it. Model and client names (`claude`,
-`gpt`, `cursor`) and placeholders (`unknown`, `cli`, `root`) are refused for
-that reason. A caller that knows its own function can always be more specific
-than the floor.
+`HUBD_AGENT` is worth setting on day one. Every write names its author — journal
+entries, tasks, queue messages — and an append-only log with an unattributed write
+in it stays unattributable forever. When a caller does not say who it is, the write
+goes to this name plus a short per-session suffix. Name the **function**, not the
+model — `dev-hubd`, `reviewer-bsdos`: model and client names (`claude`, `gpt`,
+`cursor`) and placeholders (`unknown`, `cli`, `root`) are refused, because many
+sessions share them.
 
-No MCP? No problem — every model that can read and write files can join:
-paste the matching block from [`prompts/`](prompts/) (Claude Code, Cursor,
-Codex/AGENTS.md, or an MCP chat) — it wires hubd in and points at `HUBD.md`,
-the always-current protocol.
+- **No MCP?** Every model that can read and write files can join: paste the
+  matching block from [`prompts/`](prompts/) (Claude Code, Cursor, Codex/AGENTS.md,
+  or an MCP chat) — it wires hubd in and points at `HUBD.md`, the always-current
+  protocol.
+- **Running roles in a loop?** [`prompts/meta/`](prompts/meta/) holds the rules a
+  worker, a head and an orchestrator run by, as one template per kind of role with
+  shared fragments; everything specific to a role comes in as a variable.
+  `hub prompts render worker --vars vars.json --out rules.md` writes a role's rules,
+  and `--check rules.md` exits 1 once that file no longer matches the render. The
+  MCP server serves the same render as prompts, the variables as their arguments.
+- **Running it for a team?** hubd also speaks MCP over HTTP — one shared hub all
+  your agents point at, token-gated and multi-tenant. See
+  [self-hosting](docs/self-hosting.md).
+- **Starting a company from scratch?** One command drops
+  [`hubd-company/`](hubd-company/) into a folder of your own:
+  `npx degit bzdOS/hubd/hubd-company my-company` (then `git init` in it). You get a
+  ready org structure: a constitution (AGENTS.md), role onboardings, project cards,
+  an operator card, queues, recipes, and a weekly agent-written `chronicle/`
+  ([the narrative layer](docs/narrative-layer.md)). Hiring an agent = a fresh session
+  reads a role file. The template comes from the repo, not the npm package.
 
-**Running roles in a loop?** [`prompts/meta/`](prompts/meta/) holds the rules a
-worker, a head and an orchestrator run by, as one template per kind of role with
-shared fragments; everything specific to a role comes in as a variable.
-`hub prompts render worker --vars vars.json --out rules.md` writes a role's rules,
-and `--check rules.md` exits 1 once that file no longer matches the render. The
-MCP server serves the same render as prompts, the variables as their arguments.
+The [quick start](docs/quickstart.md) walks the whole path — install → team folder
+→ first agent → queues → a second machine — and [recipes](docs/recipes.md) gives
+complete scenarios: a standing worker, an orchestrator fleet, owner buttons,
+harvesting a chat, infra topology. [All the documentation](docs/index.md) is mapped
+by what you want to do.
 
-**Running it for a team?** hubd also speaks MCP over HTTP — one shared hub all
-your agents point at, token-gated and multi-tenant. See
-[self-hosting](docs/self-hosting.md).
+## The board
 
-## Updating, and where your data lives
+![the hubd kanban: agents pick up, finish and file work while the activity log fills in](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/kanban.gif)
 
-hubd is a tool, like `git` or `node`: you install the **code**, and your **data**
-is a folder you own. They are two separate things — and that is the whole point.
+`hub serve` has four views: **Summary** (above), **Tracks**, a **Live** kanban, and
+a **History** of the journal to play back. It is read-only and has exactly one
+button, **⚙ Rules**, which opens AGENTS.md. Cards move because agents move them; the
+page just re-reads the files. You don't manage the agents — you manage the rules.
 
-- **Code** — the npm package. Update like any global CLI:
-  `npm i -g @bzdos/hubd@latest` (or run one-off with `npx -y @bzdos/hubd`). A new
-  version ships the engine ([changelog](CHANGELOG.md)); it never touches your data.
-- **Data** — `HUBD_DIR` (default `~/.hubd`): plain markdown + JSONL, yours to keep.
-  `HUBD_TEAM_DIR` set on its own means the same one directory for everything; set
-  both only when the queues really live somewhere else. `hub doctor` says which won.
-- **Who wrote it** — `HUBD_AGENT`: the default author for calls that omit one, per
-  server config. Set it in every client and on every host; a required field with no
-  floor turns a forgotten argument into a failed call.
-- **Is the mesh actually syncing?** `hub doctor` counts how many commits this hub
-  is behind `origin`, because a sync loop that keeps retrying looks exactly like one
-  that works: one node here went 228 commits without receiving anyone else's work
-  while every report called the hub healthy. It also names tracked paths that differ
-  only by case — on macOS or Windows those are one file for two index entries, which
-  no commit can ever clean, and they stop a merge permanently. Since 0.9.6 hubd will
-  not create such a pair in the first place, and doctor flags any card still holding
-  conflict markers, since a reader serves those as content rather than as an error.
-- **A queue that answers "nothing new" but is not empty.** Delivery advances a per-file cursor,
-  so a cursor this user cannot write stops delivery dead — and it used to look exactly like an
-  idle queue, on both sides: the wait said nothing new, the send said sent. Four live roles held
-  a day of orders that way. Now the wait fails with the file and the fix, `hub doctor` lists such
-  cursors, and a send reports the depth now waiting so a climbing backlog is visible to the sender.
-- **A backlog that exists on one node only.** A cursor never leaves its node, so the node that
-  wrote a role's messages counted as pending what the node that read them had already taken: 44
-  pending on one, 0 on the other, for one queue. Since 0.9.33 a role's reader publishes how far it
-  got (`queues/read/<role>.<node>.json`, mesh-synced, one writer each), and every count — `hub queue
-  status`, a send's depth, `hub brief`, `hub doctor` — takes the furthest position any node reached.
-- **A file sent as a message.** A queue message is read whole by a model, and a role loop cuts one
-  past 16 KB: a 2.3 MB base64 bundle sent to a head overflowed it twice, and the work stood. Since
-  0.9.34 a queue message, a report and a task text over 16 KB (`HUBD_MSG_MAX`) are refused, and so
-  are a base64 or hex run over 2 KB, a git diff, a git bundle and a PEM block at any size; the
-  error says to put the artifact in a file and send its path, size and sha256. A send is refused
-  too once the role holds 50 unread messages or 256 KB (`queue.msgs`, `queue.bytes` in the
-  hub's `limits.json`, or `HUBD_QUEUE_MAX_MSGS`, `HUBD_QUEUE_MAX_BYTES` on a node; 0 = off), and
-  `hub doctor` warns at 80%. An owner role is exempt, and so is a role listed in `queue.exempt`:
-  one whose reader reads the file itself, so hubd cannot see what it read. Since 0.9.49 a file
-  counts as read up to the last block its ack log names, and a reader publishes its position
-  even when nothing new came, so a reader from before 0.9.33 does not make its queue look full.
-  Since 0.9.54 a role of rank `fleet` is never refused, so an escalation always goes, and a
-  refused send exits 4 with `Error [queue-full]` and leaves a `queue-full` line in the sender's
-  project journal.
-- **An id that names one message.** A queue block's id was a number counted per file, so one hub
-  held "id 39" in twelve headers across four roles' queues, and an ack or an answer that named it
-  named any of them. Since 0.9.54 it is `<node>-<N>` (`pine-12`), counted by the node across every
-  queue, as a task id is. Bare ids from before are still read and acked.
-- **Reads that cost more than the work.** On a live hub `hub_get`, `hub_whatsnew` and
-  `hub_task_list` came to 6-11k tokens a call. Since 0.9.35 they are compact by default over MCP:
-  the card's head and the newest 5 journal lines for `hub_get`, the newest 20 entries for
-  `hub_whatsnew`, 50 tasks for `hub_task_list`, long texts cut, and `truncated` saying what was
-  left out — about 2k tokens each on the same hub (5.6k for 50 tasks across every project).
-  `full: true` gives the whole answer. `hub_card_set` no longer echoes the digest it was given.
-- **A card that grew into a log.** The digest is advertised as a few lines of current state, and
-  nothing held it there: one hub reached three cards past 72 KB, and reading the largest was
-  refused by the caller's context budget. hubd now refuses an over-long digest and a dated
-  `appendLine` (that is an event — `hub report` takes it), and moves the oldest entries of an
-  over-long section into `projects/history/<slug>.md`. Moved, never dropped: facts written by
-  `hub_report` live only in the card. `hub cards compact` catches up a hub that grew first.
-- **A peer that went quiet.** A node whose pull keeps aborting knows it, and nobody runs another
-  machine's `hub doctor` — so it writes locally, reaches no one, and looks fine from every side.
-  `hub doctor` now names the nodes that have stopped appearing in the mesh's own history.
-- **Before you rewrite the hub folder** — `hub freeze "<why>" --by <you>` stops this node's
-  mesh-sync whatever schedules it, `hub unfreeze` releases it, and `hub doctor` will not let you
-  forget it is on.
-- **When a queue conflicts** — append-only by contract, but without union merge two
-  sides that both appended do collide. `hub queue resolve` keeps ours in place and
-  appends theirs at the end, which leaves every byte cursor in the hub valid.
-- **So that a card does not conflict** — run `hub card merge-driver` once on each node.
-  Cards then merge by `##` section: two nodes writing different sections never conflict,
-  and one section changed on both keeps both versions under a line asking a person to
-  look. A node's snapshot, presence, sense and read-mark files take the version with the
-  later time, in a merge and a rebase alike. It lives in the node's own `.git`, so a node
-  without it merges as before, and `hub doctor` says so.
-- **When a card does conflict** — the only shared file that can, being the one
-  mutable one — `hub card resolve` unions the bullet-list hunks (two nodes appending
-  facts have not disagreed) and leaves prose hunks for you, named by section. It
-  exits non-zero while anything is left.
-- **Several machines?** Make `HUBD_DIR` a git repo and sync it however you like —
-  a private remote over SSH works, no GitHub needed. Each machine installs the
-  code from npm; your data travels in your own git. Two separate tracks: code from
-  the package, data in your folder. Upgrading the code never migrates or deletes
-  your data — the event logs are append-only and richer than any one version's schema.
-- **A hub that was written in isolation** — a misrouted env var, a private `~/.hubd`, a
-  laptop that never joined — is folded in with `hub absorb <dir> --as <label>`: its logs
-  become that label's per-node files here, its task ids are renamed `<label>-<n>` in every
-  field and every text so they stop colliding with yours, its queue history is kept aside
-  and never re-delivered, and the plan (id map, unread blocks, cards kept for a human)
-  prints before anything is written. Nothing already in your hub is rewritten.
-- **Which version is actually running** — `hub version` prints the number *and the path
-  of the copy that printed it*, because on a real machine those are one question: a stale
-  global install and a live source checkout are both called `hub`. From 0.9.4 each journal
-  line also carries the version that appended it, so `hub doctor` reports the whole mesh —
-  which node is behind, whether **this** copy is the stale one, and whether two hubds are
-  writing into one node at the same time, **naming the agents on each version**. That last
-  detail is 0.9.12 paying for a wrong guess of its own: the warning used to say "two installs
-  on one node", and on this hub there was one install — a resident MCP server kept writing the
-  version it had imported while a fresh CLI wrote the current one out of the same file.
-  Upgrading a package on disk does not reach a process that already imported it. This whole
-  block exists because the machine that develops hubd ran a CLI nine releases old for weeks
-  and nothing anywhere could have said so.
-- **Resuming after a context compaction** — a compaction hands an agent a summary of what
-  happened; work resumes from what exists. `hub whereami` (shell) and `hub_context` (MCP) answer
-  from state: the project, its digest with age and a `digestStale` verdict, open tasks, who else
-  is heartbeating in this checkout, the journal tail — plus, in the shell, the git inventory
-  (commit subjects, diff stat, untracked files with their first line, files changed in the last
-  half hour). `hub_whatsnew({since:"session"})` returns what the session itself wrote, which the
-  default "since my last call" checkpoint cannot. Editor hooks that run `hub whereami` at session
-  start and after a compaction: [prompts/client-hooks.md](prompts/client-hooks.md).
-- **Claims that warn before the edit** — a claim's `area` is a path glob relative to the project
-  root (`src/**/*.ts`, `docs/{a,b}.md`, a directory). `hub claim check <path>` /
-  `hub_claim_check` says whose zone a file is in before you write it, and `hub_context` reports
-  `claimsTouched` when a freshly changed file sits in somebody's. The lock stays soft: it
-  informs, it never forbids. Prose areas are still accepted, flagged `matchable:false`.
-- **Patching a digest** — `hub card <slug> --replace "<old>" --with "<new>"` (or
-  `hub_card_set({replace:[{from,to}], appendLine})`) fixes one stale line without rewriting the
-  owner's framing; a `from` that is not there is an error, never a silent no-op. `hub_report`
-  tells you the digest's age in every reply and nudges once it trails the journal you just moved.
-- **What an upgrade needs from you** — sometimes a new version wants something outside
-  the code: a variable in a client's config, a role declared in the hub, a protocol
-  section worth re-reading. hubd works that out and tells the agents itself:
-  `hub_whatsnew` returns an `environment` list, every item saying what is wrong, what
-  fixes it, and **who can** — the agent, the agent plus a client restart, or you. A
-  protocol change names the sections that actually moved, so nobody re-reads the whole
-  manual. `hub doctor` shows the same list to a human. Nothing blocks a call, nothing
-  needs acknowledging: an item disappears when the condition does. Per-node state in
-  `.env-state.json`, never mesh-synced — three machines have three environments.
-
-## How it works
-
-- **Journal & structured reports** — append-only team log (INBOX.md) you read
-  with your eyes. At session end an agent files a `hub report` of prefix-tagged
-  lines (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`) that fan into
-  the project card's sections — structure in fields, not one prose blob. "What
-  changed" is read from git, not retyped. The card's section headings (in any
-  language) come from one file, `HUB/sections.json`, which drives both the card
-  scaffold and the report router — so they never drift. A write reaches the
-  section a card already has under any of its headings, so re-localising a hub
-  never grows a second copy; `hub cards merge-sections` folds old doubles.
-  A notifier follows the journal with `hub watch --as <name> --follow --json`:
-  each new entry once, by a cursor that a mesh merge, a reset or a log
-  rotation does not throw off. With `--exec <command>` each entry goes to the
-  command and is marked only when it exits 0, so a failed delivery is retried
-  ([docs/interop.md](docs/interop.md#following-the-journal-hub-watch);
-  [contrib/watch-to-matrix.sh](contrib/watch-to-matrix.sh) posts to a Matrix room).
-- **Queues** — per-role message queues. Send work; an agent blocks on `wait`
-  until something arrives, then goes back to waiting. No polling you, no
-  prodding them. A queue has one live consumer by default — run a single waiting
-  session per role. Roles listed in `<team>/subscriber-roles.json` fan out instead:
-  every waiting session gets its own cursor and sees every message, keyed by a
-  name that survives a restart (`HUBD_SUBSCRIBER` / `HUBD_SESSION` / `HUBD_AGENT`),
-  so a respawned reader picks up where it left off. Crossing
-  machines is a separate, replaceable concern: `scripts/mesh-sync.sh` moves the
-  folder over git+ssh, and [mrgd](https://github.com/bzdOS/mrgd) can carry the
-  same queues as Matrix room traffic — concurrently, on the same directory. See
-  [docs/interop.md → Transport](docs/interop.md#transport-how-a-queue-crosses-machines),
-  including how to check which of the two is actually enabled on a given node.
-  In work mode (`hub queue wait <role> --tasks`) the queue is the role's own open,
-  ready tasks: reading consumes nothing, starting is a claim with a TTL, and
-  cancelling is closing the task — an order read by a turn that did nothing is
-  never lost, and an order for a cancelled task never runs.
-- **Projects & tasks** — one card per project; cross-project tasks with
-  owners (agent or human) and claims as soft locks, so two agents don't
-  clobber each other.
-- **Roles, tracks, supervision** — a role is a resource card of type `role`
-  (`rank` head / worker / fleet, a `head` link, its repo). A project with a head
-  is a track. `hub board` puts every track on one screen for the owner — each
-  role's state, what got done this week and why it was accepted, what is next,
-  what waits for you. `hub sense <head>` measures the head's workers and branches
-  without a model and wakes the head only on an event; with no private patterns
-  declared it passes no branch. A loop reports its state as heartbeat fields
-  (`--state`, `--turn`, `--empty` ...), so nothing parses its wording.
-- **Reflections** — a turn's report ends with a reflection: goal, result,
-  obstacle (a class from a fixed list, plus the fact), what to do instead, and
-  a proposed rule. It goes as the report's `reflect` field, checked against
-  the lists, or as the `REFLECT` block in the text, read as written with what
-  is off the lists named in the reply. `hub reflect --project <p>` (MCP
-  `hub_reflect`) counts them per role and per obstacle class, shows the latest
-  facts and the rules more than one turn proposed, and lists a head's
-  decisions on rules; `--json` keeps every key, so a script can read it. A
-  head reads that digest instead of its workers' reports in full. A rule that
-  only restates the prompt's own example is refused in the field, named a
-  problem in the text, and counted apart, never as a rule. `hub recall` finds
-  a rule or an obstacle as a hit of its own. One rule in other words counts as
-  one: wordings that share 40% of their words (a word by its first five
-  letters) are its variants. A rule said 3 times by one role, or by 2 roles,
-  in 7 days is a candidate for the project's laws: `hub reflect --promote`
-  lists them by id, and the head accepts or rejects each with
-  `hub reflect --accept|--reject <id>`. An accepted one is a line in the
-  card's Laws section, never rotated out, and `hub_context` returns the laws
-  to every role of the project; a rejected one stays off the list until it
-  is said again.
-- **Resources & relationships** — infra is a card too: hosts, vms, services,
-  endpoints, providers under `resources/`, with structured frontmatter
-  (type, address, os, provider, status) and **typed `[[wikilink]]` edges**
-  (`runs_on`, `depends_on`, `deploys_to`, `exposes`, `part_of`, ...). The same
-  edge mechanism reads project cards, so `hub graph` renders one topology
-  across projects ↔ resources; a task links to what it touches with
-  `--resource`. Facts go in fields, not prose.
-- **Board (read-only)** — `hub serve`: a Summary of each track, assembled by a
-  script (goal, work in hand, blocked, closed today, the head's verdict on each
-  task, what each role reports blocked; the escalations to the fleet still waiting
-  for your answer; each node's sessions, disks and relays from its snapshot,
-  what is wrong in red; the artifacts delivered to the track's roles), Tracks, a
-  Live kanban with the mail relay's deliveries in a row of their own, and a History of
-  the journal to play back. Cards move because agents move them. The only
-  button is **⚙ Rules**, and it opens AGENTS.md. You don't manage the
-  agents — you manage the rules.
-- **Harvest** — one prompt turns any working dialog into project digests, tasks
-  and logged decisions. Served as an MCP prompt (`harvest`) and `hub harvest`, so
-  you invoke it straight from your client — no fetching the file. See
-  [HARVEST.md](HARVEST.md).
-- **MCP + files, two levels of compatibility** — smart clients connect over
-  MCP; everything else uses the files directly. If hubd is down, your data
-  is still just markdown.
-- **Instructions that stay current** — your team rules live in `AGENTS.md` (yours
-  to write); hubd's own mechanics live in `HUBD.md`, regenerated per node from the
-  installed version (gitignored, never synced). Update the code → the next `hub`
-  command that writes (or `hub upgrade`) refreshes `HUBD.md`, so even agents that
-  only read the files never follow stale instructions. A command that only reads
-  writes nothing to the hub.
-
-## Principles (violating these = not this product)
-
-Files first. Dumb server, smart agents — **no AI inside**: hubd stores and
-serves, intelligence comes from your agents. **Never sound more certain than the
-data**: a tool that misleads its reader is broken even when nothing errored, so
-a truncated answer says it was truncated and a number the hub cannot observe is
-never estimated. Human-readable everything. Zero dependencies. Read-only for
-the human; write access flows through rules.
-Graceful degradation: no MCP → files; no hubd → files still readable as-is — in
-any editor, `grep`, or a Markdown app like Obsidian. See
-[Reading your hub with any tool](docs/interop.md).
-
-## About that recording
-
-The board at the top is the real thing on invented data:
+The recording is the real thing on invented data:
 `node scripts/capture-kanban.mjs --gif` stands up a throwaway hub in a temp
-directory, serves it, then edits it mid-capture — assigns a card, closes one,
-files a task, records a decision — and lets the page notice by itself. Nothing is
-staged and nobody's actual hub is ever filmed. Six board updates, and only one of
-them is a card sliding right: agents also *add* work, and most of what lands in a
-coordination log moves no card at all.
+directory, serves it, then edits it mid-capture — assigns a card, closes one, files
+a task, records a decision — and lets the page notice by itself. Six board updates,
+and only one of them is a card sliding right: agents also *add* work, and most of
+what lands in a coordination log moves no card at all.
+
+![the Tracks view on the demo hub: what waits for the owner, then each track's roles, done, next and blocked](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/tracks.png)
+
+*Tracks: what waits for you — your queue, your tasks, the escalations nobody has
+answered — then each track: every role's state and last word, what was done this
+week and the head's verdict on it, what is next, what is blocked and on what.*
+
+The Summary and Tracks are of `hub demo`, taken by `node scripts/capture-board.mjs`;
+nobody's actual hub is ever filmed.
+
+## How it fits together
+
+- **`hubd`** — the daemon: an MCP server (stdio, JSON-RPC 2.0, or HTTP) that agents talk to.
+- **`hub`** — the CLI: the same data for humans, no LLM required.
+
+Like `sshd` and `ssh`. The daemon serves agents; the CLI serves you. Both read and
+write one folder, `HUBD_DIR` (default `~/.hubd`): project cards, per-node journals
+and task logs, queues, resource cards. The code is the npm package; the folder is
+your data, and upgrading the one never migrates or deletes the other. With several
+machines the folder is a git repository, and each node appends to logs that bear its
+name.
+
+[Concepts](docs/concepts.md) has the picture, every word with the file it lives in,
+and how each part works: the journal and reports, queues, tasks and claims, roles
+and tracks, reflections and laws, resources, the board, harvest.
+
+## Why trust it
+
+A tool for agents rarely fails by crashing. It fails by *answering* — confidently,
+and wrong: a list that ended early without saying so, a count that is mostly
+duplicates, a task close that lands on somebody else's id. A person would stop at
+"wait, fifteen hundred tasks?" An agent takes the number and builds on it.
+
+hubd is built against that failure mode, and it shows in the boring parts. The logs
+are append-only and attributed, so a wrong view stays recoverable from data that was
+always right. Every truncation announces itself. Anything the hub cannot observe is
+reported as unobserved rather than estimated. Much of this codebase is not features
+— it is refusals to sound certain.
+
+[What hubd promises](docs/guarantees.md) lists each promise with the real case that
+produced it and the version that keeps it: your data and upgrades, answers that do
+not overstate, the mesh, queues, cards, agents that come back after a compaction.
+
+**Principles** (violating these = not this product): files first; dumb server, smart
+agents — **no AI inside**; never sound more certain than the data; human-readable
+everything; zero dependencies; read-only for the human, write access flows through
+rules; graceful degradation — no MCP → files, no hubd → the files are still readable
+as they are ([reading your hub with any tool](docs/interop.md)).
 
 ## What hubd is not
 
@@ -391,7 +188,7 @@ Not an orchestrator (doesn't launch agents or stream output). Not vector
 memory (the journal stores facts you can read, not embeddings). Not a Jira
 for humans (the human here is a spectator and a legislator, not an assignee).
 Not another chat (talk to hubd through *your* agent; hands — CLI; eyes —
-kanban).
+the board).
 
 ## Built by the team it coordinates
 
@@ -407,41 +204,7 @@ invented — and one evening hour by hour in [the case study](docs/case-study.md
 
 The human's main job was editing the rules.
 
-## Pricing
-
-The core is MIT, forever. Personal use is free, forever. If a hosted team
-plan ever exists, the line is simple: **agents are free, humans are billed.**
-
-## Roadmap
-
-Shipped: multi-machine sync (per-host append-only logs, conflict-free); remote
-access over HTTP (token-gated, multi-tenant, see [self-hosting](docs/self-hosting.md));
-a typed **relationship graph** (`[[wikilink]]` edges across projects and resources,
-`hub graph`); **resources** as first-class cards (hosts / services / endpoints);
-**structured reports** that fan into card sections; one-file section **i18n**
-(`sections.json`); a per-node **`HUBD.md`** protocol that regenerates to match the
-installed version; **harvest** as an MCP prompt; cwd → project auto-bootstrap
-(`hub_context`: marker file / recorded sync path / folder-name guess, no manual
-`hub_get` needed); a **presence registry** (`hub_heartbeat`/`hub_presence`,
-TTL freshness like claims) so MCP/headless agents show up next to screen-scraped
-ones, with queue depth surfaced in `hub_brief` — and, from 0.9.13, a **fleet view that
-admits its blind spots**: `presence/` is node-local, so each node publishes one small
-`presence.<node>.json` and `hub_presence` reports which node observed each row plus a
-`coverage` list naming any member that is reporting nothing. A role nobody reports is
-invisible, not dead — telling those two apart is worth 92 hours, which is what confusing
-them cost once; and **buttons** — owner-decision
-queue items rolled up in `hub_brief` as "N buttons waiting (oldest X days)"
-(`HUB/owner-roles.json` names the human roles).
-
-Next: task kinds with their own lifecycles (a *communicative* task knows it's
-waiting on a reply); an end-to-end remote mode (the server never reads your
-work); a gateway that proxies your personal MCP servers; and the
-**narrative layer** promoted into the server — `hub_chronicle` / `hub_probe`
-plus mood/check-in journal kinds, once the file-first version proves itself
-([design](docs/narrative-layer.md), templates in `hubd-company/`). The file
-format is the stable contract; everything else is negotiable.
-
-## Where this was used, and what it actually prevented
+## Where it came from, and what it prevented
 
 The case hubd was built against, and the one worth describing because it is the
 awkward shape real work has:
@@ -483,6 +246,58 @@ What that costs without a shared journal is specific, not abstract:
 None of that needs a server, and none of it left the machines involved: the data
 is markdown and JSONL in a folder, synced through a private git remote over SSH.
 That is the whole reason it was built this way.
+
+## Roadmap
+
+Shipped, by level ([changelog](CHANGELOG.md) for every version):
+
+- **Memory** — project cards with sections in any language (`sections.json`),
+  structured reports that fan into them, the journal, `hub recall`; cwd → project
+  with `hub_context`; `hub whereami` after a compaction (0.9.16); compact reads that
+  say what they left out (0.9.35); a `HUBD.md` protocol regenerated per node.
+- **Work and decisions** — tasks with dependencies and deadlines, `hub now`,
+  `hub agenda`, `hub plan`; claims as path globs that warn before the edit (0.9.16);
+  owner buttons; usage, audit and lint.
+- **Addressable agents** — queues with wait and ack, subscriber roles, work mode
+  (0.9.28); read marks every node counts by (0.9.33, 0.9.49); messages that are
+  prose, not cargo, and queues with limits (0.9.34); ids that name one message
+  (0.9.54).
+- **Several machines** — per-node append-only logs; `hub doctor` on the mesh;
+  presence that names what it cannot see (0.9.13); `hub absorb` (0.9.18);
+  `hub freeze` (0.9.20); the quiet peer (0.9.22); cards merged by section (0.9.40,
+  0.9.51–0.9.53); node snapshots on the board (0.9.47).
+- **A team with roles** — roles as cards, tracks, `hub board`, the board's Tracks
+  and History, `hub sense` (0.9.28); role rules from templates (0.9.32), served over
+  MCP (0.9.41); the Summary with goals and verdicts (0.9.45), escalations (0.9.46)
+  and the mail row (0.9.48).
+- **A team that learns** — reflections (0.9.42), `hub_reflect` (0.9.44), laws
+  (0.9.54).
+- **A service** — MCP over HTTP, token-gated and multi-tenant; resources and the
+  `[[wikilink]]` graph; harvest as an MCP prompt; `hub watch` and `--exec` (0.9.43,
+  0.9.44); commands that only read write nothing (0.9.31); `hub demo` (0.9.55).
+
+Next: task kinds with their own lifecycles (a *communicative* task knows it's
+waiting on a reply); an end-to-end remote mode (the server never reads your
+work); a gateway that proxies your personal MCP servers; and the
+**narrative layer** promoted into the server — `hub_chronicle` / `hub_probe`
+plus mood/check-in journal kinds, once the file-first version proves itself
+([design](docs/narrative-layer.md), templates in `hubd-company/`). The file
+format is the stable contract; everything else is negotiable.
+
+## Documentation
+
+[docs/index.md](docs/index.md) maps the documentation by what you want to do. The npm
+package carries the binaries, `prompts/`, `contrib/`, the mesh scripts, this README,
+the changelog, `HARVEST.md`, and of `docs/` the map and
+[quick start](docs/quickstart.md), [recipes](docs/recipes.md),
+[concepts](docs/concepts.md), [guarantees](docs/guarantees.md),
+[interop](docs/interop.md) and [self-hosting](docs/self-hosting.md). The rest of
+`docs/`, and `hubd-company/`, are in the repo.
+
+## Pricing
+
+The core is MIT, forever. Personal use is free, forever. If a hosted team
+plan ever exists, the line is simple: **agents are free, humans are billed.**
 
 ## License
 
