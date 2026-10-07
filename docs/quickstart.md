@@ -92,8 +92,8 @@ acknowledging: an item disappears when its condition does.
 
 ## Where to go next
 
-- [Recipes](recipes.md) — complete setups: a standing worker, an orchestrator
-  fleet, owner buttons, two machines, infra topology.
+- [Scenarios](scenarios/README.md) — complete setups: a night worker, a track
+  with a head, the owner's day, a fleet, a company server, infra topology.
 - [`hubd-company/`](../hubd-company/) (repo only) — a ready org template:
   constitution, role onboardings, recipes, a weekly chronicle.
 - [Self-hosting](self-hosting.md) — one shared hub for a team over HTTP.

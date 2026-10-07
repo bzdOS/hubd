@@ -183,8 +183,8 @@ split the work; that is a pool. For an announcement every session should see, li
 the role in `subscriber-roles.json` in the hub: each waiting session then reads the
 role on its own cursor, keyed by `HUBD_SUBSCRIBER`, else `HUBD_SESSION`, else
 `HUBD_AGENT`. An orchestrator that watches every role at once without taking their
-messages calls `hub_queue_wait_all`. [Recipe 3](../recipes.md#3-orchestrator-and-a-fleet)
-is the whole shape.
+messages calls `hub_queue_wait_all`. A head that hands out work and checks what comes
+back is [3. A track with a head](../scenarios/03-track-with-a-head.md).
 
 ## What hubd refuses here, and why
 

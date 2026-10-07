@@ -277,8 +277,8 @@ queue takes every message, however full, so a team in trouble can always say so.
 ## What you have now
 
 A team: tracks with heads, workers under them, a coordinator, rules from one source,
-and a board that shows all of it and what waits for you. The full shape with several
-heads is [Recipe 3](../recipes.md#3-orchestrator-and-a-fleet); the words are in
-[Concepts](../concepts.md).
+and a board that shows all of it and what waits for you. One track, from dispatch to
+your answer, is [3. A track with a head](../scenarios/03-track-with-a-head.md); the
+words are in [Concepts](../concepts.md).
 
 Next: [6. Laws](6-laws.md) — a team that learns from its own turns.

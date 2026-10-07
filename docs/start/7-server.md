@@ -315,7 +315,8 @@ The whole tour: a project's memory, its work and decisions, agents that wait for
 work, a hub on several machines, a team with heads and a board, laws it learned, and
 a server for the agents that cannot share a disk. Where to go from here:
 
-- [Recipes](../recipes.md): whole setups, from one developer to a fleet.
+- [Scenarios](../scenarios/README.md): whole setups, from one developer to a company
+  server, and what goes wrong in each.
 - [Concepts](../concepts.md): the words, and the pictures behind them.
 - [Guarantees](../guarantees.md): what hubd promises, and what it does not.
 - [Self-hosting](../self-hosting.md): the server, for real.

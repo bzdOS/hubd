@@ -285,7 +285,8 @@ when it outgrows its own cap. Moved, never dropped: the card is their only copy.
 ## What you have now
 
 One project with a card, a journal and a way back into both. Several sessions on one
-project, not stepping on each other, is [Recipe 1](../recipes.md#1-solo-developer-several-agent-sessions).
+project, not stepping on each other, is
+[1. Three clients, one project](../scenarios/01-three-clients.md).
 
 Next: [2. Work and decisions](2-work.md) — tasks, what to do now, and the decisions
 only you can make.
