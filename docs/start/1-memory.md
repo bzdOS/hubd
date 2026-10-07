@@ -45,6 +45,7 @@ scaffolding a team folder in /tmp/hub-tour
 Next steps:
   Connect an agent:  claude mcp add --scope user hubd --env HUBD_AGENT=dev-<project> --env HUBD_DIR=/tmp/hub-tour --env HUBD_TEAM_DIR=/tmp/hub-tour --env HUBD_NODE=oak -- npx -y @bzdos/hubd
                      (name HUBD_AGENT for the function the agent performs, not the model)
+  Or, checked:       hub setup --harness claude|gemini|opencode --agent dev-<project>
   Check setup:       hub doctor
   Full org template: hubd-company/ in the hubd repository
 ```
@@ -207,8 +208,10 @@ Give the agent the same hub, and a name:
 claude mcp add hubd-tour --env HUBD_AGENT=dev-shop --env HUBD_DIR=/tmp/hub-tour --env HUBD_TEAM_DIR=/tmp/hub-tour --env HUBD_NODE=oak -- npx -y @bzdos/hubd
 ```
 
-Any MCP client that can run `npx -y @bzdos/hubd` over stdio works the same; a client
-without MCP pastes a block from [prompts/](../../prompts/README.md). Restart the
+`hub setup --harness claude --agent dev-shop --hub /tmp/hub-tour` does it too, as `hubd`,
+and starts the server first to see it answer; it knows Gemini CLI and opencode as well.
+Any MCP client that can run `npx -y @bzdos/hubd` over stdio works
+the same; a client without MCP pastes a block from [prompts/](../../prompts/README.md). Restart the
 client in the project folder and tell it:
 
 > Call hub_context with your cwd.
