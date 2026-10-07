@@ -98,3 +98,5 @@ acknowledging: an item disappears when its condition does.
   constitution, role onboardings, recipes, a weekly chronicle.
 - [Self-hosting](self-hosting.md) — one shared hub for a team over HTTP.
 - [Interop](interop.md) — reading the hub with grep, Obsidian, anything.
+- [Reference](reference/README.md) — every command, tool, variable and file,
+  generated from the code.

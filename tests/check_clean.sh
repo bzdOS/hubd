@@ -133,3 +133,8 @@ PY
 # 3) hubd-company ships snapshots of root prompt files; a stale copy teaches
 #    agents an outdated protocol, which is worse than none.
 node scripts/sync-templates.mjs --check || exit 1
+
+# 4) docs/reference/ is generated from the code; a page behind it documents
+#    the release before this one. It runs the CLI and the server, so the
+#    commit-msg hook (--msg) leaves it to the full gate and the tests.
+[ -n "$MSG_FILE" ] || node scripts/gen-reference.mjs --check || exit 1

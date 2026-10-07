@@ -180,6 +180,9 @@ intake for agents, over the network.
 
 ## Environment
 
+The variables a server uses. Every variable hubd reads is in
+[Reference → Environment](reference/env.md).
+
 | Variable | Default | What it does |
 |---|---|---|
 | `HUBD_TOKEN` | — | single-tenant bearer secret (≥16 chars; required unless multi-tenant) |
