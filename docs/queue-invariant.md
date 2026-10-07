@@ -227,6 +227,23 @@ own block, where the last header before it is still the watermark. Telling that
 apart needs the bytes that were there before. A cursor an older hubd left at such a
 cut, with the file whole again and not yet read, is trusted the same way.
 
+The writer was found later (0.9.58): a relay that copied the shard into the hub dir
+with `tar` every minute, rewriting it in place whether it had changed or not. Its
+file was caught the other way round too, LONGER than the cursor, with its newest
+block not all there yet. The reader handed out the part that was there, moved its
+cursor to the cut, and on the next poll handed out the rest without its header.
+
+- **A block not yet whole is not handed out.** hubd ends every block it writes with
+  a newline, so a tail without one is a file still being written. The whole blocks
+  before the last header go out, and the cursor stops at that header. A file nothing
+  has written to for a minute is taken as it stands, so a block appended by hand
+  without its newline is late, not lost.
+
+The relay now writes a copy beside the file and renames it over the old one, and
+leaves an unchanged file alone. A git merge writes files in place too, so the
+reader has to hold either way. What this cannot see: a cut that falls just after a
+newline inside the newest block. That part goes out as if it were the whole block.
+
 ## Read marks — the position every node can see
 
 A cursor never leaves its node, so every count taken anywhere but on the reader's

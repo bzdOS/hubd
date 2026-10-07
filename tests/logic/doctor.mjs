@@ -261,6 +261,14 @@ const GI = mktmp();
   const d0 = dr(), tail0 = d0.out.trim().split('\n').pop();
   ok(d0.code === 0 && /doctor:/i.test(tail0) && /ok/i.test(tail0), `doctor: a fresh team is ok, exit 0 (last line: ${tail0})`);
   fs.mkdirSync(hub, { recursive: true });
+  // A protocol change is printed for the human, and is not a warning: nothing in the hub clears it.
+  const sections = core.sectionHashes(fs.readFileSync(path.join(REPO, 'prompts/protocol.md'), 'utf8'));
+  sections[Object.keys(sections)[0]] = 'stale00000';
+  fs.writeFileSync(path.join(hub, '.env-state.json'), JSON.stringify({ protocol: { version: '0.0.1', sections, changed: [], changedFrom: null } }));
+  const dp = dr(), tailp = dp.out.trim().split('\n').pop();
+  ok(/protocol moved from v0\.0\.1/.test(dp.out) && dp.code === 0 && /ok/i.test(tailp),
+    `doctor: a protocol change is shown, and is not a warning (exit ${dp.code}, last line: ${tailp})`);
+  fs.rmSync(path.join(hub, '.env-state.json'));
   const lock = path.join(hub, 'tasks.json.lock'), past = Date.now() / 1000 - 120;
   fs.writeFileSync(lock, ''); fs.utimesSync(lock, past, past);
   const d1 = dr();

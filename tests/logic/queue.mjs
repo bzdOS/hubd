@@ -447,6 +447,41 @@ ok(fmNoId.changed && /legacy 1/.test(fmNoId.text) && /legacy 2/.test(fmNoId.text
     `cut: every block went out once, and every handout starts with its header (got ${ids})`);
 }
 
+/* ── a block caught while it is written ──
+ * The same relay, the other way round: the file rewritten in place is LONGER than the cursor, and
+ * its newest block is not all there yet. Handed out, the first part went out alone, and the rest
+ * followed on the next poll without its header. */
+{
+  const GW = mktmp();
+  fs.mkdirSync(path.join(GW, 'queues'), { recursive: true });
+  const gwQ = path.join(GW, 'queues', 'w.n2.queue.md');
+  const gwOff = () => parseInt(fs.readFileSync(path.join(GW, '.qstate', 'w.n2.queue.md.offset'), 'utf8'), 10);
+  const gwBlk = (n, body) => `\n## 2026-10-07 12:1${n} · from fir · id fir-${n}\n${body}\n`;
+  const gwWait = async () => { const r = await queueLib.queueWait('w', { timeout: 0, root: GW }); return r.changed ? r.text : ''; };
+  const b1 = gwBlk(1, 'order one'), b2 = gwBlk(2, 'order two — the long one\nwith a second line'), b3 = gwBlk(3, 'order three');
+  fs.writeFileSync(gwQ, b1);
+  ok(/order one/.test(await gwWait()), 'growing: before it, the queue is read to its end');
+  const all = Buffer.from(b1 + b2 + b3);
+  fs.writeFileSync(gwQ, all.subarray(0, all.length - 4));
+  const part = await gwWait();
+  ok(part === b2.trim(), `growing: the whole block before a cut one goes out, the cut one does not (got ${JSON.stringify(part.slice(0, 60))})`);
+  fs.writeFileSync(gwQ, all);
+  const rest = await gwWait();
+  ok(rest === b3.trim(), `growing: once whole, the cut block goes out whole, header and all (got ${JSON.stringify(rest.slice(0, 60))})`);
+  const end = gwOff(), b4 = gwBlk(4, 'order four'), with4 = Buffer.concat([all, Buffer.from(b4)]);
+  for (const n of [10, Buffer.byteLength(b4) - 3]) {
+    fs.writeFileSync(gwQ, with4.subarray(0, all.length + n));
+    const got = await gwWait();
+    ok(got === '' && gwOff() === end, `growing: a block cut at byte ${n} of ${Buffer.byteLength(b4)} goes out not at all, and the cursor stays (got ${JSON.stringify(got)})`);
+  }
+  // Nothing has written to it for a minute: taken as it stands. A block added by hand without its
+  // newline is late, not lost.
+  const old = new Date(Date.now() - 120000);
+  fs.utimesSync(gwQ, old, old);
+  const settled = await gwWait();
+  ok(settled === b4.slice(0, -3).trim(), `growing: a file left as it is for a minute goes out as it stands (got ${JSON.stringify(settled)})`);
+}
+
 // this node's own shard (the tests run as node "cedar"), and an empty one of its own
 fs.writeFileSync(path.join(QG, 'queues', 'ghost.cedar.queue.md'), oldMsg);
 fs.writeFileSync(path.join(QG, 'queues', 'hollow.cedar.queue.md'), '');

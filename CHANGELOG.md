@@ -4,6 +4,26 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.58 — 2026-10-07
+
+- **A block still being written is not handed out.** The shard cut short in 0.9.57 was
+  written in place by a relay that copied it into the hub dir with `tar` every minute, and a
+  reader could also catch it the other way round: longer than its cursor, with the newest
+  block not all there yet. The part that was there went out, and on the next poll the rest
+  followed without its header. hubd ends every block it writes with a newline, so a tail
+  without one is now taken for a file still being written: the whole blocks before it go
+  out, and the cursor stops at its header. A file nothing has written to for a minute is
+  taken as it stands, so a block appended by hand without a newline is late, not lost.
+  [The queue invariant](docs/queue-invariant.md#cut-short--a-file-caught-while-it-is-written)
+  has the details.
+- **A protocol change is told once per session, not on every result.** The line each MCP
+  result carries asked about the environment as no session in particular, and no session
+  ever acknowledges anything, so a session that `hub_whatsnew` had already told about a
+  changed protocol section heard it again on every call until the next release. The line
+  now asks as the session, and is recomputed right after `hub_whatsnew`. `hub doctor` still
+  prints the change and no longer counts it as a warning: nothing in the hub clears it, and
+  it made `doctor` exit 1 for a whole release.
+
 ## 0.9.57 — 2026-10-07
 
 - **A message is handed out once, even when its file is cut short.** A reader was handed the

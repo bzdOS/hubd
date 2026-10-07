@@ -570,6 +570,9 @@ export function cursorStalls(stateDir, files) {
   return out;
 }
 
+const WRITE_SETTLE_MS = 60000;
+const mtimeOf = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
+
 /* `reader` is the role and subscriber this cursor reads for — null for a tap, which reads for
  * nobody and so leaves no ack and no read mark behind. */
 function drainFile(qdir, stateDir, f, reader = null) {
@@ -620,6 +623,21 @@ function drainFile(qdir, stateDir, f, reader = null) {
       // The file was cut between the stat and the read: hand nothing out and leave the cursor, or
       // it would move past bytes never read. The next poll sees the new size.
       if (chunk === null) return null;
+      /* A tail without its newline is a file still being written: hubd ends every block with one.
+       * Measured on a mesh node: a relay rewrote a shard in place every minute, and a reader that
+       * came in mid-write could be handed the first part of the newest block, then, from the cut
+       * on, the rest of it without its header. So the whole blocks before the last header go out,
+       * and the cursor stops at that header. A file nothing has written to for a minute is taken
+       * as it stands: a block appended by hand without a newline is late, not lost. */
+      let to = sz;
+      if (!chunk.endsWith('\n') && Date.now() - mtimeOf(full) < WRITE_SETTLE_MS) {
+        let h = -1;
+        for (const m of chunk.matchAll(BLOCK_HEAD)) h = m.index;
+        const cut = h > 0 && chunk[h - 1] === '\n' ? h - 1 : h;
+        if (cut <= 0) return null;
+        chunk = chunk.slice(0, cut);
+        to = off + Buffer.byteLength(chunk, 'utf8');
+      }
       // The watermark AHEAD of the cursor: a file rolled back under it has its newer version back
       // (the next try of a failed merge, or the one that succeeds), and everything up to and
       // including the watermark's block was handed out before. Only a header with an id is unique
@@ -629,9 +647,9 @@ function drainFile(qdir, stateDir, f, reader = null) {
         if (end !== -1) chunk = chunk.slice(end);
       }
       const last = lastHeaderIn(chunk) || mark;
-      writeCursor(offFile, sz, last);
+      writeCursor(offFile, to, last);
       if (reader) {
-        if (last) read = { off: sz, mark: last };
+        if (last) read = { off: to, mark: last };
         // One "delivered" per block: handing a block out again — a cursor reset, a second
         // subscriber of a broadcast — does not deliver it again.
         try {
