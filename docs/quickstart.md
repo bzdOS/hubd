@@ -95,7 +95,8 @@ acknowledging: an item disappears when its condition does.
 - [Scenarios](scenarios/README.md) — complete setups: a night worker, a track
   with a head, the owner's day, a fleet, a company server, infra topology.
 - [`hubd-company/`](../hubd-company/) (repo only) — a ready org template:
-  constitution, role onboardings, recipes, a weekly chronicle.
+  the company's rules, roles declared and rendered from one file, recipes, a
+  weekly chronicle.
 - [Self-hosting](self-hosting.md) — one shared hub for a team over HTTP.
 - [Interop](interop.md) — reading the hub with grep, Obsidian, anything.
 - [Reference](reference/README.md) — every command, tool, variable and file,

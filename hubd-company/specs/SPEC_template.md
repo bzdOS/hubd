@@ -1,6 +1,6 @@
 # SPEC_<name> — <one-line goal>
 
-*An assignment from cto to an executor (dev/runner). The constitution makes
+*An assignment from cto to an executor (dev/runner). AGENTS.md makes
 `specs/SPEC_*.md` the channel for work: cto writes the spec, the executor appends
 `## Report`, cto appends `## Acceptance`. Copy this file to `SPEC_<name>.md` and fill it in.*
 

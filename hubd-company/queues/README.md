@@ -7,15 +7,19 @@ Each machine appends only to its own file, so mesh-synced nodes never conflict.
 ## Message block format
 
 ```
-## YYYY-MM-DD HH:MM · from <sender>
+## YYYY-MM-DD HH:MM · from <sender> · id <node>-<N> · task #<id>
 <message text>
 ```
+
+`id` is the message's own, for quoting it in an answer. `task` is there when the
+sender named one (`--task <id>`); `hub queue wait <role> --tasks` returns the
+messages and the role's ready tasks together.
 
 ## Sending and receiving
 
 ```
-hub queue send <role> "<text>" --from <your-role>
-hub queue wait <role> [--timeout <seconds>]
+hub queue send <role> "<text>" --from <your-role> [--task <id>]
+hub queue wait <role> --tasks [--timeout <seconds>]
 ```
 
 ## Delivery

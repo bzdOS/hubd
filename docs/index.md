@@ -10,7 +10,7 @@ Find what you want to do; the link is the place to read about it.
 | install hubd, start a hub and connect a first agent | [1. Memory](start/1-memory.md) · [all the tutorials](start/README.md) |
 | follow a whole setup, from an empty hub to what goes wrong in it | [Scenarios](scenarios/README.md) |
 | connect a client that has no MCP | [prompts/](../prompts/README.md) |
-| start from a ready company layout: rules, roles, cards | [hubd-company/](../hubd-company/) |
+| start from a ready company: rules, roles with heads, their rendered rules | [hubd-company/](../hubd-company/) |
 | run one shared hub over HTTP for a team | [7. A server](start/7-server.md) · [9. A company server](scenarios/09-company-server.md) · [Self-hosting](self-hosting.md) |
 | upgrade, and know what an upgrade will and will not touch | [Quick start → Upgrading](quickstart.md#9-upgrading) · [What hubd promises → Your data](guarantees.md#your-data) |
 
