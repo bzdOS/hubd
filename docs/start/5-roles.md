@@ -237,6 +237,8 @@ HUBD_DIR=/tmp/hub-tour-demo HUBD_TEAM_DIR=/tmp/hub-tour-demo hub board
 ```
 
 ```text
+a demo hub in /tmp/hub-tour-demo: an invented team with 2 tracks, 6 roles and 3 machines, and a week of its work
+…
 ── atlas · head atlas-head · done 7d 2 · next 3 · blocked 1
     ● atlas-head        head   waiting 5m                    10-07 08:03 #fir-3 Fix the flaky login test
     ● atlas-dev         worker turn 12m #31    #fir-1        10-07 10:03 fir-1: index rebuilt with the new weights; p95 query 84 ms on staging…
