@@ -6,6 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
@@ -25,6 +26,7 @@ import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/car
 import { runRecall } from './lib/recall.mjs';
 import { WINDOW_DAYS, journalStamp, watchExec, watchPass } from './lib/watch.mjs';
 import { runAbsorb } from './lib/absorb.mjs';
+import { writeDemo, demoTarget } from './lib/demo.mjs';
 import { runBoard } from './lib/board.mjs';
 import { startServer } from './lib/serve.mjs';
 import { runDoctor } from './lib/doctor.mjs';
@@ -2003,6 +2005,42 @@ command('queue', () => {
   }
 });
 
+/* A hub to look at before any agent has written to one (demo.mjs). It writes only into the folder
+ * it is given, never into this hub: a newcomer's first command must not leave a week of invented
+ * work in their own journal. So it is on the read-only list of the dispatch, and the folder it
+ * prints goes to every command after it through HUBD_DIR and HUBD_TEAM_DIR. */
+command('demo', () => {
+  const dir = path.resolve(positionals(1)[0] || path.join(os.tmpdir(), 'hubd-demo'));
+  // a folder not there yet is placed by the nearest one that is (/tmp is /private/tmp on a Mac)
+  const real = (p) => { const rest = []; for (;;) { try { return path.join(fs.realpathSync(p), ...rest); } catch {}
+    const up = path.dirname(p); if (up === p) return path.join(p, ...rest); rest.unshift(path.basename(p)); p = up; } };
+  // inside a hub or a team folder, the invented week would be synced to every node as real work
+  for (const [what, root] of [['this hub', HUB], ['the team folder', process.env.HUBD_TEAM_DIR || process.env.HUBD_QUEUE_DIR]]) {
+    if (!root) continue;
+    const rel = path.relative(real(root), real(dir));
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) die(`${dir} is ${rel ? 'inside ' : ''}${what}; hub demo writes into a folder of its own`);
+  }
+  if (demoTarget(dir) === 'other') die(`${dir} is not empty and holds no earlier demo; give hub demo a new or empty folder`);
+  const r = writeDemo(dir, { version: VERSION });
+  // both: with HUBD_TEAM_DIR set, or a hub found above the cwd, the queues would be read from there
+  const q = /[^\w@%+=:,./-]/.test(dir) ? `'${dir.replace(/'/g, "'\\''")}'` : dir;
+  const env = `HUBD_DIR=${q} HUBD_TEAM_DIR=${q}`;
+  console.log(`a demo hub in ${dir}: an invented team with ${r.tracks.length} tracks, ${r.roles} roles and ${r.nodes.length} machines, and a week of its work`);
+  console.log('');
+  console.log('Look at it (each command reads that folder only):');
+  for (const [c, what] of [
+    ['hub serve -p 7790', 'the board on http://localhost:7790, a port beside your own board: Summary, Tracks, Live, History'],
+    ['hub board', 'every track in the terminal'],
+    ['hub agenda', 'the day, split by who can act; one button waits for the owner'],
+    ['hub reflect --promote --project relay', 'a rule the team keeps proposing, a candidate law'],
+    ['hub recall "key server"', 'what the hub knows about it, dated'],
+  ]) console.log(`  ${env} ${c}
+      ${what}`);
+  console.log('');
+  console.log('Nothing in your own hub was read or written. Run hub demo again for a fresh week, or delete the folder.');
+  done(0);
+});
+
 command('serve', () => {
   const port = parseInt(getFlag('-p') || getFlag('--port') || '7777');
   startServer(port);
@@ -2085,6 +2123,7 @@ const HELP = [
   ['board [<project>] [--days 7] [--limit 8] [--all] [--json]', 'every track: roles, done, next, blocked, and what waits for you'],
   ['sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]', "a head's sensor: exit 0 = wake with this text, 1 = nothing"],
   ['serve [-p 7777]', 'read-only dashboard: summary, tracks, kanban, history'],
+  ['demo [dir]', 'write a demo hub into a new folder (default: the temp dir) to look at first; your hub is untouched'],
 ];
 const helpName = (usage) => usage.split(/[\s|]/)[0];
 
@@ -2110,7 +2149,7 @@ function readOnlyRun() {
     case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
     case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
     case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
-    case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts':
+    case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts': case 'demo':
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
     case 'usage': return sub !== 'add';

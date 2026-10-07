@@ -4,6 +4,24 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.55 — 2026-10-07
+
+- **`hub demo`: a hub to look at before your team has written to one.** The board's Summary, the
+  agenda, the escalations and the law candidates show something only on a hub a team has worked
+  in for a week, so a newcomer met an empty board. `hub demo [dir]` writes that week into a
+  folder of its own (default: `hubd-demo` in the temp dir): an invented team of two tracks, a
+  head and workers each, a fleet role above them, three machines. Work accepted, rejected,
+  blocked and stalled; an escalation waiting and one answered; two buttons for the owner; a law
+  and two candidates; a node with a full disk and one gone silent. Stamps count back from the
+  moment it is written, so the board shows today. It prints the commands to look at it, each
+  with `HUBD_DIR` and `HUBD_TEAM_DIR` set to that folder. It reads and writes nothing in your
+  hub, refuses a folder inside your hub or team folder (it would sync to every node as real
+  work) or holding anything but an earlier demo, and run again it writes a fresh week over the
+  old one.
+- **The pictures in the docs come from it.** `node scripts/capture-board.mjs` runs `hub demo`,
+  serves it and photographs the Summary and Tracks into `docs/media/`, so what a reader sees in
+  the README is the page `hub demo` and `hub serve` show them.
+
 ## 0.9.54 — 2026-10-06
 
 - **A project's laws, from its roles' reflections.** A reflection's rule was a proposal nobody

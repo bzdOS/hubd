@@ -46,6 +46,17 @@ Like `sshd` and `ssh`. The daemon serves agents; the CLI serves you.
 
 ## Quick start
 
+**See it first.** The board shows what it is for on a hub a team has worked in for a
+week. `hub demo` writes such a week, invented, into a folder of its own and prints the
+commands to look at it; your own hub is not read or written.
+
+```bash
+npm i -g @bzdos/hubd
+hub demo             # two tracks, six roles, three machines, a week of their work
+```
+
+![the board's Summary on the demo hub: an escalation waiting, a node with a full disk, work accepted, rejected, blocked and stalled](https://raw.githubusercontent.com/bzdOS/hubd/main/docs/media/summary.png)
+
 **Option A — start a company (copy the folder).** One command drops
 [`hubd-company/`](hubd-company/) into a folder of your own:
 
@@ -82,6 +93,7 @@ hub usage --days 7   # what the work cost: supplied vs measured, never mixed
 hub audit            # what the cards declare vs what happened (--apply files incidents)
 hub lint             # which of your rules are checks, not just prose
 hub serve            # read-only kanban on localhost
+hub demo [dir]       # an invented team's week in a folder of its own, to look at first
 # one-off, without install: npx -p @bzdos/hubd hub status
 ```
 
