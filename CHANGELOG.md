@@ -4,6 +4,24 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.59 — 2026-10-07
+
+- **`hub setup`: hubd into a harness by one command.** The first contact was a config edit
+  by hand, with the author and the hub's folders typed into it, and MCP cannot do it, since
+  until hubd is in the config there is no MCP to ask. `hub setup --harness claude --agent
+  dev-shop` checks the name first and refuses a model's name or an unfilled `dev-<project>`
+  at the install, not at the first write a day later. Then it starts the server as the
+  harness will, asks it for its tools and `hub_status`, and writes nothing if it does not
+  answer. Claude Code and Gemini CLI are configured through their own `mcp add`, which
+  outlives a change of their file format; opencode's JSON file is merged, with a backup of
+  it made before the first change. The entry is read back after it is written. A second
+  run with the same values changes nothing, one with others changes the one entry. The
+  harness runs this copy of hubd by its path, since npx asks the registry at every session
+  start; from npx's own cache it is a `hubd` on PATH, else npx pinned to this version.
+  `--check` reads a config back and tries the server it names, `--uninstall` takes the
+  entry out, `--print` shows what would be written, and `--prompt` prints the steps for an
+  agent in a harness that has no row here. `hub init` names it in its next steps.
+
 ## 0.9.58 — 2026-10-07
 
 - **A block still being written is not handed out.** The shard cut short in 0.9.57 was

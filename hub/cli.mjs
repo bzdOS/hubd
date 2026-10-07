@@ -30,6 +30,7 @@ import { writeDemo, demoTarget } from './lib/demo.mjs';
 import { runBoard } from './lib/board.mjs';
 import { startServer } from './lib/serve.mjs';
 import { runDoctor } from './lib/doctor.mjs';
+import { runSetup } from './lib/setup.mjs';
 import { runHubGc } from './lib/gc.mjs';
 import { renderPrompt, templateNames, lineDiff } from './lib/prompts.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
@@ -120,6 +121,7 @@ declareFlags(
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
   '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
+  '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
 );
 
 function getFlag(name) {
@@ -491,12 +493,34 @@ command('init', () => {
     .filter(k => process.env[k]).map(k => k + '=' + process.env[k])];
   console.log('  Connect an agent:  claude mcp add --scope user hubd ' + envs.map(e => '--env ' + q(e)).join(' ') + ' -- npx -y @bzdos/hubd');
   console.log('                     (name HUBD_AGENT for the function the agent performs, not the model)');
+  console.log('  Or, checked:       hub setup --harness claude|gemini|opencode --agent dev-<project>');
   console.log('  Check setup:       hub doctor');
   console.log('  Full org template: hubd-company/ in the hubd repository');
   done(0);
 });
 
 command('doctor', () => done(runDoctor() ? 1 : 0));
+
+/* hubd into a harness's MCP config, tried before it is written (lib/setup.mjs). The author is the
+ * owner's to name, so it is asked for and never made up: on a terminal the command asks, anywhere
+ * else it refuses without one. It writes no hub, so it is on the read-only list of the dispatch. */
+command('setup', () => {
+  const modes = ['--print', '--prompt', '--verify', '--check', '--uninstall'].filter(f => args.includes(f));
+  if (modes.length > 1) die('hub setup: ' + modes.join(' and ') + ' are different runs; give one');
+  const harness = getFlag('--harness'), scope = getFlag('--scope'), hub = getFlag('--hub');
+  let agent = getFlag('--agent');
+  for (const [f, v] of [['--harness', harness], ['--scope', scope], ['--hub', hub], ['--agent', agent]])
+    if (v === true || (typeof v === 'string' && v.startsWith('--'))) die(`hub setup: ${f} needs a value`);
+  if (!harness) die('hub setup: --harness claude|gemini|opencode is required (another harness: --harness <id> --prompt)');
+  const mode = modes.length ? modes[0].slice(2) : 'install';
+  const go = (a) => runSetup({ harness, agent: a, scope: scope || 'user', hub: hub ? path.resolve(hub) : null, mode })
+    .then(code => done(code), e => die(e && e.message ? e.message : String(e)));
+  if (agent || mode === 'check' || mode === 'uninstall') return go(agent);
+  if (!process.stdin.isTTY) die('hub setup: --agent <name> is required: the name this agent signs its work with, ' +
+    'for the function it performs (dev-shop, reviewer-api). It is the owner\'s choice, so hub setup does not make one up.');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  rl.question('Name this agent signs its work with, for the function it performs (e.g. dev-shop): ', (a) => { rl.close(); go(a.trim()); });
+});
 
 
 command('status', () => {
@@ -2061,6 +2085,8 @@ command('serve', () => {
  * that command. */
 const HELP = [
   ['init [path]', 'scaffold a team folder (AGENTS.md, INBOX.md, queues/)'],
+  ['setup --harness claude|gemini|opencode --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]',
+    'put hubd into a harness\'s MCP config, after trying the server; --check reads the config back and tries what it holds'],
   ['version | --version | -v', 'installed hubd version, and which copy is answering'],
   ['doctor', 'check hub base, team root, locks, queues and writer versions'],
   ['upgrade', 'refresh HUBD.md (the agent protocol) to the installed version'],
@@ -2159,7 +2185,7 @@ function readOnlyRun() {
     case undefined: case 'help': case '--help': case 'version': case '--version': case '-v':
     case 'doctor': case 'status': case 'brief': case 'inbox': case 'plan': case 'trajectory': case 'whereami': case 'where':
     case 'log': case 'presence': case 'graph': case 'now': case 'whatnext': case 'agenda': case 'board': case 'recall':
-    case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts': case 'demo':
+    case 'operator': case 'lint': case 'sections': case 'harvest': case 'prompts': case 'demo': case 'setup':
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
     case 'usage': return sub !== 'add';

@@ -31,6 +31,16 @@ the hub and writes `HUBD.md`, the manual for agents, from the installed version.
 ## 3. Connect an agent
 
 ```bash
+hub setup --harness claude --agent dev-myproject
+```
+
+It starts the server and asks it for the hub's status first, then adds it with
+`claude mcp add`, and reads the entry back. `--harness gemini` and `--harness opencode`
+work the same way. `--print` shows what it would write, `--check` tries what a config
+already holds, `--uninstall` takes it out, and `--prompt` prints the steps for an agent
+in a harness it has no row for. By hand, for Claude Code:
+
+```bash
 claude mcp add --scope user hubd --env HUBD_AGENT=dev-myproject -- npx -y @bzdos/hubd
 ```
 

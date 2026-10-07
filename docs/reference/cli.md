@@ -7,6 +7,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | Command | What it does |
 | --- | --- |
 | [`init`](#init) | scaffold a team folder (AGENTS.md, INBOX.md, queues/) |
+| [`setup`](#setup) | put hubd into a harness's MCP config, after trying the server; --check reads the config back and tries what it holds |
 | [`version`](#version) | installed hubd version, and which copy is answering |
 | [`doctor`](#doctor) | check hub base, team root, locks, queues and writer versions |
 | [`upgrade`](#upgrade) | refresh HUBD.md (the agent protocol) to the installed version |
@@ -58,6 +59,10 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 ## init
 
 - `hub init [path]` — scaffold a team folder (AGENTS.md, INBOX.md, queues/)
+
+## setup
+
+- `hub setup --harness claude|gemini|opencode --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]` — put hubd into a harness's MCP config, after trying the server; --check reads the config back and tries what it holds
 
 ## version
 
@@ -291,7 +296,7 @@ The commands each flag appears with, in their usage lines.
 | --- | --- |
 | `--accept` | [reflect](#reflect) |
 | `--addr` | [resource](#resource) |
-| `--agent` | [claim](#claim), [release](#release), [usage](#usage) |
+| `--agent` | [setup](#setup), [claim](#claim), [release](#release), [usage](#usage) |
 | `--alive` | [presence](#presence) |
 | `--all` | [board](#board) |
 | `--append` | [rules](#rules) |
@@ -301,7 +306,7 @@ The commands each flag appears with, in their usage lines.
 | `--assignee` | [now](#now) |
 | `--attr` | [resource](#resource) |
 | `--by` | [reflect](#reflect), [task](#task), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [rules](#rules), [audit](#audit), [gc](#gc) |
-| `--check` | [prompts](#prompts) |
+| `--check` | [setup](#setup), [prompts](#prompts) |
 | `--cost` | [usage](#usage) |
 | `--cwd` | [heartbeat](#heartbeat) |
 | `-d` | [task](#task) |
@@ -311,7 +316,9 @@ The commands each flag appears with, in their usage lines.
 | `--from` | [queue](#queue) |
 | `--from-now` | [queue](#queue) |
 | `-h` | [brief](#brief) |
+| `--harness` | [setup](#setup) |
 | `--hours` | [inbox](#inbox) |
+| `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
 | `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [presence](#presence), [usage](#usage), [gc](#gc), [queue](#queue), [board](#board) |
@@ -327,15 +334,18 @@ The commands each flag appears with, in their usage lines.
 | `--once` | [queue](#queue) |
 | `--out` | [prompts](#prompts) |
 | `-p` | [watch](#watch), [report](#report), [decide](#decide), [next](#next), [task](#task), [graph](#graph), [claim](#claim), [usage](#usage), [serve](#serve) |
+| `--print` | [setup](#setup) |
 | `--private` | [watch](#watch) |
 | `--project` | [reflect](#reflect) |
 | `--promote` | [reflect](#reflect) |
+| `--prompt` | [setup](#setup) |
 | `--reflect` | [report](#report) |
 | `--reject` | [reflect](#reflect) |
 | `--remove` | [card](#card) |
 | `--replace` | [card](#card) |
 | `--resource` | [task](#task) |
 | `--role` | [heartbeat](#heartbeat), [presence](#presence) |
+| `--scope` | [setup](#setup) |
 | `--seconds` | [usage](#usage) |
 | `--set` | [section](#section) |
 | `--since` | [watch](#watch), [reflect](#reflect) |
@@ -350,6 +360,8 @@ The commands each flag appears with, in their usage lines.
 | `--tokens-out` | [usage](#usage) |
 | `--ttl` | [heartbeat](#heartbeat) |
 | `--type` | [resource](#resource), [graph](#graph) |
+| `--uninstall` | [setup](#setup) |
 | `--vars` | [prompts](#prompts) |
+| `--verify` | [setup](#setup) |
 | `--why` | [decide](#decide) |
 | `--with` | [card](#card) |
