@@ -44,14 +44,14 @@ function hub(dir, args, input = '') {
   const r = spawnSync(process.execPath, [CLI, ...args], { cwd: dir, env: hubEnv(dir), input, encoding: 'utf8', timeout: 30000 });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
-function mcpLists(dir) {
+function mcpLists(dir, env = {}) {
   const req = [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'gen-reference', version: '0' } } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
     { jsonrpc: '2.0', id: 3, method: 'prompts/list' },
   ].map(m => JSON.stringify(m)).join('\n') + '\n';
-  const r = spawnSync(process.execPath, [SERVER], { cwd: dir, env: hubEnv(dir), input: req, encoding: 'utf8', timeout: 30000 });
+  const r = spawnSync(process.execPath, [SERVER], { cwd: dir, env: { ...hubEnv(dir), ...env }, input: req, encoding: 'utf8', timeout: 30000 });
   const res = {};
   for (const l of (r.stdout || '').split('\n')) { try { const m = JSON.parse(l); if (m.id != null) res[m.id] = m.result; } catch {} }
   if (!res[1] || !res[2] || !res[3]) throw new Error('the MCP server did not answer initialize, tools/list and prompts/list:\n' + (r.stderr || '').slice(0, 2000));
@@ -163,7 +163,7 @@ function paramRows(tool, props = {}, required = [], prefix = '', problems) {
   return rows;
 }
 
-function mcpPage({ instructions, tools, prompts }, problems) {
+function mcpPage({ instructions, tools, prompts }, worker, problems) {
   const byName = new Map(tools.map(t => [t.name, t]));
   const grouped = TOOL_GROUPS.flatMap(([, ns]) => ns);
   for (const n of grouped) if (!byName.has(n)) problems.push(`mcp: TOOL_GROUPS names ${n}, which the server does not offer`);
@@ -190,6 +190,11 @@ function mcpPage({ instructions, tools, prompts }, problems) {
     'ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)).',
     '## At connect', '```text\n' + instructions + '\n```',
     '## Tools', table(['Group', 'Tools'], TOOL_GROUPS.map(([title, ns]) => [title, ns.map(n => `[${n}](#${n})`).join(' · ')])),
+    '## Profiles', '`HUBD_TOOLS` offers a role\'s tools instead of all of them ([Environment](env.md#what-a-client-is-offered)): ' +
+    'a client reads every schema at the start of every session, and all of them are about 11k tokens. A tool left out is ' +
+    'refused when called, and a sentence of the instructions above that names one is left out.',
+    table(['Profile', 'Tools'], [['`worker`', worker.tools.map(t => `[${t.name}](#${t.name})`).join(' · ')]]),
+    'A worker connects with these instructions:', '```text\n' + worker.instructions + '\n```',
     ...sections,
     '## Prompts', 'A client inserts these into a conversation (`prompts/list`, `prompts/get`). `hub harvest` and ' +
     '`hub prompts render` print the same text.',
@@ -217,6 +222,10 @@ const ENV = [
     ['HUBD_QUEUE_MAX_BYTES', '`262144`', 'Unread bytes, the same way; `queue.bytes` in `limits.json`.'],
     ['HUBD_MAX_OUTPUT_CHARS', '`40000`', 'Characters an MCP tool\'s answer holds before its long lists are trimmed, the journal first, and what was left out is named in `truncated`; at least 2000. `full: true` asks for everything. The CLI is never trimmed.'],
     ['HUBD_PRESENCE_SNAPSHOT_MS', '`300000`', 'How often at most, in milliseconds, a node republishes `presence.<node>.json` for the other nodes; at least 1000. Keep it under the shortest heartbeat TTL (15 minutes by default).'],
+  ]],
+  ['What a client is offered', [
+    ['HUBD_TOOLS', 'every tool', 'The tools the MCP server offers: a profile, tool names, or both, comma-separated; `all` is every tool. `worker` is the 15 a worker uses ([MCP tools](mcp.md#profiles)). A tool left out is refused when called, and the instructions sent at connect leave out the advice that names one. A word that is neither a profile nor a tool is named on stderr and left out; when nothing is left, every tool is offered.'],
+    ['HUBD_PRESET', '', '`small`: for a model with a small window that reads its prompt slowly, such as a local one. An answer holds 8000 characters (an explicit `HUBD_MAX_OUTPUT_CHARS` still wins) and comes without indentation. `hub_get` shows the card\'s first 2000 characters and 2 journal entries, `hub_whatsnew` 5 entries, `hub_task_list` 15 tasks, `hub_context` 2 journal entries and its first 10 open tasks; texts are cut to 160 characters, a task\'s to 120. The descriptions quote these numbers, and `full: true` still gives everything.'],
   ]],
   ['HTTP server', [
     ['HUBD_HTTP_PORT', '`8787`', 'The port of `hubd --http`; a port after `--http` wins. Set on its own, it turns HTTP on.'],
@@ -576,7 +585,7 @@ export function build() {
     const pages = {
       'README.md': indexPage(),
       'cli.md': cliPage(help.out, problems),
-      'mcp.md': mcpPage(mcp, problems),
+      'mcp.md': mcpPage(mcp, mcpLists(dir, { HUBD_TOOLS: 'worker' }), problems),
       'env.md': envPage(problems),
       'files.md': filesPage(tmp, problems),
       'report.md': reportPage(tmp, mcp, problems),

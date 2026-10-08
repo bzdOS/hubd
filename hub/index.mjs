@@ -11,6 +11,7 @@ import {
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
   envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
+  PRESET,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runRecall } from './lib/recall.mjs';
@@ -18,6 +19,16 @@ import { queueWait, queueWaitAll, queueSummaryForBrief, queueAck, briefWithQueue
 import { sessionId, subscriberId } from './lib/session.mjs';
 import { promptList, renderPrompt, templateNames } from './lib/prompts.mjs';
 import { LEVELS, OBSTACLES, RESULTS, VERDICTS } from './lib/reflect.mjs';
+
+/* The default views' sizes, here once, because a tool's description quotes them: under
+ * HUBD_PRESET=small (see lib/core.mjs) they are shorter, and a description quoting the usual
+ * numbers would tell the model it got everything when it did not. hub_context gets a view of its
+ * own only there: its open tasks came to 14k characters on a live hub, the first thing a session
+ * reads. */
+const SMALL = PRESET === 'small';
+const VIEW = SMALL
+  ? { card: 2000, journal: 2, journalText: 160, entries: 5, tasks: 15, taskText: 120, contextTasks: 10 }
+  : { card: 4000, journal: 5, journalText: 240, entries: 20, tasks: 50, taskText: 160 };
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -80,15 +91,16 @@ const TOOLS = [
       staleDays: { type: 'integer', description: 'digest counts as behind after N days of journal it does not reflect, default 7' },
     } } },
 
-  { name: 'hub_get', description: 'ONE project in depth: its card, its recent journal entries and any active soft-locks. Compact by default — the card\'s first 4000 chars (frontmatter, digest, facts, next step), the newest 5 journal entries with text cut to 240 chars; full:true gives the whole card and 15 entries. Use after hub_status or hub_search points you at a project.',
+  { name: 'hub_get', description: `ONE project in depth: its card, its recent journal entries and any active soft-locks. Compact by default — the card's first ${VIEW.card} chars (frontmatter, digest, facts, next step), the newest ${VIEW.journal} journal entries with text cut to ${VIEW.journalText} chars; full:true gives the whole card and 15 entries. Use after hub_status or hub_search points you at a project.`,
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
 
   { name: 'hub_context',
-    description: 'Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, digestAgeDays, digestStale?, openTasks, activeClaims, presenceHere, journalTail}. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.',
+    description: 'Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.' +
+      (SMALL ? ` Compact: the first ${VIEW.contextTasks} open tasks, each text cut to ${VIEW.taskText} chars; full:true for all of them whole.` : ''),
     inputSchema: { type: 'object', properties: {
       cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
       staleDays: { type: 'integer', description: 'digest counts as stale after N days of journal it does not reflect (same rule as hub_status), default 7' },
-      journalTail: { type: 'integer', description: 'how many recent journal entries of the project to include, default 5' },
+      journalTail: { type: 'integer', description: 'how many recent journal entries of the project to include, default ' + VIEW.journal },
       agent: { type: 'string', description: 'you — so `claimsTouched` (live claims whose glob covers a file changed here in the last recentMinutes) leaves your own claims out' },
       recentMinutes: { type: 'integer', description: 'window for claimsTouched, default 30' },
     }, required: ['cwd'] } },
@@ -119,7 +131,7 @@ const TOOLS = [
     }, required: ['id'] } },
 
   { name: 'hub_task_list',
-    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog. Compact by default: at most 50 tasks, each text cut to 160 chars (full:true for whole texts, or hub_task_get for one). Looking for ONE task you can name? hub_task_get by id, or hub_search by keyword — both beat listing and scanning.',
+    description: 'List backlog tasks. Filter by project and/or status; page with limit/offset. `total` is always the full matching count, so a page never reads as the whole backlog. Compact by default: at most ' + VIEW.tasks + ' tasks, each text cut to ' + VIEW.taskText + ' chars (full:true for whole texts, or hub_task_get for one). Looking for ONE task you can name? hub_task_get by id, or hub_search by keyword — both beat listing and scanning.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, status: { type: 'string', enum: ['open', 'done', 'all'] },
       limit: { type: 'integer', description: 'page size' },
@@ -318,7 +330,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_whatsnew',
-    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Compact by default: the newest 20 entries, each text cut to 240 chars; full:true for all of them whole. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing. The entry of a card write carries `card`: the sections, the card file\'s size after the write in bytes, and the change, so a card that reads older than a write you made is checked here, not in git.',
+    description: 'Personalized "what did I miss" — journal activity since YOUR OWN last hub_whatsnew call (tracked per agent name), not a fixed time window like hub_brief. Call this at the start of a session/sweep instead of re-reading hub_status/hub_brief from scratch; a never-seen agent gets a 24h window on its first call. Compact by default: the newest ' + VIEW.entries + ' entries, each text cut to ' + VIEW.journalText + ' chars; full:true for all of them whole. Also carries `review`: the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces and the date that rule was written — read-only, files nothing. The entry of a card write carries `card`: the sections, the card file\'s size after the write in bytes, and the change, so a card that reads older than a write you made is checked here, not in git.',
     inputSchema: { type: 'object', properties: {
       agent: { type: 'string', description: 'your stable identity, e.g. "orchestrator" or your agent name — reused across calls to compute the delta' },
       hours: { type: 'integer', description: 'fallback window in hours if this agent has no prior checkpoint yet, default 24' },
@@ -388,12 +400,13 @@ const OUTPUT_PLANS = {
   // digest, facts, next step) and the newest few journal lines, cut, answer "where is this";
   // full:true is the rest.
   // The journal is oldest-first, so its tail is kept; whatsnew is newest-first, so its head is.
-  hub_get:        [['card', 4000], ['journal', 5, { keep: 'tail', textMax: 240 }], ['claims', 20]],
-  hub_whatsnew:   [['entries', 20, { textMax: 240 }]],
+  hub_get:        [['card', VIEW.card], ['journal', VIEW.journal, { keep: 'tail', textMax: VIEW.journalText }], ['claims', 20]],
+  hub_whatsnew:   [['entries', VIEW.entries, { textMax: VIEW.journalText }]],
   hub_search:     [['hits', 40]],
   hub_inbox:      [['blocked', 25], ['staleClaims', 25], ['overdue', 25], ['unassigned', 25], ['addressed', 25]],
   hub_kanban:     [['inbox', 30], ['mail', 20], ['doneToday', 30], ['queued', 60], ['inProgress', 60]],
-  hub_task_list:  [['tasks', 50, { textMax: 160, drop: ['_origin'], dropEmpty: true }]],
+  hub_task_list:  [['tasks', VIEW.tasks, { textMax: VIEW.taskText, drop: ['_origin'], dropEmpty: true }]],
+  ...(SMALL ? { hub_context: [['openTasks', VIEW.contextTasks, { textMax: VIEW.taskText, drop: ['_origin'], dropEmpty: true }]] } : {}),
   hub_trajectory: [['layers', 30], ['blocked', 60], ['ready', 60]],
   hub_graph:      [['edges', 200], ['dangling', 50]],
   hub_presence:   [['agents', 60], ['coverage', 12]],
@@ -427,7 +440,7 @@ const DISPATCH = {
       ...(r.patched ? { patched: r.patched.length } : {}), ...(r.rotated ? { rotated: r.rotated } : {}) };
   },
   hub_section_add: runSectionAdd,
-  hub_get: runGet, hub_search: runSearch, hub_context: runContext,
+  hub_get: runGet, hub_search: runSearch, hub_context: (a) => runContext({ ...a, journalTail: a.journalTail ?? VIEW.journal }),
   // The caller wrote the text a moment ago; echoing 2-3 KB of it back is context spent on nothing
   // (task maple-83). Id and the shape of what was filed by default, the whole task on
   // verbose:true — the engine's return is unchanged for the CLI and the tests.
@@ -497,18 +510,68 @@ function teamRoot() {
 // minutes. Disabled over HTTP.
 const LOCAL_ONLY_TOOLS = new Set(['hub_sync', 'hub_queue_wait', 'hub_queue_wait_all']);
 
-// The tool tables are keyed by name in four places; a name in one and not the others is a tool
+/* The tools a role works with. A client reads every tool's schema at the start of every session:
+ * all of them came to 45k characters, about 11k tokens, which a local model reading 100-200 tokens
+ * a second spends a minute and a half on before its first word. HUBD_TOOLS names a profile, tool
+ * names, or both, comma-separated. A worker waits for a dispatch, does it, reports and asks; it
+ * reads the hub, it does not run it (no tasks of its own, no cards, no laws). */
+const TOOL_PROFILES = {
+  worker: ['hub_context', 'hub_whatsnew', 'hub_rules', 'hub_get', 'hub_search', 'hub_resource_get',
+    'hub_queue_wait', 'hub_queue_send', 'hub_queue_ack',
+    'hub_task_get', 'hub_task_list', 'hub_task_update', 'hub_claim', 'hub_release', 'hub_report'],
+};
+
+// The tool tables are keyed by name in five places; a name in one and not the others is a tool
 // offered with no handler, a handler never offered, or a budget for nothing. Refused at start,
 // not found on the first call.
 {
   const names = new Set(TOOLS.map(t => t.name));
   const stray = [...names].filter(n => !DISPATCH[n])
-    .concat([...Object.keys(DISPATCH), ...Object.keys(OUTPUT_PLANS), ...LOCAL_ONLY_TOOLS].filter(n => !names.has(n)));
+    .concat([...Object.keys(DISPATCH), ...Object.keys(OUTPUT_PLANS), ...LOCAL_ONLY_TOOLS,
+      ...Object.values(TOOL_PROFILES).flat()].filter(n => !names.has(n)));
   if (stray.length) throw new Error('hubd: tool tables disagree on ' + [...new Set(stray)].join(', '));
 }
 
+// null: every tool. A word that is neither a profile nor a tool is said on stderr and left out;
+// when nothing is left, every tool is offered, since a typo should cost tokens, not the hub.
+const OFFERED = (() => {
+  const raw = (process.env.HUBD_TOOLS || '').trim();
+  if (!raw) return null;
+  const names = new Set(TOOLS.map(t => t.name));
+  const out = new Set(), unknown = [];
+  for (const w of raw.split(/[\s,]+/).filter(Boolean)) {
+    if (w === 'all') return null;
+    if (TOOL_PROFILES[w]) TOOL_PROFILES[w].forEach(n => out.add(n));
+    else if (names.has(w)) out.add(w);
+    else unknown.push(w);
+  }
+  if (unknown.length) process.stderr.write(`hubd: HUBD_TOOLS: ${unknown.join(', ')}: no profile (${Object.keys(TOOL_PROFILES).join(', ')}, all) and no tool; left out\n`);
+  if (!out.size) { process.stderr.write('hubd: HUBD_TOOLS names nothing this server has; every tool is offered\n'); return null; }
+  return out;
+})();
+
+function offered(name, mode) {
+  return !(mode === 'http' && LOCAL_ONLY_TOOLS.has(name)) && (!OFFERED || OFFERED.has(name));
+}
+
 function toolsFor(mode) {
-  return mode === 'http' ? TOOLS.filter(t => !LOCAL_ONLY_TOOLS.has(t.name)) : TOOLS;
+  return TOOLS.filter(t => offered(t.name, mode));
+}
+
+// What a client is told at connect, one sentence per piece of advice. A sentence that names a tool
+// this server does not offer is left out: advice to call a tool the model cannot see is the one
+// kind it can only get wrong.
+const INSTRUCTIONS = [
+  'Shared sync point for all project folders and agents.',
+  'New here? Call hub_onboarding first.',
+  'In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get.',
+  'Returning after time away? Call hub_whatsnew instead of re-reading hub_status from scratch.',
+  'Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session.',
+  'hub_brief gives a morning overview.',
+  'Create work with hub_task_add.',
+];
+function instructionsFor(mode) {
+  return INSTRUCTIONS.filter(s => (s.match(/hub_[a-z_]+/g) || []).every(n => offered(n, mode))).join(' ');
 }
 
 // Nudge state: has THIS connection called hub_onboarding / hub_whatsnew yet.
@@ -615,7 +678,7 @@ function envNudge() {
   let n = null;
   try {
     const env = envChecks({ session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE });
-    if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — hub_whatsnew lists them with what to do.`;
+    if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — ${offered('hub_whatsnew', SERVE_MODE) ? 'hub_whatsnew' : '`hub doctor`'} lists them with what to do.`;
   } catch {}
   return (envNudgeLine = n);
 }
@@ -623,8 +686,8 @@ function envNudge() {
 function nudges(name) {
   if (name === 'hub_onboarding' || name === 'hub_whatsnew') return [];
   const n = [];
-  if (!onboarded) n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' });
-  if (!whatsnewChecked) n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' });
+  if (!onboarded && offered('hub_onboarding', 'stdio')) n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' });
+  if (!whatsnewChecked && offered('hub_whatsnew', 'stdio')) n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' });
   const e = envNudge();
   if (e) n.push({ type: 'text', text: e });
   return n;
@@ -643,7 +706,7 @@ async function handleMessage(msg, mode = 'stdio') {
     // No "call hub_heartbeat after each hub_report" here: this text reaches every client, and a role
     // run by a shell loop has hub_heartbeat denied — the advice sent it to a tool it is refused. The
     // tool's own description carries it, and a client without the tool never sees that.
-    instructions: 'Shared sync point for all project folders and agents. New here? Call hub_onboarding first. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Returning after time away? Call hub_whatsnew instead of re-reading hub_status from scratch. Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session. hub_brief gives a morning overview. Create work with hub_task_add.' } };
+    instructions: instructionsFor(mode) } };
   if (String(method).startsWith('notifications/')) return null;
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: toolsFor(mode) } };
@@ -675,6 +738,9 @@ async function handleMessage(msg, mode = 'stdio') {
     const name = params?.name;
     if (mode === 'http' && LOCAL_ONLY_TOOLS.has(name))
       return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + name + ' is disabled on a shared server (no server-side filesystem access). Use task/journal tools.' }], isError: true } };
+    // What tools/list did not offer is not served either: the profile is the role's, not a menu.
+    if (DISPATCH[name] && !offered(name, mode))
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: ' + name + ' is not offered by this server (HUBD_TOOLS=' + process.env.HUBD_TOOLS.trim() + ').' }], isError: true } };
     const fn = DISPATCH[name];
     if (!fn) return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error: unknown tool: ' + name }], isError: true } };
     try {
@@ -695,8 +761,10 @@ async function handleMessage(msg, mode = 'stdio') {
       if (name === 'hub_whatsnew') { whatsnewChecked = true; envNudgeAt = 0; }   // it just acknowledged
       const extra = mode === 'stdio' ? nudges(name) : [];
       // One choke point for every tool's size, so no new tool can forget it.
-      const capped = OUTPUT_PLANS[name] ? capOutput(r, OUTPUT_PLANS[name], { full: !!argv.full }) : r;
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(capped, null, 1) }, ...extra], isError: false } };
+      // Under HUBD_PRESET=small without the indentation, about a sixth of every answer.
+      const indent = SMALL ? 0 : 1;
+      const capped = OUTPUT_PLANS[name] ? capOutput(r, OUTPUT_PLANS[name], { full: !!argv.full, indent }) : r;
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(capped, null, indent) }, ...extra], isError: false } };
     } catch (e) {
       // A refusal the caller acts on by kind carries its code (queue-full), the way an exit code would.
       const code = e && typeof e.code === 'string' && /^[a-z]+(?:-[a-z]+)+$/.test(e.code) ? ' [' + e.code + ']' : '';

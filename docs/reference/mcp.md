@@ -25,11 +25,25 @@ Shared sync point for all project folders and agents. New here? Call hub_onboard
 | Resources and the graph | [hub_resource_set](#hub_resource_set) · [hub_resource_list](#hub_resource_list) · [hub_resource_get](#hub_resource_get) · [hub_graph](#hub_graph) |
 | Rules, health and cost | [hub_rules](#hub_rules) · [hub_operator](#hub_operator) · [hub_lint](#hub_lint) · [hub_audit](#hub_audit) · [hub_usage_add](#hub_usage_add) · [hub_usage](#hub_usage) |
 
+## Profiles
+
+`HUBD_TOOLS` offers a role's tools instead of all of them ([Environment](env.md#what-a-client-is-offered)): a client reads every schema at the start of every session, and all of them are about 11k tokens. A tool left out is refused when called, and a sentence of the instructions above that names one is left out.
+
+| Profile | Tools |
+| --- | --- |
+| `worker` | [hub_report](#hub_report) · [hub_get](#hub_get) · [hub_context](#hub_context) · [hub_search](#hub_search) · [hub_task_get](#hub_task_get) · [hub_task_list](#hub_task_list) · [hub_task_update](#hub_task_update) · [hub_rules](#hub_rules) · [hub_claim](#hub_claim) · [hub_release](#hub_release) · [hub_resource_get](#hub_resource_get) · [hub_whatsnew](#hub_whatsnew) · [hub_queue_send](#hub_queue_send) · [hub_queue_wait](#hub_queue_wait) · [hub_queue_ack](#hub_queue_ack) |
+
+A worker connects with these instructions:
+
+```text
+Shared sync point for all project folders and agents. In a project folder? Call hub_context({cwd:"<your absolute cwd>"}) to auto-resolve which project this is and its digest, instead of hub_get. Resuming after a context compaction? hub_context({cwd}) first — it answers from state (digest age, who else is here, journal tail) — then hub_whatsnew({since:"session"}); the default checkpoint is empty for your own session.
+```
+
 ## Projects and cards
 
 ### hub_context
 
-Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card's recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, digestAgeDays, digestStale?, openTasks, activeClaims, presenceHere, journalTail}. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.
+Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card's recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

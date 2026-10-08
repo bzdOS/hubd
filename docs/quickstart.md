@@ -54,6 +54,12 @@ Name the function in `HUBD_AGENT` (`dev-shop`, `reviewer-api`), not the model: a
 model's name is refused as an author ([why](start/1-memory.md#what-hubd-refuses-here-and-why)).
 Other clients: [1. Memory → Connect the agent](start/1-memory.md#connect-the-agent).
 
+A model with a small window that reads its prompt slowly, a local one, is better served
+with less: `--env HUBD_TOOLS=worker` offers the 15 tools a worker uses instead of all 42,
+about 4k tokens of schemas at every session start instead of 11k, and
+`--env HUBD_PRESET=small` keeps every answer short
+([Environment](reference/env.md#what-a-client-is-offered)).
+
 ## 4. First contact
 
 A project's card, a report, asking the hub, and picking up after a compaction:
