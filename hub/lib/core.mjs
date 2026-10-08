@@ -2194,7 +2194,11 @@ export function envChecks({ session, transport } = {}) {
     });
   }
 
-  const pc = protocolChanges();
+  /* Told once per session: hub_whatsnew acknowledges it. Over HTTP the line every result carries
+   * asks as nobody, because one server answers every caller, and nobody acknowledges anything: it
+   * said "protocol-changed" on every call for a whole release. So it is left out there, and
+   * hub_whatsnew, which knows its caller, tells each agent once. */
+  const pc = (transport === 'http' && !session) ? null : protocolChanges();
   if (pc && !(session && ((st.sessions || {})[session] || {}).protocolAcked === VERSION)) {
     out.push({
       id: 'protocol-changed', severity: 'low', actor: 'agent',
@@ -4033,8 +4037,10 @@ export function runWhatsNew(a = {}) {
   // it is the tool a returning agent calls, and the protocol tells it to. Acknowledged
   // per session, so a protocol change is announced once and not on every check-in —
   // and the OTHER session on this host still hears it.
-  const env = envChecks({ session: a.session, transport: a.transport });
-  ackEnvNotices(a.session);
+  // Over HTTP there is no session (the server's own would be every caller's), so the agent is.
+  const envKey = a.session || (a.transport === 'http' ? 'agent:' + author : null);
+  const env = envChecks({ session: envKey, transport: a.transport });
+  ackEnvNotices(envKey);
   return {
     agent: author, since: sinceAt, sinceMode, firstCheckin: !lastSeen,
     ...(only ? { project: [...only] } : {}),

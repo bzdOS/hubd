@@ -222,10 +222,10 @@ Three fixes:
   at the next line that started with `## `, so a message holding a markdown heading
   was cut there, and the rest of it went out as a message of its own.
 
-What it cannot see: an edit in place that leaves the cursor inside the watermark's
-own block, where the last header before it is still the watermark. Telling that
-apart needs the bytes that were there before. A cursor an older hubd left at such a
-cut, with the file whole again and not yet read, is trusted the same way.
+An edit in place that leaves the cursor inside the watermark's own block, where the
+last header before it is still the watermark, passes this check. So does a cursor an
+older hubd left at such a cut, with the file whole again. Both are caught by the
+block, not the byte: see [The position is the block](#the-position-is-the-block).
 
 The writer was found later (0.9.58): a relay that copied the shard into the hub dir
 with `tar` every minute, rewriting it in place whether it had changed or not. Its
@@ -243,6 +243,25 @@ The relay now writes a copy beside the file and renames it over the old one, and
 leaves an unchanged file alone. A git merge writes files in place too, so the
 reader has to hold either way. What this cannot see: a cut that falls just after a
 newline inside the newest block. That part goes out as if it were the whole block.
+
+### The position is the block
+
+Before 0.9.63 the rest of such a block went out on the next poll as a message of its
+own, without its header: the same block in two pieces. The cursor stood at the cut,
+the last header before it was the watermark, so every check above passed. A cursor an
+older hubd left at a cut, and a block edited in place longer, read the same way.
+
+- **A whole line after the cursor, before the next header, is the rest of the
+  watermark's block.** The reader resumes at the next header, or past the last whole
+  line when no header follows yet. The rest of a block handed out cut short is then
+  not handed out at all: less rather than twice.
+- **A header still being written is no whole line.** `## 2026-1` with no newline
+  after it stays ahead of the cursor, and the block it starts goes out whole once it
+  is there.
+
+The price: text appended by hand without a header, after a block already handed out,
+is part of that block by the format's own rule (a block runs to the next header), and
+is not handed out either. Send it with `hub queue send`, which writes the header.
 
 ## Read marks — the position every node can see
 

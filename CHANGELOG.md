@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.63 — 2026-10-08
+
+- **A block is handed out once, with its header.** A block handed out cut short just
+  after a newline had its rest go out on the next poll as a message of its own, without a
+  header: the cursor stood at the cut, the last header before it was the watermark, and
+  every check passed. A cursor an older hubd left at such a cut, and a block edited in
+  place longer, read the same way. Now a whole line after the cursor, before the next
+  header, is the rest of the watermark's block, and the reader resumes at the next
+  header: [the position is the block](docs/queue-invariant.md#the-position-is-the-block).
+  A header still being written is no whole line yet, so the block it starts still goes
+  out whole once it is there.
+- **Over HTTP, a protocol change is told once per agent, not on every result.** One
+  server answers every caller, so the line every result carries asked as nobody, and
+  nobody could acknowledge it: `protocol-changed` came back on every call for a whole
+  release. It is left out of that line over HTTP; `hub_whatsnew`, which knows its
+  caller, tells each agent once.
+
 ## 0.9.62 — 2026-10-08
 
 - **`hub setup --harness omp`: hubd into oh-my-pi.** omp adds an MCP server only from

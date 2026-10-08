@@ -342,6 +342,15 @@ core.ackEnvNotices('s1');
 ok(!has(core.envChecks({ session: 's1' }), 'protocol-changed'), 'envChecks: and not told twice');
 ok(has(core.envChecks({ session: 's2' }), 'protocol-changed'), 'envChecks: a second session on the same host is still told');
 
+// Over HTTP one server answers every caller, so the line every result carries asks as nobody,
+// and it said this on every call for a whole release. hub_whatsnew knows its caller: each agent
+// is told once there.
+ok(!has(core.envChecks({ transport: 'http' }), 'protocol-changed'), 'envChecks: over HTTP the line on every result leaves it out');
+const httpWn = (agent) => (core.runWhatsNew({ agent, transport: 'http' }).environment || []).some(i => i.id === 'protocol-changed');
+ok(httpWn('dev-alpha'), 'whatsnew over HTTP: an agent is told about the protocol change');
+ok(!httpWn('dev-alpha'), 'whatsnew over HTTP: and not told twice');
+ok(httpWn('dev-beta'), 'whatsnew over HTTP: another agent on the same server is still told');
+
 // The same, through the line every MCP result carries. It asked as nobody, so a session told by
 // hub_whatsnew was told again on every result until the next release. One long-lived server, call
 // by call, because the line is also cached for minutes.
