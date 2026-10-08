@@ -16,6 +16,13 @@ a version here never migrates or deletes data.
 - **The quick start says what Windows needs.** Node 18 or newer, and a way past
   PowerShell's default execution policy, which refuses the `hub.ps1` shim npm installs:
   `hub.cmd`, cmd, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+- **A Windows node joins the mesh by the book.** [4. A second machine](docs/start/4-second-machine.md#a-windows-node)
+  walks it through, as done on a real one: Git Bash runs mesh-sync and the merge
+  drivers as they are; the clone turns off Git for Windows' `core.autocrlf=true`, so the
+  files on disk are the repository's bytes; the sync's batch-mode ssh gets a key without
+  a passphrase from `~/.ssh/config` and the host key from a node that has it;
+  `HUBD_NODE` replaces a `DESKTOP-...` computer name; and a Task Scheduler task with S4U
+  logon runs it every minute, with no console window.
 - **A card says when its repository has no commit yet.** `hub sync` on a folder fresh
   from `git init` wrote an empty branch and an empty last-commit date over an empty
   code block, and `hub whereami` named no branch: git names HEAD only once there is a
