@@ -328,7 +328,7 @@ const FILES = [
     ['queues/<role>.<node>.acks', 'What became of each message in the queue file of the same name, one JSON line each: `delivered` when a reader got it, `acked` when it confirmed. A sender asks it whether a message was handled.', '`hub queue wait`, `hub_queue_ack`'],
     ['queues/<role>.queue.md','A queue from before per-node files: read, never written.', 'older hubd'],
     ['queues/read/<role>.<node>.json', 'How far `<role>`\'s reader on this node got, so every node counts what is unread the same way.', '`hub queue wait`, `hub_queue_ack`'],
-    ['queues/archive/', 'Queue files nobody read, retired: moved, never deleted.', '`hub gc --apply`, `hub queue gc --apply`'],
+    ['queues/archive/', 'Queue files nobody read, retired, and the copies of one message folded out of a queue (`<role>.<node>.folded-<time>.md`): moved, never deleted.', '`hub gc --apply`, `hub queue gc --apply`, `hub queue dedupe --apply`'],
     ['.qstate/', 'This node\'s read offsets (`<file>.offset`), waiter marks (`<role>.waiter`), message id counters (`ids.<node>`), and one folder of cursors per broadcast reader.', '`hub queue`'],
   ]],
   ['Elsewhere', 'other', [

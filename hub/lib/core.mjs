@@ -955,14 +955,19 @@ export function cardStamp(text) {
 /** Whole days from `ts` to now, never negative. */
 export const daysSince = (ts, nowMs = Date.now()) => Math.max(0, Math.floor((nowMs - parseTs(ts).getTime()) / 86400000));
 
-export function journalTail(project, n = 12) {
-  const all = [...journalEntries()];
+/* The last `n` entries, of one project or all. `sinceMs`, `agent` and `to` narrow them first: a
+ * window skips the journal files that end before it, and `to` is a role among the comma-joined
+ * addressees of an entry. n = Infinity keeps every entry that passes. */
+export function journalTail(project, n = 12, { sinceMs = null, agent = null, to = null } = {}) {
+  const all = [...journalEntries(sinceMs ?? -Infinity)];
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)); // merge multiple per-host files by time
   // Alias-aware: entries written under a project's OLD slug belong to the same project, and a
   // reader asking about either name wants both halves of the trail.
   const set = project ? projectSlugSet(project) : null;
-  const filtered = set ? all.filter(e => set.has(e.project)) : all;
-  return filtered.slice(-n);
+  const filtered = all.filter(e => (!set || set.has(e.project)) && (!agent || e.agent === agent) &&
+    (!to || String(e.to ?? '').split(',').map(x => x.trim()).includes(to)) &&
+    (sinceMs == null || parseTs(e.ts).getTime() >= sinceMs));
+  return n === Infinity ? filtered : filtered.slice(-n);
 }
 
 /* Newest journal timestamp per project, in ONE pass over the merged journal.
@@ -1112,6 +1117,39 @@ export function sectionBody(text, heading) {
   const rest = String(text).slice(start);
   const nm = rest.match(/\n## /);
   return (nm ? rest.slice(0, nm.index) : rest).trim();
+}
+
+/** A card as data: the text above its first "## " heading, then every section in file order, each
+ *  body cut the way sectionBody cuts it. */
+export function cardSections(text) {
+  const s = String(text || '');
+  const heads = [...s.matchAll(/^## (.*)$/gm)];
+  const sections = heads.map((m, i) => ({
+    heading: m[1].trim(),
+    body: s.slice(m.index + m[0].length, i + 1 < heads.length ? heads[i + 1].index : s.length).trim(),
+  }));
+  return { preamble: (heads.length ? s.slice(0, heads[0].index) : s).trim(), sections };
+}
+
+/* `hub card show`: a card read back, whole or one section. Writing a card had a command and reading
+ * one had none, so a fleet cut a role's "## Handoff <role>" out of the file with awk. `section`
+ * is a heading, matched as every writer matches one (case and trailing blanks aside), or a section
+ * key from sections.json, which finds the heading this card holds it under.
+ * A section the card does not hold has body null. */
+export function runCardShow(a = {}) {
+  if (!a.project || typeof a.project !== 'string') throw new Error('project required: hub card show <slug>');
+  const project = canonProject(a.project);
+  const file = cardPath(project);
+  const text = readCard(project);
+  if (text == null) throw new Error(`no card for ${a.project}: ${file} does not exist`);
+  const { preamble, sections } = cardSections(text);
+  if (a.section == null) return { project, file, text, preamble, sections };
+  const want = String(a.section).trim();
+  const isKey = sectionsConfig().some(s => s.key === want);
+  const heading = hasHeading(text, want) || !isKey ? want : liveHeading(text, want);
+  const same = sections.filter(x => x.heading.toLowerCase() === heading.toLowerCase());
+  return { project, file, section: want, heading: same.length ? same[0].heading : heading,
+    body: same.length ? same[0].body : null, repeated: same.length };
 }
 
 const headingFor = (key) => (sectionsConfig().find(s => s.key === key) || {}).heading || key;
@@ -4666,13 +4704,14 @@ export function liveMeshNodes({ root = HUB, days = 30 } = {}) {
   }
   return live;
 }
-/** Why THIS node may not move a queue file (null: it may). `live` from liveMeshNodes. */
-export function shardHold(node, messages, live) {
+/** Why THIS node may not move a queue file (null: it may). `live` from liveMeshNodes; `how`, what
+ *  only the writing node may do with it, and with which command. */
+export function shardHold(node, messages, live, how = 'moves it (hub gc there)') {
   if (!messages) return 'holds no message';
   if (live == null || !node) return null;
   const k = nodeKey(node);
   if (k === JOURNAL_NODE || !live.has(k)) return null;
-  return `a shard of node ${node}, which still writes to the mesh: only that node moves it (hub gc there)`;
+  return `a shard of node ${node}, which still writes to the mesh: only that node ${how}`;
 }
 
 /* ── What a loop is doing, as fields ──
