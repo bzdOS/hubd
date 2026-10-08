@@ -90,8 +90,9 @@ human, and the limits a queue keeps.
 
 [4. A second machine](start/4-second-machine.md): the hub in git, mesh-sync, cards
 that merge by section, `hub doctor` for the mesh, `hub freeze`, and what the sync
-refuses. Joining a folder that was a hub of its own: `hub absorb` in
-[Guarantees](guarantees.md).
+refuses. A Windows node, in Git Bash and the Task Scheduler:
+[A Windows node](start/4-second-machine.md#a-windows-node). Joining a folder that was a
+hub of its own: `hub absorb` in [Guarantees](guarantees.md).
 
 ## 9. Upgrading
 

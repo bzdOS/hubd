@@ -91,7 +91,8 @@ A message sent on elm, read by a worker on oak. A role's reader publishes how fa
 got (`queues/read/`), so `hub queue status` gives the same count on every node.
 
 On real machines, schedule the script every minute on each node: launchd on macOS, a
-systemd user timer, or cron. One cron trap: an ssh key with a passphrase cannot work
+systemd user timer, cron, or the Task Scheduler on Windows ([A Windows
+node](#a-windows-node)). One cron trap: an ssh key with a passphrase cannot work
 there unattended, because cron has no ssh agent; launchd and systemd user services
 inherit one.
 
@@ -225,6 +226,85 @@ a user that cannot write a queue cursor gets a queue that answers "nothing new"
 forever. Keep the folder group-writable: mesh-sync restores group write after every
 pull on a hub that already has it, and `hub doctor` names any cursor this user cannot
 advance.
+
+## A Windows node
+
+mesh-sync is a POSIX shell script. On Windows it runs in the bash that Git for Windows
+installs, which brings the `sh`, `ssh` and `git` it needs. Install Node and hubd as
+anywhere, then do the rest in Git Bash: `hub` works there as it does elsewhere, and
+`~` is your user folder, so `~/.hubd` is the default hub for `hub` and mesh-sync alike.
+
+The sync runs from a scheduled task, with nobody there to type a passphrase or accept
+a host key, and its ssh runs in batch mode and picks no key itself. Give it a key of
+its own, without a passphrase, named for the remote's host:
+
+```sh
+ssh-keygen -t ed25519 -N '' -C hub-mesh-pine -f ~/.ssh/id_hub_mesh
+cat >> ~/.ssh/config <<'EOF'
+Host git.example.com
+  User git
+  IdentityFile ~/.ssh/id_hub_mesh
+  IdentitiesOnly yes
+EOF
+```
+
+Add `~/.ssh/id_hub_mesh.pub` where the remote takes keys. Copy the remote's host key
+from a node that already syncs (`ssh-keygen -F git.example.com` there prints its line)
+into `~/.ssh/known_hosts` here: batch mode refuses an unknown host instead of asking.
+
+Clone with line-ending conversion off. Git for Windows installs with
+`core.autocrlf=true`, which checks every hub file out with CRLF while hubd appends
+lines that end in LF. Off, the files on disk are the bytes in the repository:
+
+```sh
+git clone -c core.autocrlf=false git@git.example.com:team/hub.git ~/.hubd
+hub card merge-driver
+```
+
+The drivers name `node.exe` by its full path, and git starts them through its own `sh`,
+so they run as they do on any node.
+
+Name the node. Without `HUBD_NODE` it takes the computer's name, and Windows names
+computers like `DESKTOP-4F2K9QA`. Set it in the script the schedule runs,
+`~/hub-mesh-sync.sh`:
+
+```sh
+export HUBD_NODE=pine
+exec sh "$APPDATA/npm/node_modules/@bzdos/hubd/scripts/mesh-sync.sh" >> ~/.hubd/.mesh-sync.log 2>&1
+```
+
+`$APPDATA/npm` is npm's global folder on Windows; `npm root -g` says where if yours is
+elsewhere. `.mesh-sync.log` is where `hub doctor` looks for the last error; add it to the
+hub's `.gitignore` if it is not there yet. Run the script once by hand, and the log's
+last line reads `mesh-sync: ok (pine ...)`.
+
+Then schedule it every minute, from a PowerShell run as administrator. S4U logon runs
+the task whether or not you are logged on, stores no password, and opens no console
+window every minute:
+
+```powershell
+$a = New-ScheduledTaskAction -Execute 'C:\Program Files\Git\bin\bash.exe' -Argument "-l `"$HOME\hub-mesh-sync.sh`""
+$t = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
+$p = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U
+$s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -StartWhenAvailable
+Register-ScheduledTask -TaskName hub-mesh-sync -Action $a -Trigger $t -Principal $p -Settings $s
+```
+
+The path is Git's default; use yours if it is installed elsewhere. The account comes
+from the process token, not from `$env:USERDOMAIN`: in some sessions, an ssh one for
+instance, that reads `WORKGROUP`, and the task is refused with "No mapping between
+account names and security IDs". `IgnoreNew` skips a tick while the last run is still
+going. `Unregister-ScheduledTask hub-mesh-sync` takes the task out.
+
+Last, the agent. `hub setup` writes the `HUBD_NODE` of the shell it runs in into the
+agent's config, so the agent's records carry the same node name as the sync's commits:
+
+```sh
+HUBD_NODE=pine hub setup --harness omp --agent dev-pine
+```
+
+After its first heartbeat and the next sync, `hub doctor` on any other node lists
+`pine` under `fleet:`.
 
 ## What hubd refuses here, and why
 
