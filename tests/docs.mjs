@@ -193,11 +193,24 @@ const MASKS = [
   [/\b\d{2}:\d{2}\b/g, '<hh:mm>'],
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, '<uuid>'],
   [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, '<hash>'],   // commits, a workspace's folder
+  // About one short hash in 27 is all digits, and nothing tells it from a number but where it
+  // stands: first on a line, as git log --oneline prints it, or after "commit".
+  [/^(\s*)\d{7,40}(?= )/gm, '$1<hash>'],
+  [/\b(commit:? )\d{7,40}\b/g, '$1<hash>'],
   [/\bv?\d+\.\d+\.\d+\b/g, '<version>'],
   [/\b\d+m\b/g, '<n>m'],
   [/ {2,}/g, ' '],
 ];
 const mask = (s) => MASKS.reduce((t, [re, to]) => t.replace(re, to), tidy(s));
+// The masks on the cases they exist for, before any page runs: a mask that misses passes every run
+// that happens not to need it and fails the odd one that does.
+for (const [s, want] of [
+  ['  8641485 a shop', ' <hash> a shop'],
+  ['  bde1637 a shop', ' <hash> a shop'],
+  ['commit 8641485', 'commit <hash>'],
+  ['Task #oak-1 added: set nofile to 1048576 in the load box image', 'Task #oak-1 added: set nofile to 1048576 in the load box image'],
+  ['84 min · 1514000 tokens · $5.33', '84 min · 1514000 tokens · $5.33'],
+]) if (mask(s) !== want) { console.log(`FAIL masks: ${JSON.stringify(s)} became ${JSON.stringify(mask(s))}, not ${JSON.stringify(want)}`); process.exit(1); }
 const isGap = (l) => l.trim() === '…';
 // a line the page cut short with … stands for any line it begins
 const same = (doc, got) => doc === got || (doc.endsWith('…') && got.startsWith(doc.slice(0, -1).trimEnd()));
