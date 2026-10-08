@@ -4,6 +4,14 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.61 — 2026-10-08
+
+- **A reopened task is open, not closed.** Setting a closed task back to `open` kept the
+  time it was closed: `hub task get` printed "closed" on an open task, `hub_task_get`
+  returned the old `done`, and `hub recall` dated the task by that close. The fold now drops
+  `done` when a task's status is set to anything but `done`, so the tasks reopened before
+  this version read right too, with no event rewritten. Closing one again stamps a new time.
+
 ## 0.9.60 — 2026-10-08
 
 - **Every card write leaves its trace in the journal.** A head read its card as it stood

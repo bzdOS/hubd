@@ -795,8 +795,16 @@ export function foldTasks() {
       const fid = originKeyed
         ? (remap.get(key) ?? e.id)
         : (tasks.has(e.id) ? e.id : (remap.get(key) ?? e.id));
-      if (e.ev === 'set') { const t = tasks.get(fid); if (t) Object.assign(t, e.patch || {}); }
-      else tasks.delete(fid);
+      if (e.ev === 'set') {
+        const t = tasks.get(fid);
+        if (t) {
+          Object.assign(t, e.patch || {});
+          // A reopen ends the closure: the close time it leaves behind made `hub task get` print
+          // "closed" on an open task and gave it that date in recall. Dropped in the fold, so the
+          // tasks reopened before this fix read right too, with no event rewritten.
+          if (e.patch && e.patch.status && e.patch.status !== 'done') delete t.done;
+        }
+      } else tasks.delete(fid);
     }
   }
   return { seq: maxNum, tasks: [...tasks.values()] };
@@ -3798,7 +3806,9 @@ export function runTaskUpdate(a) {
       }
     }
     const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
-    return { ok: true, task: { ...t, ...patch }, ...(resourceHint ? { resourceHint } : {}) };
+    const task = { ...t, ...patch };
+    if (patch.status && patch.status !== 'done') delete task.done;   // as the fold does
+    return { ok: true, task, ...(resourceHint ? { resourceHint } : {}) };
   });
   /* A closed task holds nothing. `hub claim --task` marks a task started, and closing it used to
    * leave that mark live until its TTL ran out: the role's work queue still showed the task as

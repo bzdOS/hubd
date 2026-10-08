@@ -217,6 +217,15 @@ const close3 = core.runTaskUpdate({ id: idT.id, status: 'done', assignee: 'zed',
 ok(close3.task.assignee === 'zed' && close3.task.done === close1.task.done,
   'idempotent done: a re-close carrying a real edit applies the edit and keeps the original close time');
 
+// ── a reopen ends the closure: the close time does not outlive it ──
+const reopen = core.runTaskUpdate({ id: idT.id, status: 'open', by: 'dev-t' });
+ok(reopen.task.status === 'open' && !('done' in reopen.task), `reopen: the answer carries no close time (got ${reopen.task.done})`);
+const reopened = core.runTaskList({ project: 'p', status: 'all' }).tasks.find(t => t.id === idT.id);
+ok(reopened && reopened.status === 'open' && !('done' in reopened),
+  `reopen: the fold drops the close time, so the task does not read as closed (got ${reopened && reopened.done})`);
+const reclosed = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'dev-t' });
+ok(!reclosed.noop && !!reclosed.task.done, 'reopen: closing it again is a new close, with its own time');
+
 // ── cat is a closed vocabulary; anything else survives as a tag ──
 ok(core.normalizeCat('technical').cat === 'technical', 'cat: a canonical value passes through');
 ok(core.normalizeCat('Chore ').cat === 'chore', 'cat: trimmed and lower-cased');
