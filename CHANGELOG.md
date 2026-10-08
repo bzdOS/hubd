@@ -4,6 +4,25 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.64 — 2026-10-08
+
+- **`HUBD_TOOLS`: a role's tools, not all of them.** A client reads every tool's schema
+  at the start of every session: all 42 come to about 11k tokens, which a local model
+  reading 100-200 tokens a second spends a minute and a half on. `HUBD_TOOLS=worker`
+  offers the 15 a worker uses, about 4k tokens; tool names can be added, comma-separated.
+  A tool left out is refused when called, and the instructions sent at connect and the
+  hints on each answer leave out the advice that names one: [Profiles](docs/reference/mcp.md#profiles).
+- **`HUBD_PRESET=small`: short answers, one variable.** An answer holds 8000 characters
+  instead of 40000 and comes without indentation; `hub_get`, `hub_whatsnew`,
+  `hub_task_list` and `hub_context` show fewer entries, with shorter texts, and their
+  descriptions quote the numbers. `full: true` still gives everything:
+  [Environment](docs/reference/env.md#what-a-client-is-offered).
+- **`hub_context` puts what changes least first.** A model that keeps the prompt it has
+  read reuses it up to the first byte that differs, and this answer opens every session.
+  Presence, which differs on every call, stood before the journal tail, and the digest's
+  age, which changes daily, before the laws. The fields now run from the steadiest to the
+  most changeable: card, laws, age, tasks, claims, journal, presence, files touched.
+
 ## 0.9.63 — 2026-10-08
 
 - **A block is handed out once, with its header.** A block handed out cut short just

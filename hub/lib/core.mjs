@@ -1753,7 +1753,18 @@ export function runReview(a = {}) {
  * Applied at the MCP boundary only (see index.mjs): the CLI writes to a terminal, where a
  * human can pipe, grep and scroll, and truncating there would hide data from the one reader
  * who can handle all of it. */
-export const OUTPUT_BUDGET_CHARS = Math.max(2000, parseInt(process.env.HUBD_MAX_OUTPUT_CHARS || '', 10) || 40000);
+/* HUBD_PRESET=small is for a model with a small window that reads its prompt slowly: a local one
+ * with 64k tokens, reading 100-200 a second, spends a minute on every 10k it is handed. One variable
+ * sets what it needs: a budget a fifth of the usual, answers without indentation, and shorter
+ * default views (their numbers are in index.mjs, next to the plans they change). An explicit
+ * HUBD_MAX_OUTPUT_CHARS still wins. */
+export const PRESET = (() => {
+  const p = (process.env.HUBD_PRESET || '').trim().toLowerCase();
+  if (!p || p === 'small') return p;
+  process.stderr.write(`hubd: HUBD_PRESET=${p} is no preset (small); ignored\n`);
+  return '';
+})();
+export const OUTPUT_BUDGET_CHARS = Math.max(2000, parseInt(process.env.HUBD_MAX_OUTPUT_CHARS || '', 10) || (PRESET === 'small' ? 8000 : 40000));
 
 // `indent` defaults to what the MCP transport actually serialises with (JSON.stringify(r, null, 1)),
 // not to compact JSON: pretty-printing adds a newline and a run of spaces per key, which came to
@@ -3500,23 +3511,29 @@ export function runContext(a) {
   const local = a.local !== false;
   const ctx = resolveContext(cwd, { local });
   if (ctx.guessed) ctx.hint = `guessed from the folder name — write ${path.join(ctx.root, '.hubd')} with one line "${ctx.project}" to make it certain`;
-  if (!ctx.project) return { ...ctx, digest: null, laws: [], openTasks: [], activeClaims: [], presenceHere: presenceHere({ root: ctx.root }), journalTail: [] };
+  if (!ctx.project) return { ...ctx, digest: null, laws: [], openTasks: [], activeClaims: [], journalTail: [], presenceHere: presenceHere({ root: ctx.root }) };
   const card = readCard(ctx.project);
   const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
   const { at: digestSetAt, by: digestSetBy } = cardStamp(card);
   const digestAgeDays = digestSetAt ? daysSince(digestSetAt) : null;
   const digestStale = digestLag(digestSetAt, lastJournalByProject()[ctx.project], a.staleDays ?? 7);
   const claimsDb = loadClaims();
+  /* The order is by how often a field changes, the steadiest first. A model that keeps the prompt
+   * it has read reuses it up to the first byte that differs, and this answer opens every session:
+   * a field that changes on every call (who is here, files touched) placed first made the whole
+   * answer new each time. Days old and stale change daily, tasks and claims hourly, the journal
+   * with every report, presence and files touched on every call. */
   return {
     ...ctx,
-    digest, digestSetAt, digestSetBy, digestAgeDays,
-    ...(digestStale ? { digestStale } : {}),
+    digest, digestSetAt, digestSetBy,
     // The rules this project's head accepted (runLaw): every role of it works by them.
     laws: projectLaws(ctx.project).map(l => l.rule),
+    digestAgeDays,
+    ...(digestStale ? { digestStale } : {}),
     openTasks: runTaskList({ project: ctx.project, status: 'open' }).tasks,
     activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
-    presenceHere: presenceHere({ root: ctx.root, project: null }),
     journalTail: journalTail(ctx.project, a.journalTail ?? 5),
+    presenceHere: presenceHere({ root: ctx.root, project: null }),
     // "You are already editing somebody's zone": live claims (not the caller's, when it says who
     // it is) whose glob covers a file changed in this checkout in the last half hour. Needs the
     // checkout's own disk, so a remote transport says it did not look rather than answering "none".

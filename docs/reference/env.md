@@ -33,6 +33,13 @@ Every variable hubd reads, from the code the package ships. Set them in the envi
 | `HUBD_MAX_OUTPUT_CHARS` | `40000` | Characters an MCP tool's answer holds before its long lists are trimmed, the journal first, and what was left out is named in `truncated`; at least 2000. `full: true` asks for everything. The CLI is never trimmed. |
 | `HUBD_PRESENCE_SNAPSHOT_MS` | `300000` | How often at most, in milliseconds, a node republishes `presence.<node>.json` for the other nodes; at least 1000. Keep it under the shortest heartbeat TTL (15 minutes by default). |
 
+## What a client is offered
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `HUBD_TOOLS` | every tool | The tools the MCP server offers: a profile, tool names, or both, comma-separated; `all` is every tool. `worker` is the 15 a worker uses ([MCP tools](mcp.md#profiles)). A tool left out is refused when called, and the instructions sent at connect leave out the advice that names one. A word that is neither a profile nor a tool is named on stderr and left out; when nothing is left, every tool is offered. |
+| `HUBD_PRESET` | — | `small`: for a model with a small window that reads its prompt slowly, such as a local one. An answer holds 8000 characters (an explicit `HUBD_MAX_OUTPUT_CHARS` still wins) and comes without indentation. `hub_get` shows the card's first 2000 characters and 2 journal entries, `hub_whatsnew` 5 entries, `hub_task_list` 15 tasks, `hub_context` 2 journal entries and its first 10 open tasks; texts are cut to 160 characters, a task's to 120. The descriptions quote these numbers, and `full: true` still gives everything. |
+
 ## HTTP server
 
 | Variable | Default | What it does |

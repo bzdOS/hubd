@@ -1,7 +1,7 @@
 // context.mjs — what a session reads first: the protocol, context and whereami, claims, search, recall, whatsnew, usage, scope
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { REPO, ok, mktmp, cli, core, usageLib, recallLib, done } from './_h.mjs';
 
 // ── protocol: ensureProtocol materialises HUBD.md (versioned, gitignored, per-node) ──
@@ -433,6 +433,73 @@ ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) 
   ok(wj && wj.project === 'wsmoke' && Array.isArray(wj.git && wj.git.commits), 'whereami --json: the same answer, machine-readable');
   const wn = cli(['whereami'], { cwd: WD });
   ok(wn.code === 0 && /project: {2}\(none\)/.test(wn.out), 'whereami: outside any project it still answers, with (none)');
+}
+
+// ── a model with a small window: a role's tools, a small preset, a steady prefix ──
+{
+  const SD = mktmp(), SP = path.join(SD, 'smallproj');
+  fs.mkdirSync(SP);
+  core.setHubBase(SD); core.ensureHubDirs();
+  core.runSync({ path: SP, name: 'smallproj', digest: 'small digest', agent: 'test' });
+  for (let i = 1; i <= 12; i++) core.runTaskAdd({ project: 'smallproj', text: `task ${i} ` + 'x'.repeat(200), by: 'test' });
+  for (let i = 1; i <= 4; i++) core.runReport({ project: 'smallproj', agent: 'test', text: `NOTE: step ${i}` });
+
+  // A model that keeps what it has read reuses it up to the first byte that differs: what changes
+  // on every call goes last.
+  const keys = Object.keys(core.runContext({ cwd: SP }));
+  ok(keys.slice(-2).join(',') === 'presenceHere,claimsTouched' && keys.indexOf('journalTail') > keys.indexOf('openTasks')
+    && keys.indexOf('digestAgeDays') > keys.indexOf('laws') && keys.indexOf('digest') < keys.indexOf('laws'),
+    `hub_context: the fields that change least come first, who is here and files touched last (${keys.join(',')})`);
+
+  const mcp = (env, calls) => {
+    const reqs = [{ id: 1, method: 'initialize', params: {} }, { id: 2, method: 'tools/list', params: {} },
+      ...calls.map((c, i) => ({ id: 10 + i, method: 'tools/call', params: c }))]
+      .map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
+    const e = { ...process.env, HUBD_DIR: SD, HUBD_AGENT: 'dev-small', ...env };
+    for (const k of ['HUBD_TOOLS', 'HUBD_PRESET', 'HUBD_MAX_OUTPUT_CHARS']) if (!(k in env)) delete e[k];
+    const r = spawnSync(process.execPath, [path.join(REPO, 'hub/index.mjs')], { input: reqs, encoding: 'utf8', env: e, timeout: 15000 });
+    const res = Object.fromEntries(String(r.stdout).trim().split('\n').filter(Boolean).map(l => JSON.parse(l)).map(m => [m.id, m]));
+    return { res, err: r.stderr, tools: res[2].result.tools.map(t => t.name), instr: res[1].result.instructions,
+      call: (i) => res[10 + i].result };
+  };
+  const ctxCall = { name: 'hub_context', arguments: { cwd: SP } };
+
+  const all = mcp({}, [ctxCall]);
+  ok(all.tools.length > 30 && /hub_onboarding/.test(all.instr) && /hub_task_add/.test(all.instr), `tools: unset, every tool is offered (${all.tools.length})`);
+  ok(/\n "openTasks"/.test(all.call(0).content[0].text) && JSON.parse(all.call(0).content[0].text).openTasks.length === 12,
+    'preset: unset, hub_context is indented and holds every open task');
+
+  const w = mcp({ HUBD_TOOLS: 'worker' }, [ctxCall, { name: 'hub_brief', arguments: {} }, { name: 'hub_status', arguments: {} }]);
+  ok(w.tools.length > 0 && w.tools.length <= 15 && w.tools.includes('hub_queue_wait') && w.tools.includes('hub_report') && !w.tools.includes('hub_task_add'),
+    `tools: the worker profile is at most 15 tools, its loop among them (${w.tools.length}: ${w.tools.join(' ')})`);
+  ok((w.instr.match(/hub_[a-z_]+/g) || []).every(n => w.tools.includes(n)) && /hub_context/.test(w.instr),
+    `tools: the instructions name no tool the profile leaves out (${w.instr})`);
+  ok(w.call(1).isError && /hub_brief is not offered by this server \(HUBD_TOOLS=worker\)/.test(w.call(1).content[0].text) && w.call(2).isError,
+    'tools: a tool the profile leaves out is refused, saying why');
+  ok(!w.call(0).isError && !w.call(0).content.some(c => /hub_onboarding/.test(c.text)),
+    'tools: and no hint sends the model to one');
+
+  const wx = mcp({ HUBD_TOOLS: 'worker, hub_task_add,hub_nope' }, []);
+  ok(wx.tools.length === w.tools.length + 1 && wx.tools.includes('hub_task_add') && /hub_nope: no profile/.test(wx.err),
+    'tools: a profile and tool names add up; a word that is neither is named on stderr and left out');
+  const typo = mcp({ HUBD_TOOLS: 'wroker' }, []);
+  ok(typo.tools.length === all.tools.length && /every tool is offered/.test(typo.err), 'tools: a typo that leaves nothing offers every tool, not none');
+
+  const s = mcp({ HUBD_PRESET: 'small' }, [ctxCall, { name: 'hub_context', arguments: { cwd: SP, full: true } }]);
+  const sc = JSON.parse(s.call(0).content[0].text);
+  ok(!/\n/.test(s.call(0).content[0].text), 'preset small: answers come without indentation');
+  ok(sc.openTasks.length === 10 && sc.truncated.openTasks.hidden === 2 && sc.openTasks.every(t => t.text.length <= 120 && !t._origin),
+    `preset small: hub_context holds the first 10 open tasks, texts cut, and says what it left out (${sc.openTasks.length})`);
+  ok(sc.journalTail.map(e => e.text).join(',') === 'step 3,step 4', `preset small: hub_context's journal tail is the last 2 entries (${JSON.stringify(sc.journalTail.map(e => e.text))})`);
+  ok(JSON.parse(s.call(1).content[0].text).openTasks.length === 12, 'preset small: full:true still gives every open task');
+  const sDesc = (n) => s.res[2].result.tools.find(t => t.name === n).description;
+  ok(/first 2000 chars/.test(sDesc('hub_get')) && /newest 5 entries/.test(sDesc('hub_whatsnew')) && /at most 15 tasks/.test(sDesc('hub_task_list')),
+    'preset small: a description quotes the sizes this server cuts to, not the usual ones');
+  const budget = (env) => spawnSync(process.execPath, ['-e', `import('${path.join(REPO, 'hub/lib/core.mjs')}').then(c => console.log(c.OUTPUT_BUDGET_CHARS))`],
+    { encoding: 'utf8', env: { ...process.env, HUBD_DIR: SD, ...env } }).stdout.trim();
+  ok(budget({ HUBD_PRESET: 'small', HUBD_MAX_OUTPUT_CHARS: '' }) === '8000' && budget({ HUBD_PRESET: 'small', HUBD_MAX_OUTPUT_CHARS: '12000' }) === '12000'
+    && budget({ HUBD_PRESET: '', HUBD_MAX_OUTPUT_CHARS: '' }) === '40000',
+    'preset small: the answer budget is 8000 characters, and an explicit HUBD_MAX_OUTPUT_CHARS still wins');
 }
 
 done();
