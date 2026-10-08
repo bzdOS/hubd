@@ -48,6 +48,18 @@
 #     over the tree after any merge that changed something, and after every failed fetch or
 #     merge: a fetch writes into .git, and an in-place merge writes the tree before it aborts.
 #     A private hub is left untouched.
+#   * A NODE THAT DIED MID-COMMIT IS REPAIRED HERE (exit 6 when it cannot be). One node's kernel
+#     panicked inside a commit: empty object files, a branch naming an empty object, and every run
+#     after it failed on "bad object" for two hours. Repaired by hand, the second half showed: the
+#     tree was still the one from before the panic, and this script committed it over the fresh
+#     branch, +306/-612 lines of the other nodes' queues, journals and task logs rolled back. Only
+#     a conflict kept that from the push. So the broken objects and refs move to a quarantine in
+#     .git, the branch goes to origin's, every file not this node's takes origin's version, and
+#     this node's own files stay. Without an origin there is nothing to repair from: exit 6.
+#   * ANOTHER NODE'S LINES ARE NOT REMOVED HERE (exit 4). journal.<node>.jsonl, a queue shard and
+#     its acks grow and are written by their node; a line gone from one of another node's is a
+#     tree older than HEAD, whatever the cause. A line found in an archive of the same file is
+#     moved, not lost. HUBD_SYNC_OWN names the other node names a hub is written under.
 #   * PUSH FAILURE IS NOT DATA LOSS (exit 3). The commit is already local; the next run
 #     retries. A busy or briefly unreachable peer must not turn into an error you learn
 #     about by losing work.
@@ -119,8 +131,116 @@ fi
 # used to put one node under two names.
 NODE="$(printf '%s' "${HUBD_NODE:-$(hostname 2>/dev/null)}" | cut -d. -f1 | tr '[:upper:]' '[:lower:]' \
   | sed -e 's/[^a-z0-9_-][^a-z0-9_-]*/-/g' -e 's/^-*//' -e 's/-*$//' | cut -c1-40)"; [ -n "$NODE" ] || NODE=node
-BR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; [ -n "$BR" ] || BR=main
+# The branch is read from .git/HEAD itself: git cannot name it once the ref it points to is broken.
+BR="$(sed -n 's#^ref: refs/heads/##p' .git/HEAD 2>/dev/null)"
+[ -n "$BR" ] || BR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; [ -n "$BR" ] || BR=main
 STAMP="$(date -u '+%Y-%m-%d %H:%M')"
+
+# The node a per-node file belongs to: the second part of its name, in lower case as NODE is.
+# journal.<node>.jsonl and its month archives journal.<node>-<YYYY-MM>[.<n>].jsonl,
+# tasks.<node>.events.jsonl, queues/<role>.<node>.queue.md and .acks, presence.<node>.json.
+node_of() {
+  printf '%s\n' "${1##*/}" | sed -n 's/^[^.]*\.\([^.]*\)\..*/\1/p' | sed -e 's/-[0-9]\{4\}-[0-9]\{2\}$//' -e '/^queue$/d' -e '/^events$/d' |
+    tr '[:upper:]' '[:lower:]'
+}
+# This node's own names: NODE, and those in HUBD_SYNC_OWN, for a hub several HUBD_NODE names write into.
+OWN=" $NODE $(printf '%s' "${HUBD_SYNC_OWN:-}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]') "
+mine() { n="$(node_of "$1")"; [ -n "$n" ] && case "$OWN" in *" $n "*) return 0 ;; esac; return 1; }
+# Another node's file: one with a node in its name that is not one of ours.
+theirs() { n="$(node_of "$1")"; [ -n "$n" ] && ! mine "$1"; }
+
+# Restore group write over a SHARED hub after a merge created files as this user. Only when the
+# hub dir carries the group-write bit itself; a private hub keeps its own modes. Both chmods are
+# idempotent, so a run that changed nothing costs one find.
+share_perms() {
+  [ -n "$(find . -maxdepth 0 -perm -g+w 2>/dev/null)" ] || return 0
+  chmod -R g+rwX . 2>/dev/null || true
+  find . -type d ! -perm -g+s -exec chmod g+s {} + 2>/dev/null || true
+}
+
+# 0. A NODE THAT DIED MID-COMMIT. Empty object files, a branch naming no readable commit, an index
+#    git cannot read: each is a git killed between writing and syncing a file. Nothing here is
+#    deleted: what is broken moves to .git/hubd-quarantine/<time>/. The branch then goes to
+#    origin's, and only this node's files are kept from the tree (see realign). A repair stopped
+#    halfway, by a failed fetch say, is marked, so the next run finishes it instead of committing
+#    the old tree onto no branch at all.
+has_branch() { [ -e ".git/refs/heads/$BR" ] || grep -q " refs/heads/$BR\$" .git/packed-refs 2>/dev/null; }
+head_whole() {   # head_whole [<base>] -> HEAD is a commit, and every object of it past <base> is there
+  git rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1 &&
+    git rev-list --objects HEAD ${1:+--not "$1"} >/dev/null 2>&1
+}
+empty_objects() { find .git/objects -type f -empty ! -path '.git/objects/info/*' 2>/dev/null; }
+PENDING=.git/hubd-repair-pending
+DAMAGE=""
+[ ! -f "$PENDING" ] || DAMAGE="a repair not finished"
+[ -z "$(empty_objects | head -n 1)" ] || DAMAGE="${DAMAGE:+$DAMAGE, }empty object files"
+if has_branch && ! git rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1; then
+  DAMAGE="${DAMAGE:+$DAMAGE, }$BR names no readable commit"
+fi
+git ls-files >/dev/null 2>&1 || DAMAGE="${DAMAGE:+$DAMAGE, }an index git cannot read"
+
+# The tree after a crash is the tree from before it: syncing it over a fresh branch rolls back every
+# line the other nodes wrote meanwhile. So each file of another node, and each file of no node,
+# takes origin's version; this node's own files stay as the tree has them. The tree's copy of a
+# file that changes goes to $Q/tree/ first.
+realign() {
+  { git -c core.quotePath=false diff --name-only; git -c core.quotePath=false ls-files --others --exclude-standard; } |
+  while IFS= read -r p; do
+    mine "$p" && continue
+    mkdir -p "$Q/tree/$(dirname "$p")"
+    if git ls-files --error-unmatch -- ":(literal)$p" >/dev/null 2>&1; then
+      [ ! -e "$p" ] || cp -p "$p" "$Q/tree/$p"
+      git checkout -q -- ":(literal)$p"
+    else
+      mv "$p" "$Q/tree/$p"
+    fi
+    printf '%s\n' "$p" >> "$Q/from-origin.txt"
+  done
+}
+
+if [ -n "$DAMAGE" ]; then
+  Q="$(cat "$PENDING" 2>/dev/null)"
+  [ -n "$Q" ] && [ -d "$Q" ] || Q=".git/hubd-quarantine/$(date -u +%Y%m%d-%H%M%S)"
+  mkdir -p "$Q" && printf '%s\n' "$Q" > "$PENDING"
+  echo "mesh-sync: the hub's git is damaged ($DAMAGE): repairing, nothing deleted, see $DIR/$Q" >&2
+  empty_objects | while IFS= read -r f; do mkdir -p "$Q/${f%/*}" && mv "$f" "$Q/$f"; done
+  for f in .git/objects/pack/tmp_*; do [ -e "$f" ] && mkdir -p "$Q/.git/objects/pack" && mv "$f" "$Q/$f"; done
+  # A broken ref stops a fetch from agreeing with the peer: its name and value are kept, the ref goes.
+  for r in $({ find .git/refs -type f | sed 's#^\.git/##'; git for-each-ref --format='%(refname)' 2>/dev/null; } | sort -u); do
+    git rev-parse -q --verify "$r^{commit}" >/dev/null 2>&1 && continue
+    echo "$r $(cat ".git/$r" 2>/dev/null || git rev-parse -q "$r" 2>/dev/null)" >> "$Q/bad-refs.txt"
+    git update-ref --no-deref -d "$r" 2>/dev/null || { mkdir -p "$Q/.git/${r%/*}"; mv ".git/$r" "$Q/.git/$r"; }
+  done
+  # Reflogs name the lost commits too, and git gc stops on them.
+  [ ! -d .git/logs ] || mv .git/logs "$Q/logs"
+  git ls-files >/dev/null 2>&1 || mv .git/index "$Q/index-unreadable"
+  if git remote | grep -qx origin; then
+    if ! FETCH_OUT="$(g fetch -q origin "$BR" 2>&1)"; then
+      [ -n "$FETCH_OUT" ] && printf '%s\n' "$FETCH_OUT" >&2
+      echo "mesh-sync: fetch failed on $BR (output above), so the repair stops halfway; the next run goes on" >&2
+      share_perms; exit 2
+    fi
+    if head_whole FETCH_HEAD; then
+      [ -e .git/index ] || git reset -q
+      echo "mesh-sync: repaired: $BR was whole, and stays" >&2
+    else
+      git update-ref "refs/heads/$BR" FETCH_HEAD
+      [ ! -e .git/index ] || mv .git/index "$Q/index"
+      git reset -q
+      realign
+      echo "mesh-sync: repaired: $BR set to origin's $(git rev-parse --short HEAD);" \
+        "$(cat "$Q/from-origin.txt" 2>/dev/null | wc -l | tr -d ' ') file(s) not this node's taken from origin, the tree's copies in $DIR/$Q/tree; this node's files kept" >&2
+    fi
+  elif head_whole; then
+    [ -e .git/index ] || git reset -q
+    echo "mesh-sync: repaired: $BR was whole, and stays" >&2
+  else
+    echo "mesh-sync: $BR is damaged and there is no origin to repair it from. What was broken is in $DIR/$Q" >&2
+    share_perms; exit 6
+  fi
+  mv "$PENDING" "$Q/repair-done"
+  share_perms
+fi
 
 # 0. APPEND-ONLY GUARD: task event logs are the truth and only grow. Refuse to sync
 #    if any existing line was removed/changed — that means a destructive "migration"
@@ -161,14 +281,48 @@ if [ -n "$DELETED_LOGS" ]; then
   exit 4
 fi
 
-# Restore group write over a SHARED hub after a merge created files as this user. Only when the
-# hub dir carries the group-write bit itself; a private hub keeps its own modes. Both chmods are
-# idempotent, so a run that changed nothing costs one find.
-share_perms() {
-  [ -n "$(find . -maxdepth 0 -perm -g+w 2>/dev/null)" ] || return 0
-  chmod -R g+rwX . 2>/dev/null || true
-  find . -type d ! -perm -g+s -exec chmod g+s {} + 2>/dev/null || true
+# Another node's append-only file that lost lines here. Only that node writes it (and readers
+# here append acks), so a line gone is a tree older than HEAD: committed, it would remove those
+# lines from every peer. A line that sits in an archive of the same file is moved, not lost:
+# hub queue dedupe folds copies into queues/archive/, a journal rotates into its month archive.
+# Read from what the commit would hold, in a copy of the index: a path git cannot stage (two
+# spellings of one file on a case-insensitive disk, exit 5 below) loses nothing.
+lost_lines() {   # lost_lines <file> <archive...> -> lines <file> lost since HEAD that no archive holds
+  f="$1"; shift
+  { echo '#'; GIT_INDEX_FILE="$GI" git diff --cached -U0 HEAD -- "$f" | sed -n '/^@@/,$p' | sed -n 's/^-\(..*\)$/\1/p'; } |
+    awk 'FNR == 1 { f++ } f == 1 { if (FNR > 1) lost[$0] = 1; next } { delete lost[$0] }
+      END { n = 0; for (l in lost) n++; print n }' - "$@"
 }
+LOST=""; GI=""
+CAND="$(git diff --name-only --diff-filter=M HEAD -- '*.jsonl' 'queues/*.queue.md' 'queues/*.acks' 2>/dev/null)"
+if [ -n "$CAND" ] && GI="$(mktemp "${TMPDIR:-/tmp}/hubd-sync-index.XXXXXX")"; then
+  cp .git/index "$GI" 2>/dev/null || GIT_INDEX_FILE="$GI" git read-tree HEAD
+  GIT_INDEX_FILE="$GI" git add -A -- $CAND 2>/dev/null
+  CAND="$(GIT_INDEX_FILE="$GI" git diff --cached --name-only --diff-filter=M HEAD -- $CAND 2>/dev/null)"
+fi
+for f in $CAND; do
+  case "$f" in
+    queues/*/*|tasks.*.events.jsonl) continue ;;    # archives; task logs have the guard above
+    queues/*) b="${f##*/}"; b="${b%.queue.md}"; arch="queues/archive/${b%.acks}." ;;
+    */*) continue ;;
+    *) b="${f%.jsonl}"; arch="${b%-[0-9][0-9][0-9][0-9]-[0-9][0-9]*}-" ;;
+  esac
+  theirs "$f" || continue
+  set --; for a in "$arch"*; do [ -f "$a" ] && set -- "$@" "$a"; done
+  n="$(lost_lines "$f" "$@")"
+  [ "${n:-1}" = 0 ] || LOST="$LOST $f"
+done
+[ -z "$GI" ] || rm -f "$GI"
+if [ -n "$LOST" ]; then
+  echo "mesh-sync: REFUSED - another node's append-only file lost lines here:" >&2
+  printf '    %s\n' $LOST >&2
+  echo "  Only that node writes them, so this tree is older than HEAD there (a node back from a crash," >&2
+  echo "  a copy put back by hand). Committing it would remove those lines from every peer." >&2
+  echo "  Take HEAD's version back, then re-sync:" >&2
+  echo "    git -C \"$DIR\" checkout -- $(printf '%s ' $LOST)" >&2
+  echo "  (Several node names write into this hub? Name the others in HUBD_SYNC_OWN.)" >&2
+  exit 4
+fi
 
 # 1. commit local hub writes, if any
 if [ -n "$(git status --porcelain)" ]; then

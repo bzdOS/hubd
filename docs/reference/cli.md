@@ -62,7 +62,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 
 ## setup
 
-- `hub setup --harness claude|gemini|opencode|omp --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]` — put hubd into a harness's MCP config, after trying the server; --check reads the config back and tries what it holds
+- `hub setup --harness claude|gemini|opencode|omp|dsh --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]` — put hubd into a harness's MCP config, after trying the server; --check reads the config back and tries what it holds
 
 ## version
 

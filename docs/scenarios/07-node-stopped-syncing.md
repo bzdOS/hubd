@@ -247,6 +247,17 @@ each pair from the mesh. hubd does not create such a pair itself.
 restores it ([4. A second machine](../start/4-second-machine.md#what-hubd-refuses-here-and-why)
 has the other exit codes).
 
+**A node that died mid-commit.** A panic inside a commit leaves empty object files and a
+branch that names one, and every git command fails with `bad object`. Repaired by hand
+and synced, the node commits the tree from before the panic over the fresh branch, and
+the lines the other nodes wrote meanwhile disappear from every peer. Leave it to
+mesh-sync: its next run says `the hub's git is damaged`, moves what is broken to
+`.git/hubd-quarantine/<time>/`, sets the branch to origin's, and takes origin's version
+of every file that is not this node's. A fetch that fails halfway leaves a mark, and
+the run after it finishes the repair. Lines of another node's journal, queue or acks
+that go missing any other way stop the sync with exit 4 and the command that puts them
+back.
+
 **A driver that names a file that is gone.** hubd or Node moved, say with an upgrade
 under a version manager: the card merge falls back to git's union merge, and the state files to the side git
 calls ours, without a word. `hub doctor` says which and what a merge does instead. Run

@@ -329,16 +329,32 @@ It exits 4. The same refusal stops a task log that lost or changed a line: that 
 history rewritten instead of appended to, and syncing it would spread the damage.
 Restore the file as it says, and the next run goes through.
 
+Exit 4 also stops a commit in which another node's journal, queue or acks file lost
+lines. Only that node writes them, so a shorter copy here is a tree older than the
+branch, and committing it would take those lines out on every peer. A line that moved
+into the file's archive (a journal's month, a block `hub queue dedupe` folded) is not
+lost. A node that writes under more than one name lists the others in `HUBD_SYNC_OWN`.
+
 The other exit codes say what to do next: `2` a merge conflict (a card without the
 driver), `3` a failed push (retried on the next run; the commit is already local),
 `5` a merge git refused before starting, such as two paths that differ only by case on
-a case-insensitive disk; nothing conflicted, run `hub doctor`. A push that lost a race
+a case-insensitive disk; nothing conflicted, run `hub doctor`. `6` a git damaged by a
+crash (below) on a node with no origin to repair it from. A push that lost a race
 to another node's push is not a failure: the same run fetches, merges and pushes again,
 up to `HUBD_SYNC_PUSH_TRIES` times in all (3 by default).
 
 **A merge in place.** mesh-sync tries each merge outside the hub first, so a
 conflicted one never reaches the folder your agents read: no conflict markers, no files
 that change and change back. (A git older than 2.38 merges in place and aborts.)
+
+**A node that died mid-commit.** A panic or a power cut inside a commit leaves empty
+object files and a branch that names one, and every git command after it fails on a bad
+object. mesh-sync repairs that in its next run. What is broken moves to
+`.git/hubd-quarantine/<time>/`, nothing is deleted, and the branch goes to origin's.
+Every file that is not this node's then takes origin's version, the tree's copy kept in
+the quarantine; this node's own files stay as they are. The tree is the one from before
+the crash: committed as it was, it would roll back every line the other nodes wrote
+meanwhile.
 
 **git's own background gc.** mesh-sync turns it off for its commit, fetch and merge,
 and runs one `git gc --auto` itself after the push, in the foreground: on macOS a

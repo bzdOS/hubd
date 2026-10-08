@@ -41,8 +41,10 @@ hub setup --harness claude --agent dev-myproject
 ```
 
 It starts the server and asks it for the hub's status first, then adds it with
-`claude mcp add`, and reads the entry back. `--harness gemini`, `--harness opencode` and
-`--harness omp` (oh-my-pi) work the same way. `--print` shows what it would write,
+`claude mcp add`, and reads the entry back. `--harness gemini`, `--harness opencode`,
+`--harness omp` (oh-my-pi) and `--harness dsh` work the same way. dsh runs a server by
+its command alone, so it needs hubd installed (`npm i -g @bzdos/hubd`), not run through
+npx. `--print` shows what it would write,
 `--check` tries what a config already holds, `--uninstall` takes it out, and `--prompt`
 prints the steps for an agent in a harness it has no row for. By hand, for Claude Code:
 

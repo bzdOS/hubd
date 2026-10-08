@@ -493,7 +493,7 @@ command('init', () => {
     .filter(k => process.env[k]).map(k => k + '=' + process.env[k])];
   console.log('  Connect an agent:  claude mcp add --scope user hubd ' + envs.map(e => '--env ' + q(e)).join(' ') + ' -- npx -y @bzdos/hubd');
   console.log('                     (name HUBD_AGENT for the function the agent performs, not the model)');
-  console.log('  Or, checked:       hub setup --harness claude|gemini|opencode|omp --agent dev-<project>');
+  console.log('  Or, checked:       hub setup --harness claude|gemini|opencode|omp|dsh --agent dev-<project>');
   console.log('  Check setup:       hub doctor');
   console.log('  Full org template: hubd-company/ in the hubd repository');
   done(0);
@@ -511,7 +511,7 @@ command('setup', () => {
   let agent = getFlag('--agent');
   for (const [f, v] of [['--harness', harness], ['--scope', scope], ['--hub', hub], ['--agent', agent]])
     if (v === true || (typeof v === 'string' && v.startsWith('--'))) die(`hub setup: ${f} needs a value`);
-  if (!harness) die('hub setup: --harness claude|gemini|opencode|omp is required (another harness: --harness <id> --prompt)');
+  if (!harness) die('hub setup: --harness claude|gemini|opencode|omp|dsh is required (another harness: --harness <id> --prompt)');
   const mode = modes.length ? modes[0].slice(2) : 'install';
   const go = (a) => runSetup({ harness, agent: a, scope: scope || 'user', hub: hub ? path.resolve(hub) : null, mode })
     .then(code => done(code), e => die(e && e.message ? e.message : String(e)));
@@ -2164,7 +2164,7 @@ command('serve', () => {
  * that command. */
 const HELP = [
   ['init [path]', 'scaffold a team folder (AGENTS.md, INBOX.md, queues/)'],
-  ['setup --harness claude|gemini|opencode|omp --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]',
+  ['setup --harness claude|gemini|opencode|omp|dsh --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]',
     'put hubd into a harness\'s MCP config, after trying the server; --check reads the config back and tries what it holds'],
   ['version | --version | -v', 'installed hubd version, and which copy is answering'],
   ['doctor', 'check hub base, team root, locks, queues and writer versions'],

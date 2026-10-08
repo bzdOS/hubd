@@ -57,6 +57,7 @@ Every variable hubd reads, from the code the package ships. Set them in the envi
 | --- | --- | --- |
 | `HUBD_SYNC_TIMEOUT` | `300` | Seconds a fetch or a push may take. `scripts/mesh-sync.sh` also reads `HUBD_DIR` and `HUBD_NODE`. |
 | `HUBD_SYNC_PUSH_TRIES` | `3` | Pushes a run makes in all when another node's push wins the race; each one fetches and merges first. |
+| `HUBD_SYNC_OWN` | — | Other node names this node writes files under, comma-separated. Their files count as its own: kept from the tree when a crash is repaired, and lines removed from them are not refused. |
 
 ## Sensors and secrets
 
