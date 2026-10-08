@@ -12,3 +12,6 @@ node_modules/
 /.hubd-local
 /.claude/
 /hub/spec_*_ru.md
+
+# experimental work that is never released: it lives on a local branch only
+/exp/
