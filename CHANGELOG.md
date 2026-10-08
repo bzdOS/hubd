@@ -32,6 +32,27 @@ a version here never migrates or deletes data.
   a heading inside a message stays in it. Only a shard this node may rewrite, and not
   while a cursor here has no watermark; this node's cursors move with their watermark,
   another node's find it on its next read. Dry without `--apply`.
+- **mesh-sync: a node that died mid-commit is repaired, not synced backwards.** A node
+  panicked inside a commit: empty object files, a branch naming one, every run failing
+  on a bad object. Repaired by hand, its tree was still the one from before the panic,
+  and the next sync committed it over the fresh branch, removing on every peer the
+  lines the other nodes had written meanwhile. mesh-sync now repairs it in the run:
+  what is broken moves to `.git/hubd-quarantine/<time>/`, the branch goes to origin's,
+  every file not this node's takes origin's version, and this node's own stay. A repair
+  stopped by a failed fetch is finished by the next run; with no origin it exits 6.
+  A commit in which another node's journal, queue or acks lost lines is now refused
+  with exit 4, whatever the cause; a line moved into that file's archive is not a loss.
+  `HUBD_SYNC_OWN` names the other nodes this node writes for.
+- **`hub setup --harness dsh`.** dsh has no command for adding an MCP server, and it
+  reads its patches from `$DSH_HOME/cordis.patch.yml` (`~/.dsh` by default), a YAML
+  list that stops dsh from starting at all when it does not read as one. hubd has no
+  YAML parser, so its item is one line of JSON between two comment lines, read back and
+  taken out by them; the rest of the file stays byte for byte. An item for hubd written
+  by hand is replaced in its place. A file hub setup cannot read whole, a hubd row
+  inside an item with other rows, and a hubd in a profile's own layer (one server name
+  twice) are refused with nothing written. dsh runs the server by its command alone,
+  so the entry names hubd's script; a hubd run through npx is refused with the remedy.
+  The last item taken out leaves `[]`, which dsh reads, not an empty file.
 
 ## 0.9.64 — 2026-10-08
 

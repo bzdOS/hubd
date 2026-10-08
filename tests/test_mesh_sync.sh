@@ -414,6 +414,146 @@ tries=$(grep -c 'fetching again' "$TMP/out13")
 ok "$([ $rc -eq 3 ] && [ "$tries" = 2 ] && grep -q 'push failed' "$TMP/out13" && grep -q 'rejected' "$TMP/out13" && echo 1 || echo 0)" \
   "push race: lost every time, it stops after 3 tries and exits 3 with git's reason (got $rc, $tries retries)"
 
+# ── a node that died mid-commit ───────────────────────────────────────────────
+# One node's kernel panicked inside a commit: empty object files, the branch naming an empty one,
+# every run after it failing on "bad object". Repaired by hand, the tree was still the one from
+# before the panic, and the sync committed it over the fresh branch: the other nodes' lines rolled
+# back. Here pine commits its own line and dies; elm meanwhile appends to its journal, queue and
+# acks, rewrites a shared note and archives a queue.
+cm() { git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "${2:-x}"; }
+empty_obj() {   # empty_obj <repo> <sha> — the object file a panic left at zero bytes
+  o="$1/.git/objects/$(printf %s "$2" | cut -c1-2)/$(printf %s "$2" | cut -c3-)"
+  chmod u+w "$o" && : > "$o"
+}
+crashed() {   # crashed <node> — a clone of origin7 whose last commit, of its own line, died half-written
+  git clone -q "$TMP/origin7" "$TMP/$1"
+  printf '{"ts":"2026-10-05 16:30","kind":"note","text":"%s before"}\n' "$1" >> "$TMP/$1/journal.$1.jsonl"
+  cm "$TMP/$1" "$1 own" && git -C "$TMP/$1" push -q origin main
+  printf '{"ts":"2026-10-05 16:34","kind":"note","text":"%s at the panic"}\n' "$1" >> "$TMP/$1/journal.$1.jsonl"
+  cm "$TMP/$1" "mesh-sync: $1"
+  blob="$(git -C "$TMP/$1" rev-parse HEAD:journal.$1.jsonl)"
+  empty_obj "$TMP/$1" "$blob" && empty_obj "$TMP/$1" "$(git -C "$TMP/$1" rev-parse HEAD)"
+}
+elm_writes() {   # elm_writes <n> — elm appends to its files, rewrites the note, and pushes
+  printf '{"ts":"2026-10-05 17:0%s","kind":"note","text":"elm %s"}\n' "$1" "$1" >> "$TMP/elm/journal.elm.jsonl"
+  printf '\n## 2026-10-05 17:0%s · from elm · id %s\nwork %s\n' "$1" "$1" "$1" >> "$TMP/elm/queues/w.elm.queue.md"
+  printf '{"id":%s,"status":"delivered"}\n' "$1" >> "$TMP/elm/queues/w.elm.acks"
+  printf 'note %s\n' "$1" > "$TMP/elm/notes.md"
+  cm "$TMP/elm" "elm $1" && git -C "$TMP/elm" pull -q --no-rebase --no-edit origin main && git -C "$TMP/elm" push -q origin main
+}
+mkhub "$TMP/origin7"; git -C "$TMP/origin7" config receive.denyCurrentBranch ignore
+git clone -q "$TMP/origin7" "$TMP/elm"; mkdir -p "$TMP/elm/queues"
+printf 'old queue\n' > "$TMP/elm/queues/w2.elm.queue.md"
+elm_writes 0
+crashed pine
+mv "$TMP/elm/queues/w2.elm.queue.md" "$TMP/elm/queues/archive-w2" 2>/dev/null || true
+mkdir -p "$TMP/elm/queues/archive" && mv "$TMP/elm/queues/archive-w2" "$TMP/elm/queues/archive/w2.elm.queue.md"
+elm_writes 1; elm_writes 2
+mkdir -p "$TMP/pine/queues"; printf '\n## 2026-10-05 17:10 · from pine · id 1\nafter the panic\n' > "$TMP/pine/queues/w.pine.queue.md"
+before="$(git -C "$TMP/origin7" rev-parse main)"
+HUBD_NODE=pine HUBD_DIR="$TMP/pine" sh "$SCRIPT" >"$TMP/out20" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && grep -q 'damaged' "$TMP/out20" && grep -q 'repaired' "$TMP/out20" && echo 1 || echo 0)" \
+  "crash: a branch naming an empty object is repaired in the run, which goes through (got $rc)"
+changed="$(git -C "$TMP/origin7" diff --name-only "$before" main | tr '\n' ' ')"
+ok "$([ "$changed" = 'journal.pine.jsonl queues/w.pine.queue.md ' ] && echo 1 || echo 0)" \
+  "crash: the mirror gets this node's files and nothing else (got: $changed)"
+ok "$([ "$(git -C "$TMP/origin7" rev-parse main^1)" = "$before" ] && echo 1 || echo 0)" "crash: on top of origin's branch, not beside it"
+ok "$(git -C "$TMP/origin7" show main:journal.pine.jsonl | grep -q 'pine at the panic' && echo 1 || echo 0)" \
+  "crash: the line of the commit that died reaches the mirror, its object written again"
+lost="$(git -C "$TMP/origin7" diff "$before" main -- journal.elm.jsonl queues notes.md | grep -c '^-[^-]')"
+ok "$([ "$lost" = 0 ] && [ ! -e "$TMP/pine/queues/w2.elm.queue.md" ] && echo 1 || echo 0)" \
+  "crash: not one of the other node's lines is removed, and a queue it archived stays archived (got $lost)"
+ok "$([ "$(cat "$TMP/pine/notes.md")" = 'note 2' ] && cmp -s "$TMP/pine/journal.elm.jsonl" "$TMP/elm/journal.elm.jsonl" && echo 1 || echo 0)" \
+  "crash: the tree holds origin's version of every file not this node's"
+Q="$(ls -d "$TMP/pine/.git/hubd-quarantine/"*/ 2>/dev/null | head -n 1)"
+qobj=$(find "$Q.git/objects" -type f 2>/dev/null | wc -l | tr -d ' ')
+ok "$([ "$qobj" = 2 ] && [ -f "$Q/tree/notes.md" ] && [ -f "$Q/tree/journal.elm.jsonl" ] && [ -f "$Q/tree/queues/w2.elm.queue.md" ] && echo 1 || echo 0)" \
+  "crash: nothing is deleted - the empty objects and the tree's old copies are in the quarantine (got $qobj objects)"
+ok "$([ ! -e "$TMP/pine/.git/hubd-repair-pending" ] && [ -f "$Q/repair-done" ] && git -C "$TMP/pine" gc -q 2>/dev/null &&
+  git -C "$TMP/pine" fsck --no-progress >/dev/null 2>&1 && echo 1 || echo 0)" \
+  "crash: the repair is marked done, and git gc and fsck run clean after it"
+HUBD_NODE=pine HUBD_DIR="$TMP/pine" sh "$SCRIPT" >"$TMP/out21" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && ! grep -q 'damaged' "$TMP/out21" && echo 1 || echo 0)" "crash: the next run is an ordinary one (got $rc)"
+
+# A repair that stops on a failed fetch is finished by the next run, not committed onto no branch.
+crashed ash
+elm_writes 3
+git -C "$TMP/ash" remote set-url origin "$TMP/nowhere"
+HUBD_NODE=ash HUBD_DIR="$TMP/ash" sh "$SCRIPT" >"$TMP/out22" 2>&1; rc=$?
+ok "$([ $rc -eq 2 ] && [ -f "$TMP/ash/.git/hubd-repair-pending" ] && echo 1 || echo 0)" "crash: a fetch that fails stops the repair halfway, marked (got $rc)"
+HUBD_NODE=ash HUBD_DIR="$TMP/ash" sh "$SCRIPT" >"$TMP/out23" 2>&1
+git -C "$TMP/ash" remote set-url origin "$TMP/origin7"
+before="$(git -C "$TMP/origin7" rev-parse main)"
+HUBD_NODE=ash HUBD_DIR="$TMP/ash" sh "$SCRIPT" >"$TMP/out24" 2>&1; rc=$?
+changed="$(git -C "$TMP/origin7" diff --name-only "$before" main | tr '\n' ' ')"
+ok "$([ $rc -eq 0 ] && [ "$changed" = 'journal.ash.jsonl ' ] && [ "$(git -C "$TMP/origin7" rev-parse main^1)" = "$before" ] && echo 1 || echo 0)" \
+  "crash: the next run that reaches origin finishes it - origin's branch and this node's files (got $rc: $changed)"
+
+# A branch file the panic left at zero bytes: git ignores it when listing refs, and cannot delete it.
+crashed yew
+: > "$TMP/yew/.git/refs/heads/main"
+elm_writes 4
+before="$(git -C "$TMP/origin7" rev-parse main)"
+HUBD_NODE=yew HUBD_DIR="$TMP/yew" sh "$SCRIPT" >"$TMP/out25" 2>&1; rc=$?
+changed="$(git -C "$TMP/origin7" diff --name-only "$before" main | tr '\n' ' ')"
+ok "$([ $rc -eq 0 ] && [ "$changed" = 'journal.yew.jsonl ' ] && grep -q '^refs/heads/main' "$TMP/yew/.git/hubd-quarantine/"*/bad-refs.txt && echo 1 || echo 0)" \
+  "crash: an empty branch file is moved aside and the branch set to origin's (got $rc: $changed)"
+
+# An empty object nothing reachable needs (a write the panic cut off before any ref named it): it
+# goes to the quarantine, the branch stays, the run is an ordinary one.
+git clone -q "$TMP/origin7" "$TMP/bay"
+mkdir -p "$TMP/bay/.git/objects/ee"; : > "$TMP/bay/.git/objects/ee/0000000000000000000000000000000000000e"
+printf '{"ts":"2026-10-05 19:00","kind":"note","text":"bay"}\n' > "$TMP/bay/journal.bay.jsonl"
+before="$(git -C "$TMP/bay" rev-parse HEAD)"
+HUBD_NODE=bay HUBD_DIR="$TMP/bay" sh "$SCRIPT" >"$TMP/out26" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && grep -q 'was whole, and stays' "$TMP/out26" && [ "$(git -C "$TMP/bay" rev-parse HEAD^1)" = "$before" ] &&
+  [ ! -e "$TMP/bay/.git/objects/ee/0000000000000000000000000000000000000e" ] && echo 1 || echo 0)" \
+  "crash: an empty object no ref needs is moved aside, and the branch stays (got $rc)"
+
+# A hub that has no commit yet is not a damaged one.
+mkdir -p "$TMP/new"; git -C "$TMP/new" init -q -b main; printf 'x\n' > "$TMP/new/journal.new.jsonl"
+HUBD_NODE=new HUBD_DIR="$TMP/new" sh "$SCRIPT" >"$TMP/out27" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && ! grep -q 'damaged' "$TMP/out27" && git -C "$TMP/new" rev-parse -q --verify HEAD >/dev/null && echo 1 || echo 0)" \
+  "crash: a hub with no commit yet is not taken for a damaged one (got $rc)"
+
+# Without an origin there is nothing to repair from: exit 6, what was broken kept.
+mkhub "$TMP/solo"; printf 'x\n' >> "$TMP/solo/journal.seed.jsonl"; cm "$TMP/solo"
+empty_obj "$TMP/solo" "$(git -C "$TMP/solo" rev-parse HEAD)"
+HUBD_DIR="$TMP/solo" sh "$SCRIPT" >"$TMP/out31" 2>&1; rc=$?
+ok "$([ $rc -eq 6 ] && grep -q 'no origin to repair it from' "$TMP/out31" && echo 1 || echo 0)" "crash: no origin - exit 6, and it says why (got $rc)"
+
+# ── another node's lines removed here: refused, whatever the cause ────────────
+# The general case of the crash above: a tree older than HEAD in a file only its node writes.
+git clone -q "$TMP/origin7" "$TMP/fir"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >/dev/null 2>&1
+head -n 1 "$TMP/fir/journal.elm.jsonl" > "$TMP/elm-old" && cp "$TMP/elm-old" "$TMP/fir/journal.elm.jsonl"
+before="$(git -C "$TMP/fir" rev-parse HEAD)"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out32" 2>&1; rc=$?
+ok "$([ $rc -eq 4 ] && grep -q "another node's append-only file lost lines" "$TMP/out32" && grep -q 'checkout -- journal.elm.jsonl' "$TMP/out32" && echo 1 || echo 0)" \
+  "lost lines: another node's journal shorter here is refused with exit 4 and the command that restores it (got $rc)"
+ok "$([ "$(git -C "$TMP/fir" rev-parse HEAD)" = "$before" ] && echo 1 || echo 0)" "lost lines: and nothing is committed"
+git -C "$TMP/fir" checkout -q -- journal.elm.jsonl
+# Acks this node's reader appends to another node's shard are additions, and go through.
+printf '{"id":3,"status":"acked"}\n' >> "$TMP/fir/queues/w.elm.acks"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out33" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && echo 1 || echo 0)" "lost lines: an ack appended to another node's shard is not a loss (got $rc)"
+# A block folded out of another node's shard into its archive is moved, not lost (hub queue dedupe).
+awk '/id 1$/ { skip = 1 } /id 2$/ { skip = 0 } !skip' "$TMP/fir/queues/w.elm.queue.md" > "$TMP/folded" && cp "$TMP/folded" "$TMP/fir/queues/w.elm.queue.md"
+mkdir -p "$TMP/fir/queues/archive"
+printf '\n## 2026-10-05 17:01 · from elm · id 1\nwork 1\n' > "$TMP/fir/queues/archive/w.elm.folded-20261005-1800.md"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out34" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && echo 1 || echo 0)" "lost lines: a block folded into the shard's archive goes through (got $rc)"
+# A hub several node names write into: HUBD_SYNC_OWN makes them this node's own.
+printf '{"ts":"2026-10-05 18:00","kind":"note","text":"carried"}\n' > "$TMP/fir/journal.oak.jsonl"; cm "$TMP/fir"
+printf '{"ts":"2026-10-05 18:01","kind":"note","text":"rewritten"}\n' > "$TMP/fir/journal.oak.jsonl"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out35" 2>&1; rc1=$?
+HUBD_SYNC_OWN='Oak, ivy' HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out36" 2>&1; rc2=$?
+ok "$([ $rc1 -eq 4 ] && [ $rc2 -eq 0 ] && echo 1 || echo 0)" "lost lines: a node name in HUBD_SYNC_OWN is this node's own (got $rc1 without, $rc2 with)"
+# Names written before node names were lowercased are the same node.
+printf 'a\nb\n' > "$TMP/fir/queues/r.Fir.queue.md"; cm "$TMP/fir"; printf 'b\n' > "$TMP/fir/queues/r.Fir.queue.md"
+HUBD_NODE=fir HUBD_DIR="$TMP/fir" sh "$SCRIPT" >"$TMP/out37" 2>&1; rc=$?
+ok "$([ $rc -eq 0 ] && echo 1 || echo 0)" "lost lines: a file named after this node in capitals is its own (got $rc)"
+
 echo ""
 echo "$pass pass, $fail fail"
 [ "$fail" -eq 0 ] || exit 1

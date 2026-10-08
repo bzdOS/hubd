@@ -228,19 +228,22 @@ const until = async (f, ms = 8000) => { const t = Date.now(); while (!f() && Dat
   ok((err.match(/the command exited 1/g) || []).length === 1, 'cli: the failure is said once, not on every retry');
   ok(lines('followed').length === 1 && JSON.parse(lines('followed')[0]).text === 'behind the gate', 'cli: the entry reaches the command once it exits 0');
 
-  // a signal while a command runs: it finishes, the entry is marked, the rest waits
-  const slow = `cat >/dev/null; touch '${XF('started')}'; sleep 1; echo "$HUBD_WATCH_KEY" >> '${XF('slow')}'`;
+  // a signal while a command runs: it finishes, the entry is marked, the rest waits. The command
+  // signals its own watch, so the signal lands inside it however slowly this test runs.
+  const slow = `cat >/dev/null; kill -TERM $PPID; sleep 0.3; echo "$HUBD_WATCH_KEY" >> '${XF('slow')}'`;
   const c2 = reap(spawn(process.execPath, [path.join(REPO, 'hub/cli.mjs'), 'watch', '--as', 'exec-sig', '--follow', '--interval', '0.2', '--exec', slow], { env }));
-  let err2 = '';
+  let err2 = '', code = null;
   c2.stderr.on('data', d => { err2 += d; });
-  await until(() => /a new cursor/.test(err2));
+  c2.on('exit', (c) => { code = c; });
+  await until(() => /a new cursor/.test(err2), 20000);
   cli(['report', '-p', 'alpha', '--agent', 'dev-sig', '-m', 'first of two'], { env: { HUBD_DIR: T0 } });
   cli(['report', '-p', 'alpha', '--agent', 'dev-sig', '-m', 'second of two'], { env: { HUBD_DIR: T0 } });
-  await until(() => fs.existsSync(XF('started')));
-  const code = await new Promise(r => { c2.on('exit', (c) => r(c)); c2.kill('SIGTERM'); });
+  if (!(await until(() => code !== null, 20000))) c2.kill('SIGKILL');
   ok(code === 0 && lines('slow').length === 1, 'cli: SIGTERM while a command runs lets it finish, then exits 0 without the next entry');
   const rest = cli(['watch', '--as', 'exec-sig', '--exec', 'cat'], { env: { HUBD_DIR: T0, HUBD_SUBSCRIBER: undefined } });
-  ok(rest.code === 0 && rest.stdout.trim().split('\n').map(l => JSON.parse(l).text).join() === 'second of two', 'cli: after the signal only the entry not yet handed over is new');
+  const texts = rest.stdout.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l).text; } catch { return l; } });
+  const restOk = rest.code === 0 && texts.join() === 'second of two';
+  ok(restOk, 'cli: after the signal only the entry not yet handed over is new' + (restOk ? '' : ` (got ${JSON.stringify(texts)})`));
   child.kill('SIGTERM');
   await new Promise(r => child.on('exit', r));
 }

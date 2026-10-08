@@ -73,6 +73,15 @@ export const HARNESSES = {
     restart: 'run /mcp reload in an omp session that is running, or start a new one',
     rules: ['agents-md.md', 'AGENTS.md'],
   },
+  // dsh has no command for it either, and its file is a YAML list, not a JSON object: see below
+  dsh: {
+    label: 'dsh', scopes: ['user'],
+    file: () => path.join(dshHome(), 'cordis.patch.yml'),
+    read: dshRead, write: dshWrite, drop: dshDrop, show: dshShow,
+    noArgs: true,
+    restart: 'dsh applies the file while it runs, and a new dsh session has the tools for certain',
+    rules: ['agents-md.md', 'AGENTS.md'],
+  },
 };
 
 /* The folder omp reads its user config from, found as omp finds it: a named profile (OMP_PROFILE,
@@ -151,6 +160,7 @@ function configFile(h, scope, cwd) {
 
 function readEntry(h, scope, cwd) {
   const file = configFile(h, scope, cwd);
+  if (h.read) return { file, ...h.read(file) };
   const conf = readConfig(file);
   const e = conf && conf[h.servers] && conf[h.servers][NAME];
   return { file, conf, entry: e || null, spec: e ? h.spec(e) : null };
@@ -165,12 +175,13 @@ function backup(file) {
 }
 
 // Written whole or not at all, through a symlink to where the file really is, with its mode kept.
-function writeConfig(file, conf) {
+function writeConfig(file, conf) { writeText(file, JSON.stringify(conf, null, 2) + '\n'); }
+function writeText(file, text) {
   const real = fs.existsSync(file) ? fs.realpathSync(file) : file;
   fs.mkdirSync(path.dirname(real), { recursive: true });
   const mode = fs.existsSync(real) ? fs.statSync(real).mode & 0o777 : 0o644;
   const tmp = real + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(conf, null, 2) + '\n');
+  fs.writeFileSync(tmp, text);
   fs.chmodSync(tmp, mode);
   fs.renameSync(tmp, real);
 }
@@ -249,6 +260,8 @@ export function bootstrapPrompt({ harness, scope, spec }) {
   const env = Object.entries(spec.env).map(([k, v]) => `${k}=${v}`).join(', ');
   const how = h && h.add
     ? [`   ${label} has a command for it; run it as it is:`, `     ${h.bin} ${h.add(scope, spec).map(q).join(' ')}`]
+    : h && h.show
+      ? h.show(h.file(scope, '<project folder>'), spec).split('\n').map(l => '   ' + l)
     : h
       ? [`   In ${h.file(scope, '<project folder>')}, under "${h.servers}", it is:`,
          ...JSON.stringify({ [NAME]: h.entry(spec) }, null, 2).split('\n').map(l => '     ' + l)]
@@ -287,10 +300,11 @@ export async function runSetup({ harness, agent, scope = 'user', hub = null, mod
   // the hub is scaffolded first: a server pointed at a folder that is not there answers all the same, empty
   if (hub && !(fs.existsSync(hub) && fs.statSync(hub).isDirectory())) throw new Error(`--hub ${hub} is not a folder; hub init ${q(hub)} makes one`);
   const s = { ...serverCommand(), env: serverEnv({ agent, hub }) };
-  const spec = { command: s.command, args: s.args, env: s.env };
+  const spec = h && h.noArgs ? alone(h, s) : { command: s.command, args: s.args, env: s.env };
   if (mode === 'prompt') { log(bootstrapPrompt({ harness, scope, spec })); return 0; }
   if (mode === 'print') {
     if (h.add) log(`${h.bin} ${h.add(scope, spec).map(q).join(' ')}`);
+    else if (h.show) log(h.show(h.file(scope, cwd), spec));
     else log(`# in ${h.file(scope, cwd)}, under "${h.servers}":\n` + JSON.stringify({ [h.servers]: { [NAME]: h.entry(spec) } }, null, 2));
     return 0;
   }
@@ -314,6 +328,8 @@ export async function runSetup({ harness, agent, scope = 'user', hub = null, mod
     if (viaNative) {
       if (before.entry) runNative(h, h.remove(scope), cwd);
       runNative(h, h.add(scope, spec), cwd);
+    } else if (h.write) {
+      h.write(before.file, spec);
     } else {
       const conf = before.conf || { ...(h.fresh || {}) };
       conf[h.servers] = { ...(conf[h.servers] || {}), [NAME]: h.entry(spec) };
@@ -334,6 +350,7 @@ export async function runSetup({ harness, agent, scope = 'user', hub = null, mod
 async function check(h, scope, cwd, log) {
   const { file, entry, spec } = readEntry(h, scope, cwd);
   if (!entry) { log(`no "${NAME}" entry in ${file}; hub setup --harness <id> --agent <name> adds one`); return 1; }
+  if (!spec) { log(`${file} holds a "${NAME}" entry hub setup did not write, and cannot read; hub setup --harness <id> --agent <name> puts its own in its place`); return 1; }
   log(`${h.label}, ${scope} scope: ${file} parses and holds "${NAME}"`);
   log(`  agent:   ${spec.env.HUBD_AGENT || '(none: every write will be refused)'}`);
   log(`  server:  ${[spec.command, ...spec.args].map(q).join(' ')}`);
@@ -349,6 +366,7 @@ function uninstall(h, scope, cwd, log) {
   if (h.nativeOnly && !viaNative) throw new Error(`${h.bin} is not on PATH, and only it changes ${before.file}`);
   const saved = backup(before.file);
   if (viaNative) runNative(h, h.remove(scope), cwd);
+  else if (h.drop) h.drop(before.file);
   else {
     delete before.conf[h.servers][NAME];
     writeConfig(before.file, before.conf);
@@ -357,3 +375,132 @@ function uninstall(h, scope, cwd, log) {
   log(`removed "${NAME}" from ${before.file}` + (saved ? `; backup: ${saved}` : ''));
   return 0;
 }
+
+/* A harness that runs a server by its command alone, with no arguments: hubd's own script, which
+ * starts by its first line. npx needs arguments, so a hubd that runs from npx's cache cannot be
+ * named here, nor can a script that is not executable. */
+export function alone(h, s) {
+  const [script, ...more] = s.args;
+  if (!s.args.length) return { command: s.command, args: [], env: s.env };
+  if (more.length || !/\.mjs$/.test(script))
+    throw new Error(`${h.label} runs a server by its command alone, without arguments, and this hubd runs as ${[s.command, ...s.args].map(q).join(' ')}. Install it (npm i -g @bzdos/hubd) and run hub setup from that install`);
+  try { fs.accessSync(script, fs.constants.X_OK); }
+  catch { throw new Error(`${script} is not executable, and ${h.label} runs it by itself: chmod +x it, then run hub setup again`); }
+  return { command: script, args: [], env: s.env };
+}
+
+/* dsh. It reads patches from $DSH_HOME/cordis.patch.yml, the layer over every profile, with
+ * js-yaml, into a list of mappings; a file that does not read as one stops dsh from starting,
+ * with nothing to fall back to. hubd has no YAML parser, so it changes only what it can read
+ * whole: a file of JSON, which YAML reads as it is, or a YAML list it adds one item to. hubd's
+ * item is one line of JSON between two comment lines, found, read back and taken out by them.
+ * An item that names hubd's row and nothing else, put there by hand, is replaced; one with other
+ * rows in it is refused, since only a YAML parser could take the row out of it. */
+const DSH_ID = 'mcp-hubd', DSH_CLIENT = '@deepseek-ai/dsh-mcp-client';
+const DSH_BEGIN = '# hubd: begin', DSH_END = '# hubd: end';
+function dshHome(env = process.env) { return path.resolve(env.DSH_HOME || path.join(os.homedir(), '.dsh')); }
+const dshRow = (s) => ({ id: DSH_ID, name: DSH_CLIENT, config: { serverName: NAME, transport: 'stdio', command: s.command, env: s.env } });
+const dshSpec = (row) => ({ command: (row.config || {}).command, args: [], env: (row.config || {}).env || {} });
+const isMap = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+const isHubRow = (r) => isMap(r) && (r.id === DSH_ID || (isMap(r.config) && r.config.serverName === NAME));
+// a line that names hubd's row or its server name, in any of YAML's spellings
+const NAMES_HUBD = new RegExp(`(^|[^\\w-])${DSH_ID}([^\\w-]|$)|serverName["']?\\s*:\\s*["']?${NAME}([^\\w-]|$)`);
+
+const dshBlock = (row) => [DSH_BEGIN, '- ' + JSON.stringify({ insert: [row] }), DSH_END];
+function dshShow(file, s) { return [`# in ${file}, an item of its list:`, ...dshBlock(dshRow(s))].join('\n'); }
+
+/* The file as hub setup can change it: { kind, lines | list, ours: [from, to] | null, theirs: the
+ * line ranges of items put in by hand, row }. Anything it cannot read whole is a refusal. */
+function dshParse(file) {
+  const why = `hub setup changes only a file it can read whole; hub setup --harness dsh --print shows the item to add by hand`;
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const t = text.trim();
+  if ((t.startsWith('[') || t.startsWith('{')) && t !== '[]') {
+    let list;
+    try { list = JSON.parse(t); } catch (e) { throw new Error(`${file} starts as JSON and does not parse as JSON (${e.message}). ${why}`); }
+    if (!Array.isArray(list) || !list.every(isMap)) throw new Error(`${file} is not a list of patches, and dsh does not start with it. ${why}`);
+    const rows = list.flatMap(p => Array.isArray(p.insert) ? p.insert.filter(isHubRow) : []);
+    return { kind: 'json', list, row: rows.length === 1 ? rows[0] : null, found: rows.length };
+  }
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  const content = (l) => l.trim() !== '' && !l.trimStart().startsWith('#');
+  let ours = null, row = null;
+  const b = lines.findIndex(l => l.startsWith(DSH_BEGIN));
+  if (b >= 0) {
+    const e = lines.indexOf(DSH_END, b);
+    const item = e > b ? lines.slice(b + 1, e).filter(content) : [];
+    try { const p = JSON.parse(item.length === 1 ? item[0].replace(/^- /, '') : ''); row = p.insert.find(isHubRow); } catch {}
+    if (!row || !/^- /.test(item[0])) throw new Error(`the item between "${DSH_BEGIN}" and "${DSH_END}" in ${file} was changed by hand: take the lines out, and run hub setup again`);
+    ours = [b, e];
+  }
+  const out = (i) => !ours || i < ours[0] || i > ours[1];
+  const top = lines.map((l, i) => ({ l, i })).filter(({ l, i }) => out(i) && content(l));
+  let body = top[0] && top[0].l === '---' ? top.slice(1) : top;
+  // "[]" alone is the empty list hub setup leaves when it takes out the last item: an empty file is
+  // one js-yaml reads as nothing, not as a list
+  const empty = body.length === 1 && body[0].l.trim() === '[]' ? [body[0].i, body[0].i] : null;
+  if (empty) body = [];
+  const list = body.every(({ l }) => /^\s/.test(l) || /^-( |$)/.test(l)) && (!body.length || /^-( |$)/.test(body[0].l)) &&
+    !lines.some((l, i) => /^(\.\.\.|---|%)/.test(l) && !(l === '---' && top[0] && i === top[0].i));
+  if (!list) throw new Error(`${file} is not a YAML list of patches hub setup can add an item to. ${why}`);
+  // items by hand: from a "- " at the margin to the next one, without the comments before it
+  const starts = body.filter(({ l }) => /^-/.test(l)).map(({ i }) => i);
+  const theirs = [];
+  for (const [k, s0] of starts.entries()) {
+    let end = (k + 1 < starts.length ? starts[k + 1] : lines.length) - 1;
+    if (ours && s0 < ours[0] && end >= ours[0]) end = ours[0] - 1;
+    while (end > s0 && !content(lines[end])) end--;
+    const item = lines.slice(s0, end + 1).join('\n');
+    if (!NAMES_HUBD.test(item)) continue;
+    if ((item.match(/(^|[\s{,"'])id["']?\s*:/g) || []).length !== 1)
+      throw new Error(`${file} names hubd's row in an item with other rows in it (line ${s0 + 1}): take the row out by hand, and run hub setup again. ${why}`);
+    theirs.push([s0, end]);
+  }
+  return { kind: 'yaml', lines, ours, theirs, empty, row, found: (row ? 1 : 0) + theirs.length };
+}
+
+function dshRead(file) {
+  const p = dshParse(file);
+  if (p.found === 1 && p.row) return { entry: p.row, spec: dshSpec(p.row) };
+  return { entry: p.found ? { byHand: true } : null, spec: null };
+}
+
+/* The other patch layers, each profile's own: a second hubd there is one server name twice, which
+ * dsh refuses. */
+function dshElsewhere() {
+  const dir = path.join(dshHome(), 'profiles');
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names.map(n => path.join(dir, n, 'cordis.patch.yml'))
+    .filter(f => { try { return NAMES_HUBD.test(fs.readFileSync(f, 'utf8')); } catch { return false; } });
+}
+
+// The file with every hubd item out of it, and `put` lines where the first of them was.
+function dshWithout(p, put) {
+  if (p.kind === 'json') {
+    const list = p.list.map(x => Array.isArray(x.insert) ? { ...x, insert: x.insert.filter(r => !isHubRow(r)) } : x)
+      .filter(x => !(Array.isArray(x.insert) && !x.insert.length && Object.keys(x).length === 1));
+    return JSON.stringify(put ? [...list, { insert: [put] }] : list, null, 2) + '\n';
+  }
+  const cut = [p.ours, p.empty, ...p.theirs].filter(Boolean).sort((a, b) => a[0] - b[0]);
+  const lines = [];
+  let placed = !put;
+  for (let i = 0; i < p.lines.length; i++) {
+    const c = cut.find(([a, b]) => i >= a && i <= b);
+    if (!c) { lines.push(p.lines[i]); continue; }
+    if (!placed) { lines.push(...dshBlock(put)); placed = true; }
+    i = c[1];
+  }
+  if (!placed) lines.push(...dshBlock(put));
+  if (!lines.some(l => l.trim() !== '' && !l.trimStart().startsWith('#'))) lines.push('[]');
+  return lines.join('\n') + '\n';
+}
+
+function dshWrite(file, s) {
+  const other = dshElsewhere();
+  if (other.length) throw new Error(`${other.join(', ')} names a hubd server too, and dsh refuses one server name twice: take it out of there. hub setup writes only ${file}`);
+  writeText(file, dshWithout(dshParse(file), dshRow(s)));
+}
+
+function dshDrop(file) { writeText(file, dshWithout(dshParse(file), null)); }

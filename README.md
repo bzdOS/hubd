@@ -82,7 +82,7 @@ hub demo [dir]       # an invented team's week in a folder of its own, to look a
 Connect your agent (any MCP client):
 
 ```bash
-hub setup --harness claude --agent dev-<yourproject>    # or gemini, opencode, omp: tries the server, then writes
+hub setup --harness claude --agent dev-<yourproject>    # or gemini, opencode, omp, dsh: tries the server, then writes
 claude mcp add --scope user hubd --env HUBD_AGENT=dev-<yourproject> -- npx -y @bzdos/hubd   # the same, by hand
 ```
 

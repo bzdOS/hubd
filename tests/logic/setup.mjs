@@ -42,7 +42,7 @@ fake('claude', "s === 'project' ? path.join(process.cwd(), '.mcp.json') : path.j
 fake('gemini', "path.join(s === 'project' ? process.cwd() : os.homedir(), '.gemini', 'settings.json')");
 
 const PATH = BIN + path.delimiter + process.env.PATH;
-const ENV = { HOME, PATH, XDG_CONFIG_HOME: undefined, OMP_PROFILE: undefined, PI_PROFILE: undefined, PI_CONFIG_DIR: undefined, PI_CODING_AGENT_DIR: undefined, HUBD_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined, HUBD_AGENT: undefined, PROJECT_HUB_DIR: undefined };
+const ENV = { HOME, PATH, DSH_HOME: undefined, XDG_CONFIG_HOME: undefined, OMP_PROFILE: undefined, PI_PROFILE: undefined, PI_CONFIG_DIR: undefined, PI_CODING_AGENT_DIR: undefined, HUBD_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined, HUBD_AGENT: undefined, PROJECT_HUB_DIR: undefined };
 const setup = (argv, env = {}) => cli(['setup', ...argv], { env: { ...ENV, ...env }, cwd: WORK });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
 const calls = () => fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean) : [];
@@ -206,6 +206,96 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
   ok(proj.code === 0 && json(path.join(WORK, '.omp', 'mcp.json')).mcpServers.hubd.env.HUBD_AGENT === 'dev-shop', 'setup omp --scope project: .omp/mcp.json in the folder it was run in');
 }
 
+// ── dsh: a YAML list of patches, one item of it hubd's, between two comment lines
+{
+  const D = path.join(HOME, '.dsh'), F = path.join(D, 'cordis.patch.yml');
+  const text = () => fs.readFileSync(F, 'utf8');
+  const block = () => { const m = text().match(/^# hubd: begin\n- (.*)\n# hubd: end$/m); return m && JSON.parse(m[1]); };
+  const r = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  const b = block();
+  const row = b && b.insert.length === 1 && b.insert[0];
+  ok(r.code === 0 && row && row.id === 'mcp-hubd' && row.name === '@deepseek-ai/dsh-mcp-client' &&
+    JSON.stringify(row.config) === JSON.stringify({ serverName: 'hubd', transport: 'stdio', command: SERVER.args[0], env: want('dev-shop').env }),
+    `setup dsh: ~/.dsh/cordis.patch.yml, one item inserting the client row, the script by its path and no arguments (exit ${r.code}) ${r.stderr}`);
+  ok(/answered: \d+ tools/.test(r.stdout) && /applies the file while it runs/.test(r.stdout), 'setup dsh: the script tried as dsh runs it, alone, and no restart asked for');
+  const st = fs.statSync(F).mtimeMs;
+  const again = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  ok(again.code === 0 && /unchanged/.test(again.stdout) && fs.statSync(F).mtimeMs === st, 'setup dsh again: unchanged, the file not rewritten');
+  const c = setup(['--harness', 'dsh', '--check']);
+  ok(c.code === 0 && /dsh, user scope/.test(c.stdout) && /agent: +dev-shop/.test(c.stdout) && /answered/.test(c.stdout), `setup dsh --check: the item read back and tried (exit ${c.code})`);
+
+  // a file someone wrote: their item and comments kept as they are, the hubd item they wrote by hand replaced
+  const mine = '# machine layer\n- insert:\n    - id: other\n      name: x\n      config: {a: 1}\n';
+  const old = '- insert: [{id: mcp-hubd, name: "@deepseek-ai/dsh-mcp-client", config: {serverName: hubd, transport: stdio, command: /usr/bin/hubd, env: {HUBD_AGENT: dev-old}}}]\n';
+  fs.writeFileSync(F, mine + old + '# the end\n');
+  fs.rmSync(F + '.hubd-backup', { force: true });
+  const orig = text();
+  const h = setup(['--harness', 'dsh', '--check']);
+  ok(h.code === 1 && /did not write/.test(h.stdout), 'setup dsh --check: an item written by hand is reported, not read');
+  const t = setup(['--harness', 'dsh', '--agent', 'qa-shop', '--hub', HUB]);
+  ok(t.code === 0 && text().startsWith(mine + '# hubd: begin\n') && text().endsWith('# hubd: end\n# the end\n') && !text().includes('dev-old') &&
+    block().insert[0].config.env.HUBD_AGENT === 'qa-shop' && fs.readFileSync(F + '.hubd-backup', 'utf8') === orig,
+    `setup dsh: the item written by hand replaced in its place, the rest kept byte for byte, a backup of it as it was (exit ${t.code})`);
+  const un = setup(['--harness', 'dsh', '--uninstall']);
+  ok(un.code === 0 && text() === mine + '# the end\n', 'setup dsh --uninstall: hubd\'s item out, the rest as it was');
+  fs.writeFileSync(F, '- insert: [{id: other}]\n');
+  setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  fs.writeFileSync(F, text().replace('- insert: [{id: other}]\n', ''));
+  setup(['--harness', 'dsh', '--uninstall']);
+  ok(text() === '[]\n', 'setup dsh --uninstall of the last item: an empty list, which dsh reads, not an empty file, which it does not');
+  const r2 = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  ok(r2.code === 0 && /^# hubd: begin\n- .*\n# hubd: end\n$/.test(text()), 'setup dsh: the empty list it left takes the item again');
+
+  // what it cannot read whole, it leaves alone
+  for (const [what, body, why] of [
+    ['a mapping, not a list', 'mcp: {}\n', /not a YAML list/],
+    ['a list indented under nothing', '  - insert: []\n', /not a YAML list/],
+    ['two documents', '- a: 1\n---\n- b: 2\n', /not a YAML list/],
+    ['JSON that does not parse', '[{"insert": [}]\n', /does not parse as JSON/],
+    ['JSON that is not a list of patches', '{"insert": []}\n', /not a list of patches/],
+    ["hubd's row beside another in one item", '- insert:\n    - id: other\n    - id: mcp-hubd\n      config: {serverName: hubd}\n', /other rows in it/],
+    ["hubd's item changed by hand", '# hubd: begin\n- {"insert": [}\n# hubd: end\n', /changed by hand/],
+  ]) {
+    fs.writeFileSync(F, body);
+    const x = setup(['--harness', 'dsh', '--agent', 'dev-x', '--hub', HUB]);
+    ok(x.code === 1 && why.test(x.stderr) && text() === body, `setup dsh: ${what} is refused and left as it was (exit ${x.code}) ${x.stderr.trim().slice(0, 120)}`);
+  }
+
+  // JSON, which YAML reads as it is, stays JSON
+  fs.writeFileSync(F, JSON.stringify([{ insert: [{ id: 'other' }, { id: 'mcp-hubd', config: { serverName: 'hubd', command: '/x' } }] }]));
+  const j = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  const jl = JSON.parse(text());
+  ok(j.code === 0 && jl.length === 2 && jl[0].insert.map(x => x.id).join() === 'other' && jl[1].insert[0].config.command === SERVER.args[0],
+    `setup dsh: a JSON file is merged as JSON, the row written by hand taken out of its item (exit ${j.code})`);
+  setup(['--harness', 'dsh', '--uninstall']);
+  ok(JSON.stringify(JSON.parse(text())) === '[{"insert":[{"id":"other"}]}]', 'setup dsh --uninstall: and taken out of JSON');
+
+  // a profile's own layer naming hubd: one server name twice, which dsh refuses
+  const P = path.join(D, 'profiles', 'work', 'cordis.patch.yml');
+  fs.mkdirSync(path.dirname(P), { recursive: true });
+  fs.writeFileSync(P, '- insert:\n    - id: mine\n      config: {serverName: hubd}\n');
+  const before = text();
+  const p = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB]);
+  ok(p.code === 1 && /profiles\/work\/cordis\.patch\.yml names a hubd server too/.test(p.stderr) && text() === before,
+    `setup dsh: a hubd in a profile's layer is named, and nothing is written (exit ${p.code})`);
+  fs.rmSync(path.join(D, 'profiles'), { recursive: true });
+
+  const E = path.join(T, 'dsh-home');
+  const e = setup(['--harness', 'dsh', '--agent', 'dev-shop', '--hub', HUB], { DSH_HOME: E });
+  ok(e.code === 0 && fs.existsSync(path.join(E, 'cordis.patch.yml')), 'setup dsh: DSH_HOME moves the file, as it moves dsh\'s');
+  const pr = setup(['--harness', 'dsh', '--agent', 'dev-api', '--print']);
+  ok(pr.code === 0 && pr.stdout.includes(`# in ${F}, an item of its list:\n# hubd: begin\n- {"insert":[{"id":"mcp-hubd"`), 'setup dsh --print: the item, to add by hand');
+  ok(/takes user$/m.test(setup(['--harness', 'dsh', '--scope', 'project', '--agent', 'dev-x']).stderr), 'setup dsh --scope project: refused, dsh has no project layer');
+  const npx = { command: 'npx', args: ['-y', '@bzdos/hubd@1.0.0'], env: {} };
+  let why = '';
+  try { S.alone(S.HARNESSES.dsh, npx); } catch (err) { why = err.message; }
+  ok(/without arguments/.test(why) && /npm i -g @bzdos\/hubd/.test(why), 'setup dsh: a hubd that runs from npx cannot be named alone, and the remedy is given');
+  const nx = path.join(T, 'plain.mjs'); fs.writeFileSync(nx, '', { mode: 0o644 });
+  why = '';
+  try { S.alone(S.HARNESSES.dsh, { command: process.execPath, args: [nx], env: {} }); } catch (err) { why = err.message; }
+  ok(/not executable/.test(why), 'setup dsh: a script that is not executable is refused, before dsh fails to run it');
+}
+
 // ── --print, --prompt and --verify write nothing
 {
   const H2 = mktmp(), before = fs.readdirSync(H2).length;
@@ -226,7 +316,7 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
   setup(['--harness', 'opencode', '--agent', 'dev-api', '--hub', HUB, '--verify'], { HOME: H2, HUBD_DIR: SH });
   ok(fs.readdirSync(SH).length === 0, 'setup: the hub of the shell it runs in is left as it was');
   const init = cli(['init', mktmp()], { env: { HOME: H2 } });
-  ok(/^  Or, checked: +hub setup --harness claude\|gemini\|opencode\|omp --agent dev-<project>$/m.test(init.stdout), 'init: the next steps name hub setup');
+  ok(/^  Or, checked: +hub setup --harness claude\|gemini\|opencode\|omp\|dsh --agent dev-<project>$/m.test(init.stdout), 'init: the next steps name hub setup');
 }
 
 // ── the server: this install, else a hubd on PATH outside npx's cache, else npx pinned to this version
