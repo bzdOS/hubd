@@ -482,6 +482,59 @@ ok(fmNoId.changed && /legacy 1/.test(fmNoId.text) && /legacy 2/.test(fmNoId.text
   ok(settled === b4.slice(0, -3).trim(), `growing: a file left as it is for a minute goes out as it stands (got ${JSON.stringify(settled)})`);
 }
 
+/* ── a cursor inside the last block handed out ──
+ * A cut that falls just after a newline inside the newest block looks whole, and that part goes
+ * out. Its rest must not follow as a message of its own, without its header: the same block in two
+ * pieces is the double delivery a reader saw. Nor the rest of a block whose cursor an older hubd
+ * left at a cut. The position is the block, not the byte. */
+{
+  const IB = mktmp();
+  fs.mkdirSync(path.join(IB, 'queues'), { recursive: true });
+  const ibQ = path.join(IB, 'queues', 'w.n3.queue.md');
+  const ibBlk = (n, body) => `\n## 2026-10-08 09:0${n} · from fir · id fir-${n}\n${body}\n`;
+  const handed = [];
+  const ibWait = async () => {
+    const r = await queueLib.queueWait('w', { timeout: 0, root: IB });
+    if (r.changed) handed.push(r.text);
+    return r.changed ? r.text : '';
+  };
+  const b1 = ibBlk(1, 'order one'), b2 = ibBlk(2, 'step one: stop the relay\nstep two: copy the shard\nstep three: start it');
+  fs.writeFileSync(ibQ, b1);
+  ok(await ibWait() === b1.trim(), 'inside: before it, the queue is read to its end');
+  const all = Buffer.from(b1 + b2);
+  fs.writeFileSync(ibQ, all.subarray(0, Buffer.byteLength(b1 + b2.slice(0, b2.indexOf('step two')))));
+  const part = await ibWait();
+  ok(part.startsWith('## 2026-10-08 09:02') && !/step two/.test(part),
+    `inside: a cut just after a newline looks whole, and that part goes out (got ${JSON.stringify(part)})`);
+  fs.writeFileSync(ibQ, all);
+  const rest = await ibWait();
+  ok(rest === '', `inside: once the block is whole, its rest does not go out as a message of its own (got ${JSON.stringify(rest)})`);
+  const b3 = ibBlk(3, 'order three');
+  fs.appendFileSync(ibQ, b3);
+  ok(await ibWait() === b3.trim(), 'inside: the next block goes out whole, header and all, and alone');
+  // A cursor an older hubd left inside a block, at a cut, and the file whole again.
+  const b4 = ibBlk(4, 'order four\nwith a second line'), b5 = ibBlk(5, 'order five');
+  fs.appendFileSync(ibQ, b4 + b5);
+  fs.writeFileSync(path.join(IB, '.qstate', 'w.n3.queue.md.offset'),
+    `${Buffer.byteLength(b1 + b2 + b3 + b4.slice(0, b4.indexOf('with')))}\n## 2026-10-08 09:04 · from fir · id fir-4\n`);
+  const after = await ibWait();
+  ok(after === b5.trim(), `inside: a cursor left inside a block resumes at the next header (got ${JSON.stringify(after.slice(0, 40))})`);
+  // The rest of a block, then a header still being written: the header is no line yet, so the
+  // cursor stops before it, and the block it starts goes out whole once it is there.
+  const done5 = Buffer.from(b1 + b2 + b3 + b4 + b5);
+  const b6 = ibBlk(6, 'order six\nits second line'), b7 = ibBlk(7, 'order seven');
+  fs.writeFileSync(ibQ, Buffer.concat([done5, Buffer.from(b6.slice(0, b6.indexOf('its')))]));
+  ok(/order six/.test(await ibWait()), 'inside: a cut just after the first line of a block hands that line out');
+  const with7 = Buffer.concat([done5, Buffer.from(b6 + b7)]);
+  fs.writeFileSync(ibQ, with7.subarray(0, done5.length + Buffer.byteLength(b6) + 10));
+  const half = await ibWait();
+  ok(half === '', `inside: the rest of that block and half a header after it hand out nothing (got ${JSON.stringify(half)})`);
+  fs.writeFileSync(ibQ, with7);
+  const seven = await ibWait();
+  ok(seven === b7.trim(), `inside: once whole, the next block goes out whole, header and all (got ${JSON.stringify(seven.slice(0, 40))})`);
+  ok(handed.every(t => t.startsWith('## ')), `inside: every handout starts with its header (got ${JSON.stringify(handed.map(t => t.slice(0, 12)))})`);
+}
+
 // this node's own shard (the tests run as node "cedar"), and an empty one of its own
 fs.writeFileSync(path.join(QG, 'queues', 'ghost.cedar.queue.md'), oldMsg);
 fs.writeFileSync(path.join(QG, 'queues', 'hollow.cedar.queue.md'), '');

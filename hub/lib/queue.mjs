@@ -616,6 +616,22 @@ function drainFile(qdir, stateDir, f, reader = null) {
           let text = ''; try { text = fs.readFileSync(full, 'utf8'); } catch {}
           off = Math.min(offsetAfterShrink(text, mark), sz);
           writeCursor(offFile, off, mark);
+        } else {
+          /* The watermark is the last header before the cursor, and the cursor may still stand
+           * INSIDE its block: one handed out cut short just after a newline, a cursor an older
+           * hubd left at a cut, a block edited in place. What follows up to the next header is then
+           * the rest of a block already handed out, and it went out as a message of its own,
+           * without its header. The position is the block, not the byte: resume where it ends.
+           * Only a whole line tells: a header still being written ("## 2026-1") is no line yet, and
+           * whatever stands after the last newline stays ahead of the cursor. */
+          const ahead = readTail(full, off, sz, { exact: true });
+          if (ahead === null) return null;
+          const h = ahead.search(BLOCK_HEAD);
+          const rest = h === -1 ? ahead : ahead.slice(0, h);
+          if (/^\s*\S[^\n]*\n/.test(rest)) {
+            off += Buffer.byteLength(rest.slice(0, rest.lastIndexOf('\n') + 1), 'utf8');
+            writeCursor(offFile, off, mark);
+          }
         }
       }
       if (sz === off) return null;                    // a competitor drained it first
