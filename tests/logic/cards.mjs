@@ -548,6 +548,36 @@ core.setHubBase(T0); core.ensureHubDirs();
   ok(core.collapseRepeats([{ kind: 'note', text: 'Gates: x', card: { bytes: 10 } }, { kind: 'note', text: 'Gates: x', card: { bytes: 20 } }]).length === 2,
     'collapseRepeats: two writes with one text and different results are not folded');
 }
+
+// ── card show: a card read back, so a script reads a section through hubd, not with awk ──
+{
+  const CS = mktmp(), env = { HUBD_DIR: CS, HUBD_TEAM_DIR: CS };
+  fs.mkdirSync(path.join(CS, 'projects'), { recursive: true });
+  const card = '---\nslug: shown\n---\n# shown\n\n- slug: shown\n\n' +
+    '## Next step\n\nship the reader\n\n' +
+    '## Handoff worker\n\nbranch fix-1, tests green\n\n' +
+    '## Notes\n\nfirst\n\n## Notes\n\nsecond\n';
+  fs.writeFileSync(path.join(CS, 'projects', 'shown.md'), card);
+  const whole = cli(['card', 'show', 'shown'], { env });
+  ok(whole.code === 0 && whole.stdout === card, 'card show: the whole card, byte for byte');
+  let j = null; try { j = JSON.parse(cli(['card', 'show', 'shown', '--json'], { env }).stdout); } catch {}
+  ok(j && /^---\nslug: shown/.test(j.preamble) && j.sections.map(x => x.heading).join('|') === 'Next step|Handoff worker|Notes|Notes' &&
+    j.sections[0].body === 'ship the reader', `card show --json: the preamble, then every section in file order (${j && j.sections.map(x => x.heading)})`);
+  const hw = cli(['card', 'show', 'shown', '--section', 'handoff WORKER'], { env });
+  ok(hw.code === 0 && hw.stdout === 'branch fix-1, tests green\n', `card show --section: one body by its heading, case aside (${JSON.stringify(hw.stdout)})`);
+  let nk = null; try { nk = JSON.parse(cli(['card', 'show', 'shown', '--section', 'next', '--json'], { env }).stdout); } catch {}
+  ok(nk && nk.heading === 'Next step' && nk.body === 'ship the reader' && nk.section === 'next', 'card show --section: a section key finds the heading the card holds it under');
+  const miss = cli(['card', 'show', 'shown', '--section', 'Handoff reviewer'], { env });
+  ok(miss.code === 1 && miss.stdout === '' && /no section "## Handoff reviewer"/.test(miss.stderr), 'card show --section: a section the card does not hold exits 1 and prints no body');
+  let mj = null; try { mj = JSON.parse(cli(['card', 'show', 'shown', '--section', 'Handoff reviewer', '--json'], { env }).stdout); } catch {}
+  ok(mj && mj.body === null, 'card show --section --json: body null for a missing section');
+  const rep = cli(['card', 'show', 'shown', '--section', 'Notes'], { env });
+  ok(rep.code === 0 && rep.stdout === 'first\n' && /holds 2 sections "## Notes"/.test(rep.stderr), 'card show --section: of a repeated section the first, and a note on stderr');
+  const none = cli(['card', 'show', 'nosuch'], { env });
+  ok(none.code === 1 && /no card for nosuch/.test(none.out), 'card show: no card is an error, not an empty card');
+  ok(cli(['card', 'show', 'shown', '--section'], { env }).code === 1 && cli(['card', 'show', 'shown', '--bogus'], { env }).code === 1,
+    'card show: --section without a value and an unknown flag are refused');
+}
 core.setHubBase(T0); core.ensureHubDirs();
 
 done();

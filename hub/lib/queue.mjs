@@ -1728,19 +1728,22 @@ export function subscriberNamespaces({ root, days = 7 } = {}) {
   return out.sort((a, b) => b.ageDays - a.ageDays);
 }
 
+/* One namespace into .qstate/_archive/ (a tap's into _archive/__watchall__/), under a numbered name
+ * when that one is taken. Throws when it cannot be moved. */
+function archiveNamespace(r, ns) {
+  const destDir = path.join(r, '.qstate', NS_ARCHIVE, ...(ns.tap ? ['__watchall__'] : []));
+  fs.mkdirSync(destDir, { recursive: true });
+  let dest = path.join(destDir, ns.name);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(destDir, `${ns.name}.${n}`);
+  fs.renameSync(ns.dir, dest);
+}
+
 /** Move stale namespaces into .qstate/_archive/ (taps into _archive/__watchall__/). */
 export function archiveStaleSubscribers({ root, days = 7 } = {}) {
   const r = root ?? resolveQueueRoot();
   const moved = [], failed = [];
   for (const ns of subscriberNamespaces({ root: r, days }).filter(n => n.stale)) {
-    const destDir = path.join(r, '.qstate', NS_ARCHIVE, ...(ns.tap ? ['__watchall__'] : []));
-    try {
-      fs.mkdirSync(destDir, { recursive: true });
-      let dest = path.join(destDir, ns.name);
-      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(destDir, `${ns.name}.${n}`);
-      fs.renameSync(ns.dir, dest);
-      moved.push((ns.tap ? '__watchall__/' : '') + ns.name);
-    } catch { failed.push(ns.name); }
+    try { archiveNamespace(r, ns); moved.push((ns.tap ? '__watchall__/' : '') + ns.name); } catch { failed.push(ns.name); }
   }
   return { moved, failed };
 }
@@ -1777,6 +1780,221 @@ export function runQueueGc({ root, days = 30, apply = false, subscriberDays = 7 
   }
   return { apply: true, days, count: ghosts.length, moved, failed, archive: dir, ghosts, held,
     subscriberDays, staleSubscribers, subscribersArchived: subs.moved, subscribersFailed: subs.failed };
+}
+
+/* ── What a dead reader leaves behind ──
+ *
+ * Three things, all on this node, each judged by asking the kernel or the filesystem, never by age:
+ *
+ *   - a waiter marker (.qstate/<role>.waiter, a subscriber's, a tap's `waiter`) whose pid is gone.
+ *     Since 0.9.20 it blocks nothing: the next waiter on that cursor clears it, and only a live,
+ *     fresh marker counts as a competitor. Tools outside hubd still read it as a stuck queue, and
+ *     cleared it themselves by parsing the marker in shell; a fleet's did, and once took a date's
+ *     digits for the pid, which made every live marker look dead. This is the one place to do it.
+ *   - a reader namespace named after a process, p-<pid>-<start>, whose process is gone. No later
+ *     process gets that name, the start time is in it, so nothing reads with that cursor again.
+ *     `hub queue gc` retires it after a week idle; this moves it now, to the same .qstate/_archive/.
+ *   - a cursor this node cannot write. That one does stop delivery (QueueStalled), and it is not
+ *     hubd's to fix: the file belongs to another user. It is listed with the remedy.
+ *
+ * Asked on another node, the answer is that node's: .qstate never leaves the node it is on. */
+const markerPid = (raw) => {
+  try { const j = JSON.parse(raw); if (Number.isInteger(j?.pid)) return { pid: j.pid, since: j.since || null }; } catch {}
+  const m = /^\s*(\d+)\s*$/.exec(raw);   // a bare pid, as no hubd writes now
+  return m ? { pid: Number(m[1]), since: null } : null;
+};
+
+export function runQueueRepair({ root, apply = false } = {}) {
+  const r = root ?? resolveQueueRoot();
+  const st = path.join(r, '.qstate'), taps = path.join(st, '__watchall__');
+  const rel = (p) => path.relative(r, p);
+  const spaces = [{ dir: st, name: null, tap: false }, { dir: taps, name: null, tap: true },
+    ...subscriberDirs(st).map(name => ({ dir: path.join(st, name), name, tap: false })),
+    ...subscriberDirs(taps).map(name => ({ dir: path.join(taps, name), name, tap: true }))];
+  const waiters = [], unreadable = [], namespaces = [];
+  for (const sp of spaces) {
+    let names = []; try { names = fs.readdirSync(sp.dir); } catch {}
+    for (const n of names.filter(n => n === 'waiter' || n.endsWith('.waiter'))) {
+      const file = path.join(sp.dir, n);
+      let raw = ''; try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
+      const w = markerPid(raw);
+      if (!w) { unreadable.push({ marker: rel(file) }); continue; }
+      if (w.pid !== process.pid && !pidAlive(w.pid)) waiters.push({ marker: rel(file), pid: w.pid, since: w.since, file });
+    }
+    const p = sp.name && /^p-(\d+)(?:-|$)/.exec(sp.name);
+    if (p && !pidAlive(Number(p[1]))) namespaces.push({ name: sp.name, tap: sp.tap, pid: Number(p[1]), dir: sp.dir });
+  }
+  const files = listShards(path.join(r, 'queues')).map(s => s.file);
+  const stalls = [];
+  for (const sp of spaces) if (fs.existsSync(sp.dir) || sp.dir === st)
+    for (const s of cursorStalls(sp.dir, files)) stalls.push({ file: rel(s.file), code: s.code });
+  if (apply) {
+    for (const w of waiters) {
+      // Removed only while it still names the same dead pid: a waiter may have just taken it over,
+      // and one that did, or cleared it, settled it already.
+      try {
+        if (markerPid(fs.readFileSync(w.file, 'utf8'))?.pid === w.pid) { fs.unlinkSync(w.file); w.removed = true; }
+        else w.settled = true;
+      } catch (e) { if (e.code === 'ENOENT') w.settled = true; else w.error = e.code || String(e.message); }
+    }
+    for (const ns of namespaces) {
+      try { archiveNamespace(r, ns); ns.moved = true; } catch (e) { ns.moved = false; ns.error = e.code || String(e.message); }
+    }
+  }
+  const out = (x) => { const { file, dir, ...rest } = x; return rest; };
+  return { apply, waiters: waiters.map(out), namespaces: namespaces.map(out), unreadable, stalls };
+}
+
+/* ── One message said many times, folded in place ──
+ *
+ * `queue wait` hands a backlog out in order, so a sender caught in a loop buries every real order
+ * under copies of one message. Measured on a fleet node: two workers' queues at 4478 and 5197
+ * blocks, 197 of the last 200 one empty nudge, sent by a shell loop every forty seconds for two
+ * days about a task closed long before. The workers could not reach their next order, and it read
+ * as a dead harness. The fleet cleaned it up from outside: moved the file away, dropped its cursor,
+ * sent the survivors again under a new sender. This does it where the cursors are.
+ *
+ * A flood is one text said `min` times or more about the same task: one text for two tasks is two
+ * messages. Each flood keeps its newest copy, the one a reader would act on last, and every copy
+ * whose header is some reader's watermark, so no cursor loses its place: this node's own, each
+ * subscriber's and tap's, and the read mark of every node. Everything else stays byte for byte,
+ * a text said fewer than `min` times included. Blocks are cut where a cursor cuts them, at a
+ * whole header line (BLOCK_HEAD).
+ *
+ * Only a shard this node may rewrite (shardHold: its own, or one no live node writes), and only
+ * when no cursor here lacks a watermark: one written before watermarks has nothing to find its
+ * place by in a shorter file, and would hand the whole file out again. The dropped copies go to
+ * queues/archive/<shard>.folded-<time>.md, a name no reader takes for a queue. */
+export const FLOOD_MIN = 5;
+
+function foldPlan(text, keep, min) {
+  const heads = [...text.matchAll(new RegExp(BLOCK_HEAD.source, 'gm'))];
+  const blocks = heads.map((m, i) => {
+    const end = i + 1 < heads.length ? heads[i + 1].index : text.length;
+    const body = text.slice(m.index + m[0].length, end).replace(/\r\n?/g, '\n').trim();
+    const task = / · task #([^\n]+)$/.exec(m[0]);
+    return { at: m.index, end, head: m[0], body, key: `${task ? task[1].trim() : ''}\n${body}` };
+  });
+  const groups = new Map();
+  blocks.forEach((b, i) => { let g = groups.get(b.key); if (!g) groups.set(b.key, g = []); g.push(i); });
+  const floods = [...groups.values()].filter(g => g.length >= min).sort((a, b) => b.length - a.length);
+  const drop = new Set();
+  let anchored = 0;
+  for (const g of floods) for (const i of g.slice(0, -1)) { if (keep.has(blocks[i].head)) anchored++; else drop.add(i); }
+  return { blocks, groups: groups.size, floods, drop, anchored };
+}
+
+/* The text without the dropped blocks. Every block but the last ends with the blank line before
+ * the next header, so when the last one goes, the file keeps the ending it had. */
+function foldText(text, { blocks, drop }) {
+  let out = text.slice(0, blocks[0].at);
+  blocks.forEach((b, i) => { if (!drop.has(i)) out += text.slice(b.at, b.end); });
+  return drop.has(blocks.length - 1) ? out.replace(/\n*$/, /\n*$/.exec(text)[0]) : out;
+}
+
+/* Every cursor this node keeps on queue file `f`: the shared one, each subscriber's, the taps'. */
+function localCursors(stateDir, f) {
+  const out = [];
+  const at = (dir) => { const p = path.join(dir, `${f}.offset`); if (fs.existsSync(p)) out.push({ file: p, ...readCursor(p) }); };
+  const taps = path.join(stateDir, '__watchall__');
+  at(stateDir); at(taps);
+  for (const d of subscriberDirs(stateDir)) at(path.join(stateDir, d));
+  for (const d of subscriberDirs(taps)) at(path.join(taps, d));
+  return out;
+}
+
+function watermarks(cursors, marks, f) {
+  const keep = new Set(cursors.map(c => c.mark).filter(Boolean));
+  for (const m of marks) for (const slot of [m.files, ...Object.values(m.subs)]) if (slot[f]?.mark) keep.add(slot[f].mark);
+  return keep;
+}
+
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/* Rewrites one shard, under this node's shared cursor lock so no reader here drains it halfway.
+ * A send takes no lock (an append is atomic), so the file is checked unchanged just before the
+ * rename, and an append that opened the old file in that last moment is carried over after it. */
+function foldShard(r, role, f, min) {
+  const qdir = path.join(r, 'queues'), stateDir = path.join(r, '.qstate');
+  const full = path.join(qdir, f), shared = path.join(stateDir, `${f}.offset`);
+  const tmp = `${full}.fold.${process.pid}`;
+  return withLock(shared, () => {
+    const fd = fs.openSync(full, 'r');
+    try {
+      const st = fs.fstatSync(fd);
+      const buf = Buffer.alloc(st.size);
+      for (let got = 0; got < st.size;) { const n = fs.readSync(fd, buf, got, st.size - got, got); if (!n) break; got += n; }
+      const text = buf.toString('utf8');
+      const cursors = localCursors(stateDir, f);
+      const plan = foldPlan(text, watermarks(cursors, readMarks(qdir, role), f), min);
+      if (!plan.drop.size) return { dropped: 0 };
+      const out = foldText(text, plan);
+      const adir = path.join(qdir, 'archive');
+      fs.mkdirSync(adir, { recursive: true });
+      const base = f.replace(/\.queue\.md$/, '') + '.folded-' + now().replace(/[-: ]/g, '').replace(/^(\d{8})/, '$1-');
+      let dest = path.join(adir, base + '.md');
+      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(adir, `${base}.${n}.md`);
+      fs.writeFileSync(dest, [...plan.drop].sort((a, b) => a - b).map(i => text.slice(plan.blocks[i].at, plan.blocks[i].end)).join(''), 'utf8');
+      shareMode(dest);
+      fs.writeFileSync(tmp, out, 'utf8');
+      try { fs.chmodSync(tmp, st.mode & 0o777); } catch {}
+      const cur = fs.statSync(full);
+      if (cur.ino !== st.ino || cur.size !== st.size) {
+        fs.unlinkSync(dest);
+        return { dropped: 0, skipped: 'the file changed while it was read: run it again' };
+      }
+      fs.renameSync(tmp, full);
+      shareMode(full);
+      for (let size = st.size, k = 0; k < 3; k++) {
+        if (k) pause(25);
+        const late = fs.fstatSync(fd).size;
+        if (late <= size) continue;
+        const extra = Buffer.alloc(late - size);
+        fs.readSync(fd, extra, 0, late - size, size);
+        fs.appendFileSync(full, extra);
+        size = late;
+      }
+      // This node's cursors follow their watermarks now; another node's do on its next read.
+      let moved = 0;
+      for (const c of cursors) {
+        const end = c.mark ? blockEndAt(out, c.mark) : -1;
+        const off = end === -1 ? null : Buffer.byteLength(out.slice(0, end), 'utf8');
+        if (off == null || off === c.off) continue;
+        const move = () => { if (readCursor(c.file).mark === c.mark) { writeCursor(c.file, off, c.mark); moved++; } };
+        try { if (c.file === shared) move(); else withLock(c.file, move); } catch {}
+      }
+      return { dropped: plan.drop.size, archive: path.relative(r, dest), cursorsMoved: moved,
+        bytesBefore: st.size, bytesAfter: Buffer.byteLength(out, 'utf8') };
+    } finally {
+      fs.closeSync(fd);
+      try { fs.unlinkSync(tmp); } catch {}
+    }
+  });
+}
+
+export function runQueueDedupe(role, { root, min = FLOOD_MIN, apply = false } = {}) {
+  assertRole(role);
+  if (!Number.isInteger(min) || min < 2) throw new Error('--min must be a whole number, 2 or more');
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues'), stateDir = path.join(r, '.qstate');
+  const marks = readMarks(qdir, role);
+  const live = liveMeshNodes({ root: r, days: 30 });
+  const files = [];
+  for (const s of listShards(qdir).filter(x => x.role === role)) {
+    let text; try { text = fs.readFileSync(path.join(qdir, s.file), 'utf8'); } catch { continue; }
+    const cursors = localCursors(stateDir, s.file);
+    const plan = foldPlan(text, watermarks(cursors, marks, s.file), min);
+    const row = { file: s.file, node: s.node, blocks: plan.blocks.length, unique: plan.groups, floods: plan.floods.length,
+      repeats: plan.floods.reduce((n, g) => n + g.length, 0), drop: plan.drop.size, anchored: plan.anchored,
+      top: plan.floods.slice(0, 5).map(g => { const b = plan.blocks[g[g.length - 1]]; return { count: g.length, head: b.head, text: b.body.split('\n').join(' ').slice(0, 60) }; }) };
+    if (plan.drop.size) {
+      row.held = shardHold(s.node, plan.blocks.length, live, 'rewrites it (hub queue dedupe there)') ||
+        (cursors.some(c => c.off > 0 && !c.mark) ? 'a cursor here has no watermark: in a shorter file it would hand everything out again' : null);
+      if (apply && !row.held) Object.assign(row, foldShard(r, role, s.file, min));
+    }
+    files.push(row);
+  }
+  return { role, min, apply, files };
 }
 
 /**

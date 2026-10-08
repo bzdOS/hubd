@@ -4,6 +4,35 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.65 — 2026-10-08
+
+- **`hub card show`: a card read back.** Writing a card had a command and reading one
+  had none, so a script cut a role's section out of the file with awk. `hub card show
+  <slug>` prints the card, `--section` one section's body, by its heading or by a
+  section key, and exits 1 when the card does not hold it; `--json` gives the sections
+  as data.
+- **`hub log --since`, `--agent`, `--to`.** A sensor read the journal files itself to
+  find the orders sent to its roles, and kept only their last megabyte: an older order
+  was not there to find. `--since` reads all of a window, a duration or a time;
+  `--agent` keeps one author, `--to` the entries addressed to a role; `--json` carries
+  `to`. The text line keeps its format, since scripts match it.
+- **`hub queue repair`: what a dead reader leaves behind.** A waiter mark whose process
+  is gone, a reader's cursors named after a process that is gone, and a cursor this node
+  cannot write. Judged by the pid, never by age, and a mark that names no pid is left
+  alone: a tool that cleared marks by parsing them itself once took a date's digits for
+  a pid. `--apply` removes the marks and moves the cursors to `.qstate/_archive/`; a
+  cursor this node cannot write is named with the remedy, and the command exits 1 while
+  one is left.
+- **`hub queue dedupe <role>`: one message said many times, folded in place.** A sender
+  caught in a loop buried two workers' orders under thousands of copies of one nudge,
+  and the cleanup from outside moved the file away and sent the survivors again. A text
+  said five times (`--min`) or more about one task now keeps its newest copy and every
+  copy some reader's watermark stands on, on any node; the rest go to
+  `queues/archive/<role>.<node>.folded-<time>.md`. Blocks are cut at a whole header, so
+  a heading inside a message stays in it. Only a shard this node may rewrite, and not
+  while a cursor here has no watermark; this node's cursors move with their watermark,
+  another node's find it on its next read. Dry without `--apply`.
+
 ## 0.9.64 — 2026-10-08
 
 - **`HUBD_TOOLS`: a role's tools, not all of them.** A client reads every tool's schema

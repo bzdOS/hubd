@@ -16,7 +16,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
   CONFLICT_RE, runHeartbeat, runPresence, ownerWaiting, runWhereAmI, HUB_GITIGNORE, ensureLocalIgnores,
-  trackedNodeLocal, freezeFile, readFreeze, setReadOnly, cardTraceText,
+  trackedNodeLocal, freezeFile, readFreeze, setReadOnly, cardTraceText, sinceToMs, runCardShow,
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
 import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
@@ -35,7 +35,7 @@ import { runHubGc } from './lib/gc.mjs';
 import { renderPrompt, templateNames, lineDiff } from './lib/prompts.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, queueLedger } from './lib/queue.mjs';
+import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, runQueueRepair, runQueueDedupe, queueLedger } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -618,13 +618,25 @@ command(['whereami', 'where'], () => {
 // A card write's entry carries what it left the card at (cardTrace); a one-line render says it.
 function traced(e) { return e.card && Array.isArray(e.card.sections) ? ` [${cardTraceText(e.card)}]` : ''; }
 
+/* The text line stays as it is: scripts match it with a pattern (`<ts> [<project>/<agent>] <kind>: `),
+ * and an addressee put into it would break them on the very entries they look for. `to` and every
+ * other field are in --json. */
 command('log', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
-  const n = parseInt(getFlag('-n') || '20');
+  const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value`); return v; };
+  const since = flag('--since'), agent = flag('--agent'), to = flag('--to');
+  // A window is read whole unless -n caps it too: a sensor asking for the last three hours wants
+  // all of them, and a count it has to guess is how a busy hour gets cut.
+  const nArg = flag('-n');
+  const n = nArg != null ? parseInt(nArg) : since != null ? Infinity : 20;
+  if (!(n > 0)) die(`-n: "${nArg}" is not a count above 0`);
+  let sinceMs = null;
+  if (since != null) { try { sinceMs = sinceToMs(since); } catch (e) { die(e.message); } }
+  const entries = journalTail(proj, n, { sinceMs, agent, to });
   // --json: the entries as-is. Scripts were regex-parsing the text line and losing
   // everything a one-line render drops (fleet head_sense.py, 2026-09-27).
-  if (args.includes('--json')) { console.log(JSON.stringify(journalTail(proj, n))); done(0); }
-  for (const e of journalTail(proj, n)) {
+  if (args.includes('--json')) { console.log(JSON.stringify(entries)); done(0); }
+  for (const e of entries) {
     console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}${traced(e)}`);
   }
   done(0);
@@ -1138,6 +1150,28 @@ command('card', () => args[1] === 'resolve', () => {
   console.log(touched ? 'Rewrote ' + touched + ' card(s). Review, then commit.' : 'Nothing rewritten.');
   if (left) console.log('note: ' + left + ' hunk(s) need a human — hubd will not pick which side replaces the other.');
   done(left ? 1 : 0);
+});
+
+/* card show: a card read back, so a script reads a section through hubd rather than cutting it out
+ * of the file. One section prints its body alone and exits 1 when the card does not hold it. */
+command('card', () => args[1] === 'show', () => {
+  let pos;
+  try { pos = positionals(2, { values: ['--section'], booleans: ['--json'] }); } catch (e) { die(e.message); }
+  if (pos.length !== 1) die('Usage: hub card show <slug> [--section <heading|key>] [--json]');
+  const section = getFlag('--section');
+  if (section === true) die('--section needs a heading, or a section key from hub sections');
+  const json = args.includes('--json');
+  const r = runCardShow({ project: pos[0], section: section ?? undefined });
+  if (section == null) {
+    if (json) { console.log(JSON.stringify({ project: r.project, file: r.file, preamble: r.preamble, sections: r.sections })); done(0); }
+    process.stdout.write(r.text.endsWith('\n') ? r.text : r.text + '\n');
+    done(0);
+  }
+  if (r.repeated > 1) console.error(`note: ${r.project} holds ${r.repeated} sections "## ${r.heading}"; this is the first — hub cards merge-sections folds them`);
+  if (json) console.log(JSON.stringify({ project: r.project, file: r.file, section: r.section, heading: r.heading, body: r.body }));
+  else if (r.body !== null) { if (r.body) console.log(r.body); }
+  else console.error(`no section "## ${r.heading}" in ${r.file}`);
+  done(r.body === null ? 1 : 0);
 });
 
 // card merge-driver: merge cards by ## section on this node (hub/lib/cardmerge.mjs says why), and
@@ -2037,8 +2071,50 @@ command('queue', () => {
       console.log(`  note: ${r.neverRead} of ${r.total} queue file(s) have never been consumed at all — ${r.neverRead - r.count} of them newer than ${days}d and left alone. Lower the bar with --days <N> once you know they are dead.`);
     }
     done(0);
+  } else if (sub === 'repair') {
+    try { if (positionals(2, { booleans: ['--apply', '--json'] }).length) die('Usage: hub queue repair [--apply] [--json]'); } catch (e) { die(e.message); }
+    const apply = args.includes('--apply');
+    const r = runQueueRepair({ root: resolveQueueRoot(), apply });
+    const left = r.stalls.length + r.waiters.filter(w => w.error).length + r.namespaces.filter(n => apply && !n.moved).length;
+    if (args.includes('--json')) { console.log(JSON.stringify(r)); done(left ? 1 : 0); }
+    for (const w of r.waiters) console.log(`  waiter ${w.marker}  pid ${w.pid} is gone${w.since ? ', waiting since ' + w.since : ''}` +
+      (!apply ? '' : w.removed ? '  → removed' : w.settled ? '  → already cleared' : `  → not removed (${w.error})`));
+    for (const n of r.namespaces) console.log(`  reader ${n.tap ? '__watchall__/' : ''}${n.name}  pid ${n.pid} is gone, nobody reads with this cursor again` +
+      (!apply ? '' : n.moved ? '  → moved to .qstate/_archive/' : `  → not moved (${n.error})`));
+    for (const u of r.unreadable) console.log(`  waiter ${u.marker}  names no pid: left alone`);
+    for (const s of r.stalls) console.log(`  cursor ${s.file}  cannot be written here (${s.code}): its queue is not delivered. ` +
+      'Fix the owner or mode of the file and its directory (a shared hub: chgrp -R <group> and chmod -R g+rwX over it).');
+    const found = r.waiters.length + r.namespaces.length;
+    if (!found && !r.stalls.length) console.log('Nothing to repair: no dead waiter, no reader namespace of a dead process, every cursor writable.');
+    else if (found && !apply) console.log(`${r.waiters.length} dead waiter marker(s), ${r.namespaces.length} reader namespace(s) of a dead process. ` +
+      'Nothing changed: --apply removes the markers and moves the namespaces to .qstate/_archive/. ' +
+      'A dead marker holds no reader back (the next waiter clears it); this clears it for whatever else reads it.');
+    done(left ? 1 : 0);
+  } else if (sub === 'dedupe') {
+    let role;
+    try { [role] = positionals(2, { values: ['--min'], booleans: ['--apply', '--json'] }); } catch (e) { die(e.message); }
+    if (!role) die('Usage: hub queue dedupe <role> [--min 5] [--apply] [--json]');
+    const minArg = getFlag('--min');
+    const min = minArg == null ? undefined : /^\d+$/.test(String(minArg)) ? Number(minArg) : NaN;
+    const apply = args.includes('--apply');
+    let r; try { r = runQueueDedupe(role, { root: resolveQueueRoot(), min, apply }); } catch (e) { die(e.message); }
+    if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+    if (!r.files.length) { console.log(`No queue files for role ${role}`); done(0); }
+    for (const f of r.files) {
+      console.log(`  ${f.file}: ${f.blocks} block(s), ${f.unique} unique, ${f.floods} flood group(s) (${f.repeats} repeats)`);
+      for (const t of f.top) console.log(`      x${String(t.count).padEnd(5)} ${t.head.slice(0, 60)}  "${t.text}"`);
+      if (!f.floods) { console.log('      -> no flood, left alone'); continue; }
+      const kept = `keeps the newest of each${f.anchored ? ` and ${f.anchored} a reader's watermark stands on` : ''}`;
+      if (f.held) console.log(`      -> left: ${f.held}`);
+      else if (!apply) console.log(`      -> would drop ${f.drop} block(s), ${kept}`);
+      else if (f.skipped) console.log(`      -> not folded: ${f.skipped}`);
+      else console.log(`      -> dropped ${f.dropped} block(s), ${f.bytesBefore}B -> ${f.bytesAfter}B, ${kept}; the copies are in ${f.archive}` +
+        (f.cursorsMoved ? `; ${f.cursorsMoved} cursor(s) here moved with their watermark` : ''));
+    }
+    if (!apply && r.files.some(f => f.drop && !f.held)) console.log(`Nothing changed: --apply folds every flood of ${r.min}+ copies.`);
+    done(0);
   } else {
-    die('queue subcommands: send, wait, monitor, work, status, resolve, gc');
+    die('queue subcommands: send, wait, monitor, work, status, resolve, gc, repair, dedupe');
   }
 });
 
@@ -2100,7 +2176,7 @@ const HELP = [
   ['agenda [project]', 'the day, split by who can act'],
   ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
-  ['log [project] [-n 20] [--json]', 'journal tail'],
+  ['log [project] [-n 20] [--since 3h|<time>] [--agent <name>] [--to <role>] [--json]', 'journal tail; --since: all of the window; --json: every field, to included'],
   ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json | --exec <cmd>]', 'new journal entries, each shown once to the cursor <name>',
     'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to <cmd> on stdin, marked when it exits 0'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
@@ -2119,6 +2195,7 @@ const HELP = [
   ['task retag [--apply --by <you>]', 'move categories off the fixed list into tags (dry run without --apply)'],
   ['card <slug> -m "<digest>"', 'set a project card without a folder'],
   ['card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]', 'fix lines of a card, leave the rest byte-for-byte'],
+  ['card show <slug> [--section <heading|key>] [--json]', 'read a card back: whole, its sections as data, or one section\'s body (exit 1 when the card does not hold it)'],
   ['card resolve [slug...]', 'union the list hunks of a conflicted card, name the rest'],
   ['card merge-driver [--remove]', 'on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time'],
   ['cards compact [--apply --by <you>]', 'move the overflow of over-long card sections into projects/history/ (dry run without --apply)'],
@@ -2159,6 +2236,10 @@ const HELP = [
   ['queue status [<role>] [--json]', 'per role and node: delivered and pending'],
   ['queue resolve [file...]', 'a conflicted queue file: ours in place, theirs appended'],
   ['queue gc [--days 30] [--apply]', 'archive queue files nobody ever read'],
+  ['queue repair [--apply] [--json]', 'dead waiter markers, readers of a dead process, cursors this node cannot write',
+    'judged by the pid, not by age; --apply removes the markers and moves the readers to .qstate/_archive/; exit 1 while a cursor cannot be written'],
+  ['queue dedupe <role> [--min 5] [--apply] [--json]', 'fold one message said --min times or more about one task into its newest copy',
+    'copies a reader\'s watermark stands on stay; only a shard this node may rewrite; the dropped copies go to queues/archive/'],
   ['board [<project>] [--days 7] [--limit 8] [--all] [--json]', 'every track: roles, done, next, blocked, and what waits for you'],
   ['sense <head> [events|check <branch>|verdict <branch> accept|reject <text>|brief|status]', "a head's sensor: exit 0 = wake with this text, 1 = nothing"],
   ['serve [-p 7777]', 'read-only dashboard: summary, tracks, kanban, history'],
@@ -2197,7 +2278,8 @@ function readOnlyRun() {
     case 'resource': case 'res': return sub === 'list' || sub === 'get';
     case 'task': return sub === 'list' || sub === 'get';
     case 'claim': return sub === 'check';
-    case 'queue': return sub === 'status' || (sub === 'gc' && dry);
+    case 'card': return sub === 'show';
+    case 'queue': return sub === 'status' || (['gc', 'repair', 'dedupe'].includes(sub) && dry);
   }
   return args.includes('--help');
 }

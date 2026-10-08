@@ -18,7 +18,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`agenda`](#agenda) | the day, split by who can act |
 | [`plan`](#plan) | dependency-graph trajectory: ready now · critical path · unlock order · cycles |
 | [`whereami`](#whereami) | where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction |
-| [`log`](#log) | journal tail |
+| [`log`](#log) | journal tail; --since: all of the window; --json: every field, to included |
 | [`watch`](#watch) | new journal entries, each shown once to the cursor &lt;name> |
 | [`recall`](#recall) | ranked, dated hits across cards, tasks and the journal |
 | [`report`](#report) | structured report → card sections (no input prints the template) |
@@ -26,7 +26,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
 | [`task`](#task) | a new task; close a task; tasks; one task, and where else its id appears; move categories off the fixed list into tags (dry run without --apply) |
-| [`card`](#card) | set a project card without a folder; fix lines of a card, leave the rest byte-for-byte; union the list hunks of a conflicted card, name the rest; on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time |
+| [`card`](#card) | set a project card without a folder; fix lines of a card, leave the rest byte-for-byte; read a card back: whole, its sections as data, or one section's body (exit 1 when the card does not hold it); union the list hunks of a conflicted card, name the rest; on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time |
 | [`cards`](#cards) | move the overflow of over-long card sections into projects/history/ (dry run without --apply); merge two cards for the same project (dry run without --apply); fold a section a card holds twice (same heading, or two locales) into the live one |
 | [`section`](#section) | write one section of a card |
 | [`sections`](#sections) | card section keys → headings (localise via HUB/sections.json) |
@@ -50,7 +50,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`install-hook`](#install-hook) | git post-commit hook |
 | [`gc`](#gc) | what has piled up, by class — dry: touches nothing; archive it (moved, never deleted) and clear this node's litter |
 | [`secret`](#secret) | values kept outside the replicated hub |
-| [`queue`](#queue) | address work to a role; block until real content, then exit 0; the same, again and again; the role's ready tasks, as its queue; per role and node: delivered and pending; a conflicted queue file: ours in place, theirs appended; archive queue files nobody ever read |
+| [`queue`](#queue) | address work to a role; block until real content, then exit 0; the same, again and again; the role's ready tasks, as its queue; per role and node: delivered and pending; a conflicted queue file: ours in place, theirs appended; archive queue files nobody ever read; dead waiter markers, readers of a dead process, cursors this node cannot write; fold one message said --min times or more about one task into its newest copy |
 | [`board`](#board) | every track: roles, done, next, blocked, and what waits for you |
 | [`sense`](#sense) | a head's sensor: exit 0 = wake with this text, 1 = nothing |
 | [`serve`](#serve) | read-only dashboard: summary, tracks, kanban, history |
@@ -112,7 +112,7 @@ Also: `hub where`
 
 ## log
 
-- `hub log [project] [-n 20] [--json]` — journal tail
+- `hub log [project] [-n 20] [--since 3h|<time>] [--agent <name>] [--to <role>] [--json]` — journal tail; --since: all of the window; --json: every field, to included
 
 ## watch
 
@@ -157,6 +157,7 @@ Also: `hub where`
 
 - `hub card <slug> -m "<digest>"` — set a project card without a folder
 - `hub card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]` — fix lines of a card, leave the rest byte-for-byte
+- `hub card show <slug> [--section <heading|key>] [--json]` — read a card back: whole, its sections as data, or one section's body (exit 1 when the card does not hold it)
 - `hub card resolve [slug...]` — union the list hunks of a conflicted card, name the rest
 - `hub card merge-driver [--remove]` — on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time
 
@@ -271,6 +272,12 @@ Also: `hub res`
 - `hub queue status [<role>] [--json]` — per role and node: delivered and pending
 - `hub queue resolve [file...]` — a conflicted queue file: ours in place, theirs appended
 - `hub queue gc [--days 30] [--apply]` — archive queue files nobody ever read
+- `hub queue repair [--apply] [--json]` — dead waiter markers, readers of a dead process, cursors this node cannot write
+
+  judged by the pid, not by age; --apply removes the markers and moves the readers to .qstate/_archive/; exit 1 while a cursor cannot be written
+- `hub queue dedupe <role> [--min 5] [--apply] [--json]` — fold one message said --min times or more about one task into its newest copy
+
+  copies a reader's watermark stands on stay; only a shard this node may rewrite; the dropped copies go to queues/archive/
 
 ## board
 
@@ -296,7 +303,7 @@ The commands each flag appears with, in their usage lines.
 | --- | --- |
 | `--accept` | [reflect](#reflect) |
 | `--addr` | [resource](#resource) |
-| `--agent` | [setup](#setup), [claim](#claim), [release](#release), [usage](#usage) |
+| `--agent` | [setup](#setup), [log](#log), [claim](#claim), [release](#release), [usage](#usage) |
 | `--alive` | [presence](#presence) |
 | `--all` | [board](#board) |
 | `--append` | [rules](#rules) |
@@ -321,12 +328,13 @@ The commands each flag appears with, in their usage lines.
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
-| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [presence](#presence), [usage](#usage), [gc](#gc), [queue](#queue), [board](#board) |
+| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [card](#card), [presence](#presence), [usage](#usage), [gc](#gc), [queue](#queue), [board](#board) |
 | `--laws` | [reflect](#reflect) |
 | `--level` | [reflect](#reflect) |
 | `--limit` | [recall](#recall), [board](#board) |
 | `--link` | [resource](#resource) |
 | `-m` | [card](#card), [resource](#resource), [sync](#sync) |
+| `--min` | [queue](#queue) |
 | `--model` | [usage](#usage) |
 | `-n` | [log](#log) |
 | `--needs` | [task](#task) |
@@ -347,8 +355,9 @@ The commands each flag appears with, in their usage lines.
 | `--role` | [heartbeat](#heartbeat), [presence](#presence) |
 | `--scope` | [setup](#setup) |
 | `--seconds` | [usage](#usage) |
+| `--section` | [card](#card) |
 | `--set` | [section](#section) |
-| `--since` | [watch](#watch), [reflect](#reflect) |
+| `--since` | [log](#log), [watch](#watch), [reflect](#reflect) |
 | `--src` | [section](#section) |
 | `--stale-days` | [recall](#recall) |
 | `--status` | [task](#task), [resource](#resource), [heartbeat](#heartbeat) |
@@ -356,6 +365,7 @@ The commands each flag appears with, in their usage lines.
 | `--task` | [claim](#claim), [release](#release), [heartbeat](#heartbeat), [usage](#usage), [queue](#queue) |
 | `--tasks` | [queue](#queue) |
 | `--timeout` | [queue](#queue) |
+| `--to` | [log](#log) |
 | `--tokens-in` | [usage](#usage) |
 | `--tokens-out` | [usage](#usage) |
 | `--ttl` | [heartbeat](#heartbeat) |

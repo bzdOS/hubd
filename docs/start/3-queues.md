@@ -231,7 +231,12 @@ never refused: a decision for a person and an escalation always go through.
 
 Never `rm` a queue file to clean up. `hub queue gc` archives the ones nobody ever
 read, and in a hub synced between machines a deleted log is refused by the sync
-(tutorial 4).
+(tutorial 4). A sender caught in a loop, one message said a hundred times, is folded
+by `hub queue dedupe <role>`: a text said five times or more about one task keeps its
+newest copy and every copy a reader's place stands on, and the rest go to
+`queues/archive/`. What a killed reader leaves behind, a waiter mark and a cursor no
+process reads with again, `hub queue repair` lists. Both change nothing without
+`--apply`.
 
 ## What you have now
 

@@ -173,4 +173,28 @@ const HL = mktmp();
 }
 
 
+// ── the log by window, author and addressee ──
+// A sensor read the journal files itself to find the orders sent to its roles, and kept only their
+// last megabyte: an older order was not there to find. --since reads all of a window, --to filters
+// by addressee, and the text line keeps its format, since scripts match it.
+{
+  const L = mktmp(), env = { HUBD_DIR: L, HUBD_TEAM_DIR: L };
+  cli(['report', '-p', 'logproj', '--agent', 'alice', '-m', 'TO: worker\nhello worker'], { env });
+  cli(['report', '-p', 'logproj', '--agent', 'bob', '-m', 'TO: reviewer, worker\nboth of you'], { env });
+  cli(['report', '-p', 'logproj', '--agent', 'bob', '-m', 'NOTE: nobody in particular'], { env });
+  fs.appendFileSync(path.join(L, 'journal.old.jsonl'),
+    JSON.stringify({ ts: '2020-01-01 00:00', project: 'logproj', agent: 'alice', kind: 'note', text: 'long ago', to: 'worker' }) + '\n');
+  const texts = (argv) => { try { return JSON.parse(cli(['log', ...argv, '--json'], { env }).stdout).map(e => e.text); } catch { return null; } };
+  ok(String(texts(['--to', 'worker'])) === 'long ago,hello worker,both of you', `log --to: the entries addressed to the role, one among several included (${texts(['--to', 'worker'])})`);
+  ok(String(texts(['--to', 'worker', '--agent', 'alice'])) === 'long ago,hello worker', 'log --agent: and only the ones that author wrote');
+  ok(String(texts(['logproj', '--since', '1h', '--to', 'worker'])) === 'hello worker,both of you', 'log --since: the window, and nothing older');
+  ok(texts(['--since', '1h']).length === 3 && texts(['--since', '1h', '-n', '1']).length === 1, 'log --since: all of the window, unless -n caps it too');
+  ok(String(texts(['--since', '2019-12-31', '--agent', 'alice'])) === 'long ago,hello worker', 'log --since: a time as well as a duration');
+  const line = cli(['log', '--to', 'worker', '--agent', 'alice', '-n', '1'], { env });
+  ok(/^\d{4}-\d\d-\d\d \d\d:\d\d(:\d\d)? \[logproj\/alice\] note: hello worker\n$/.test(line.stdout), `log: the text line keeps its format, the addressee is in --json only (${JSON.stringify(line.stdout)})`);
+  ok(cli(['log', '--since', '3x'], { env }).code === 1 && cli(['log', '--to'], { env }).code === 1 && cli(['log', '-n', '0'], { env }).code === 1,
+    'log: a window it cannot read, a flag without its value and a count of 0 are refused');
+}
+
+
 done();

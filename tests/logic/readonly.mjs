@@ -66,6 +66,9 @@ const READS = [
   ['recall', 'thing'], ['reflect', '--project', 'alpha'], ['reflect', '--project', 'alpha', '--json'], ['reflect', '--project', 'alpha', '--promote'], ['reflect', '--project', 'alpha', '--laws'], ['usage'], ['rules'], ['operator'], ['audit'], ['lint'], ['sections'], ['harvest'], ['prompts', 'render', 'worker'],
   ['gc'], ['gc', '--json'], ['resource', 'list'], ['resource', 'get', 'box'],
   ['cards', 'compact'], ['cards', 'merge-sections'], ['queue', 'status'], ['queue', 'gc'], ['doctor'],
+  ['card', 'show', 'alpha'], ['card', 'show', 'alpha', '--json'], ['card', 'show', 'alpha', '--section', 'next', '--json'],
+  ['log', '--since', '3h', '--json'], ['log', '--to', 'worker', '--agent', 'dev-readonly'],
+  ['queue', 'repair'], ['queue', 'repair', '--json'], ['queue', 'dedupe', 'worker'], ['queue', 'dedupe', 'worker', '--json'],
 ];
 // Each command gets its own copy of that hub: the first one to "repair" it would otherwise hide
 // what every later one does.
