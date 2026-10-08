@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.62 — 2026-10-08
+
+- **`hub setup --harness omp`: hubd into oh-my-pi.** omp adds an MCP server only from
+  inside a session (`/mcp add`), so its file is merged here, as opencode's is, with a backup
+  made before the first change: `~/.omp/agent/mcp.json` at user scope, `.omp/mcp.json` at
+  project scope. The user folder is found as omp finds it, since an entry written anywhere
+  else sits in a file this omp never opens: a named profile (`OMP_PROFILE`, else
+  `PI_PROFILE`) has a folder of its own, `PI_CODING_AGENT_DIR` moves the default profile's,
+  and `PI_CONFIG_DIR` the root. A running omp takes the entry up with `/mcp reload`.
+- **The quick start says what Windows needs.** Node 18 or newer, and a way past
+  PowerShell's default execution policy, which refuses the `hub.ps1` shim npm installs:
+  `hub.cmd`, cmd, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+- **A card says when its repository has no commit yet.** `hub sync` on a folder fresh
+  from `git init` wrote an empty branch and an empty last-commit date over an empty
+  code block, and `hub whereami` named no branch: git names HEAD only once there is a
+  commit. Both now name the branch, and the card says `no commits yet`.
+
 ## 0.9.61 — 2026-10-08
 
 - **A reopened task is open, not closed.** Setting a closed task back to `open` kept the

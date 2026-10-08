@@ -345,10 +345,16 @@ export function sh(cmd, cwd, timeout = 8000) {
  *  a slow read is a busy machine, not a big repo; a minute still ends a git that hangs. */
 export const hubGit = (cmd) => sh(cmd, HUB, 60000);
 
+/** The branch a checkout is on, named even before its first commit: rev-parse needs a commit to
+ *  name HEAD, so a fresh `git init` came back as no branch at all. Detached, it reads "HEAD". */
+export function gitBranch(dir) {
+  return sh('git symbolic-ref --short -q HEAD', dir) || sh('git rev-parse --abbrev-ref HEAD', dir);
+}
+
 export function gitFacts(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
   return {
-    branch: sh('git rev-parse --abbrev-ref HEAD', dir),
+    branch: gitBranch(dir),
     last10: sh('git log --oneline -10', dir),
     dirty: sh('git status --short', dir).split('\n').filter(Boolean).length,
     lastCommitAt: sh('git log -1 --format=%ci', dir),
@@ -2391,7 +2397,9 @@ export function runSync(a) {
     `- open tasks: ${openTaskCount(slug)}\n` +
     (metrics ? Object.entries(metrics).map(([k, v]) => `- ${k}: ${v}`).join('\n') + '\n' : '') +
     (hasNew ? `- since last sync: ${diff.newCommits} commit(s)${diff.filesChanged ? ', ' + diff.filesChanged + ' file(s)' : ''}${diff.insertions !== null ? ', +' + diff.insertions : ''}${diff.deletions !== null ? '/-' + diff.deletions + ' lines' : ''}\n` : '') +
-    (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : '- no git\n') +
+    // A repository without a commit has no date and no log: it says so, not "last commit: " over an empty block.
+    (git ? `- branch: ${git.branch} · uncommitted: ${git.dirty} · ` +
+      (git.lastCommitAt ? `last commit: ${git.lastCommitAt}\n\n\`\`\`\n${git.last10}\n\`\`\`\n` : 'no commits yet\n') : '- no git\n') +
     (markers.length ? `- markers: ${markers.join(', ')}\n` : '');
   const rot = rotateCardOverflow(card, slug, author, lim);
   atomicWrite(cardPath(pname), rot.text);
@@ -3536,7 +3544,7 @@ export function runWhereAmI(a = {}) {
       .slice(0, 30).map(f => ({ file: f, firstLine: f.endsWith('/') ? '(directory)' : firstLine(f) }));
     const stat = sh('git diff --stat', root).split('\n').filter(Boolean);
     out.git = {
-      branch: sh('git rev-parse --abbrev-ref HEAD', root),
+      branch: gitBranch(root),
       commits: sh(`git log --format='%h %s' -n ${Math.max(1, parseInt(a.commits ?? 8, 10) || 8)}`, root).split('\n').filter(Boolean),
       dirty: stat.length ? stat[stat.length - 1].trim() : 'clean',
       dirtyFiles: stat.slice(0, -1).map(l => l.trim()).slice(0, 20),

@@ -42,7 +42,7 @@ fake('claude', "s === 'project' ? path.join(process.cwd(), '.mcp.json') : path.j
 fake('gemini', "path.join(s === 'project' ? process.cwd() : os.homedir(), '.gemini', 'settings.json')");
 
 const PATH = BIN + path.delimiter + process.env.PATH;
-const ENV = { HOME, PATH, XDG_CONFIG_HOME: undefined, HUBD_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined, HUBD_AGENT: undefined, PROJECT_HUB_DIR: undefined };
+const ENV = { HOME, PATH, XDG_CONFIG_HOME: undefined, OMP_PROFILE: undefined, PI_PROFILE: undefined, PI_CONFIG_DIR: undefined, PI_CODING_AGENT_DIR: undefined, HUBD_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_NODE: undefined, HUBD_AGENT: undefined, PROJECT_HUB_DIR: undefined };
 const setup = (argv, env = {}) => cli(['setup', ...argv], { env: { ...ENV, ...env }, cwd: WORK });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
 const calls = () => fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean) : [];
@@ -61,7 +61,7 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
   const n = setup(['--agent', 'dev-shop']);
   ok(n.code === 1 && /--harness/.test(n.stderr), 'setup: without --harness it names the ones it knows');
   const u = setup(['--harness', 'zed', '--agent', 'dev-shop']);
-  ok(u.code === 1 && /claude, gemini, opencode/.test(u.stderr) && /--prompt/.test(u.stderr), 'setup: a harness with no row is refused, and pointed at --prompt');
+  ok(u.code === 1 && /claude, gemini, opencode, omp/.test(u.stderr) && /--prompt/.test(u.stderr), 'setup: a harness with no row is refused, and pointed at --prompt');
   const h = setup(['--harness', 'opencode', '--agent', 'dev-shop', '--hub', path.join(T, 'nope')]);
   ok(h.code === 1 && /is not a folder; hub init/.test(h.stderr), 'setup: --hub that is not a folder is refused: a server answers for it all the same, empty');
   const two = setup(['--harness', 'claude', '--agent', 'dev-shop', '--print', '--check']);
@@ -177,6 +177,35 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
   ok(/"mcp"/.test(setup(['--harness', 'opencode', '--agent', 'dev-x', '--print']).stdout), 'setup opencode --print: the entry, to add by hand');
 }
 
+// ── omp: a file, merged, in the folder omp itself reads for the profile it runs under
+{
+  const OMP = path.join(HOME, '.omp', 'agent', 'mcp.json');
+  const r = setup(['--harness', 'omp', '--agent', 'dev-shop', '--hub', HUB]);
+  ok(r.code === 0 && /oh-my-pi\/main\/.*\/mcp-schema\.json$/.test(json(OMP).$schema) &&
+    JSON.stringify(json(OMP).mcpServers.hubd) === JSON.stringify({ type: 'stdio', ...want('dev-shop') }) && /\/mcp reload/.test(r.stdout),
+    `setup omp: a new ~/.omp/agent/mcp.json with the schema and a stdio entry (exit ${r.code})`);
+  fs.writeFileSync(OMP, JSON.stringify({ mcpServers: { other: { type: 'http', url: 'https://x' } }, disabledServers: ['old'] }, null, 2));
+  const m = setup(['--harness', 'omp', '--agent', 'qa-shop', '--hub', HUB]);
+  ok(m.code === 0 && json(OMP).mcpServers.other.url === 'https://x' && json(OMP).disabledServers.join() === 'old' && json(OMP).mcpServers.hubd.env.HUBD_AGENT === 'qa-shop',
+    'setup omp: merged into a file that is there, its other servers and lists kept');
+  const c = setup(['--harness', 'omp', '--check']);
+  ok(c.code === 0 && /oh-my-pi, user scope/.test(c.stdout) && /answered/.test(c.stdout), `setup omp --check: the entry it holds answers (exit ${c.code})`);
+  const un = setup(['--harness', 'omp', '--uninstall']);
+  ok(un.code === 0 && !json(OMP).mcpServers.hubd && json(OMP).mcpServers.other, 'setup omp --uninstall: the entry gone, the rest kept');
+
+  const at = (env) => path.dirname(setup(['--harness', 'omp', '--agent', 'dev-x', '--print'], env).stdout.match(/^# in (.*), under/m)[1]);
+  ok(at({ OMP_PROFILE: 'work' }) === path.join(HOME, '.omp', 'profiles', 'work', 'agent') && at({ PI_PROFILE: 'old' }) === path.join(HOME, '.omp', 'profiles', 'old', 'agent'),
+    'setup omp: a named profile has a folder of its own, OMP_PROFILE or the older PI_PROFILE');
+  ok(at({ OMP_PROFILE: '', PI_PROFILE: 'old' }) === path.dirname(OMP) && at({ OMP_PROFILE: 'default' }) === path.dirname(OMP),
+    'setup omp: OMP_PROFILE set empty, or "default", is the default profile, whatever PI_PROFILE says');
+  const moved = path.join(T, 'omp-agent');
+  ok(at({ PI_CODING_AGENT_DIR: moved }) === moved && at({ PI_CODING_AGENT_DIR: moved, OMP_PROFILE: 'work' }) === path.join(HOME, '.omp', 'profiles', 'work', 'agent') &&
+    at({ PI_CONFIG_DIR: '.omp-alt' }) === path.join(HOME, '.omp-alt', 'agent'),
+    'setup omp: PI_CODING_AGENT_DIR moves the default profile only, PI_CONFIG_DIR the root');
+  const proj = setup(['--harness', 'omp', '--scope', 'project', '--agent', 'dev-shop', '--hub', HUB]);
+  ok(proj.code === 0 && json(path.join(WORK, '.omp', 'mcp.json')).mcpServers.hubd.env.HUBD_AGENT === 'dev-shop', 'setup omp --scope project: .omp/mcp.json in the folder it was run in');
+}
+
 // ── --print, --prompt and --verify write nothing
 {
   const H2 = mktmp(), before = fs.readdirSync(H2).length;
@@ -197,7 +226,7 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
   setup(['--harness', 'opencode', '--agent', 'dev-api', '--hub', HUB, '--verify'], { HOME: H2, HUBD_DIR: SH });
   ok(fs.readdirSync(SH).length === 0, 'setup: the hub of the shell it runs in is left as it was');
   const init = cli(['init', mktmp()], { env: { HOME: H2 } });
-  ok(/^  Or, checked: +hub setup --harness claude\|gemini\|opencode --agent dev-<project>$/m.test(init.stdout), 'init: the next steps name hub setup');
+  ok(/^  Or, checked: +hub setup --harness claude\|gemini\|opencode\|omp --agent dev-<project>$/m.test(init.stdout), 'init: the next steps name hub setup');
 }
 
 // ── the server: this install, else a hubd on PATH outside npx's cache, else npx pinned to this version

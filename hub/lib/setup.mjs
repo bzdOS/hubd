@@ -62,7 +62,28 @@ export const HARNESSES = {
     restart: 'restart opencode',
     rules: ['agents-md.md', 'AGENTS.md'],
   },
+  // oh-my-pi adds a server only from inside a session (/mcp add), so its file is merged here
+  omp: {
+    label: 'oh-my-pi', scopes: ['user', 'project'],
+    file: (scope, cwd) => path.join(scope === 'project' ? path.join(cwd, '.omp') : ompAgentDir(), 'mcp.json'),
+    servers: 'mcpServers',
+    fresh: { $schema: 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json' },
+    entry: (s) => ({ type: 'stdio', command: s.command, args: s.args, env: s.env }),
+    spec: (e) => ({ command: e.command, args: e.args || [], env: e.env || {} }),
+    restart: 'run /mcp reload in an omp session that is running, or start a new one',
+    rules: ['agents-md.md', 'AGENTS.md'],
+  },
 };
+
+/* The folder omp reads its user config from, found as omp finds it: a named profile (OMP_PROFILE,
+ * else PI_PROFILE) has one of its own, and PI_CODING_AGENT_DIR moves only the default profile's.
+ * Written anywhere else, the entry would sit in a file this omp never opens. */
+function ompAgentDir(env = process.env) {
+  const base = path.join(os.homedir(), env.PI_CONFIG_DIR || '.omp');
+  const profile = String((env.OMP_PROFILE !== undefined ? env.OMP_PROFILE : env.PI_PROFILE) || '').trim();
+  if (profile && profile !== 'default') return path.join(base, 'profiles', profile, 'agent');
+  return env.PI_CODING_AGENT_DIR ? path.resolve(env.PI_CODING_AGENT_DIR) : path.join(base, 'agent');
+}
 
 /* What the harness runs. A copy of hubd that is on this machine starts in a fraction of the time
  * npx takes to ask the registry, and the harness starts it every session, so a local one is written
