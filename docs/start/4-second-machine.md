@@ -174,7 +174,7 @@ hub base:
   resources:0
   tasks:    4 open
   claims:   1 active, 0 expired
-  journal:  2 file(s), 16 entries
+  journal:  2 file(s), 17 entries
   writers:  elm 0.9.56 - oak 0.9.56
   fleet:    elm SILENT - oak (here, 2)  WARNING
             no registry at all from elm - a role running there is
@@ -206,10 +206,10 @@ hub unfreeze
 Frozen: mesh-sync on this node will skip every run until you unfreeze.
   /tmp/hub-tour/.mesh-freeze
 Local writes still work and stay local. Back up before you touch anything:
-  tar czf ~/hub-backup-20261007.tgz -C "/tmp" "hub-tour"
+  tar czf ~/hub-backup-20261008.tgz -C "/tmp" "hub-tour"
 Other writers on this directory are NOT stopped by this — check them too:  hub doctor
 mesh-sync: FROZEN — skipping (/tmp/hub-tour/.mesh-freeze). Run: hub unfreeze
-Unfrozen. mesh-sync runs again on its next tick (was frozen since 2026-10-07 13:00 by alice).
+Unfrozen. mesh-sync runs again on its next tick (was frozen since 2026-10-08 15:36 by alice).
 Run it once now to catch up:  sh "$(npm root -g)/@bzdos/hubd/scripts/mesh-sync.sh"
 ```
 

@@ -93,8 +93,8 @@ hub base:
   resources:0
   tasks:    1 open
   claims:   0 active, 0 expired
-  journal:  1 file(s), 4 entries
-  writers:  pine 0.9.56
+  journal:  1 file(s), 5 entries
+  writers:  pine 0.9.60
   fleet:    pine (here, 0)
 ```
 
@@ -115,7 +115,7 @@ hub absorb /tmp/hub-s12-home/.hubd --as pine-stray
 Would absorb /tmp/hub-s12-home/.hubd as node pine-stray  (dry run - add --apply --by <you>)
   tasks:    2 added in 3 event(s) from tasks.pine.events.jsonl
   ids:      pine-1 -> pine-stray-1, pine-2 -> pine-stray-2
-  journal:  4 entr(y/ies) from journal.pine.jsonl
+  journal:  5 entr(y/ies) from journal.pine.jsonl
   queues:   1 file(s) kept under absorbed/pine-stray/queues/ - never re-delivered
     UNREAD  worker.pine.queue.md: 1 block(s), 70 B  -> re-send on purpose if it still matters
   card      shop -> absorbed/pine-stray/projects/shop.md  (slug exists here; fold the digest by hand)
@@ -144,7 +144,7 @@ hub log shop | grep pine-stray
 Absorbed /tmp/hub-s12-home/.hubd as node pine-stray
   tasks:    2 added in 3 event(s) from tasks.pine.events.jsonl  -> 2 visible after fold
   ids:      pine-1 -> pine-stray-1, pine-2 -> pine-stray-2
-  journal:  4 entr(y/ies) from journal.pine.jsonl
+  journal:  5 entr(y/ies) from journal.pine.jsonl
   queues:   1 file(s) kept under absorbed/pine-stray/queues/ - never re-delivered
     UNREAD  worker.pine.queue.md: 1 block(s), 70 B  -> re-send on purpose if it still matters
   card      shop -> absorbed/pine-stray/projects/shop.md  (slug exists here; fold the digest by hand)
@@ -154,9 +154,10 @@ Wrote 5 new file(s); nothing here is rewritten. Next mesh-sync carries them to e
   #pine-2 [shop] Rotate the payment webhook secret
   #pine-stray-2 [shop] Cache the shipping rates: 40% of the cart time now
 (3 tasks)
-2026-10-07 17:11 [shop/head-shop] task: + task #pine-stray-1: Fix the slow cart query the load test found
-2026-10-07 17:11 [shop/worker] done: #pine-stray-1 Fix the slow cart query the load test found
-2026-10-07 17:11 [shop/head-shop] task: + task #pine-stray-2: Cache the shipping rates: 40% of the cart time now
+2026-10-08 15:37 [shop/head-shop] task: + task #pine-stray-1: Fix the slow cart query the load test found
+2026-10-08 15:37 [shop/worker] done: #pine-stray-1 Fix the slow cart query the load test found
+2026-10-08 15:37 [shop/worker] card: card reported: FACT — with pine-stray-1 in, checkout p95 is 310 ms at 200 orders a minute (840 ms before) [card Facts & hypotheses: 606 B, +26]
+2026-10-08 15:37 [shop/head-shop] task: + task #pine-stray-2: Cache the shipping rates: 40% of the cart time now
 ```
 
 The three days are in the team hub's history, under their own ids: `pine-1` is the

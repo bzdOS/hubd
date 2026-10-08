@@ -273,7 +273,7 @@ const FILES = [
     ['projects/<slug>.md', 'A project\'s card: the digest, then a section per kind of fact (Decisions, Next step, Facts & hypotheses, Owner decisions, Laws…). Markdown with YAML front matter. Two nodes\' edits merge by section once `hub card merge-driver` is in place.', '`hub card`, `hub section add`, `hub report`, `hub decide`, `hub next`, `hub sync`'],
     ['projects/history/<slug>.md', 'What a card no longer holds: a section\'s oldest entries over the size limit, a card merged into another. Moved here, never deleted.', 'any write that grows a section past its limit, `hub cards compact`, `hub cards merge`'],
     ['resources/<slug>.md', 'A resource card: a host, a service, a role. Typed links to other cards.', '`hub resource set`'],
-    ['journal.<node>.jsonl', 'The journal: one JSON entry a line, appended by this node only.', 'every report, decision and closed task'],
+    ['journal.<node>.jsonl', 'The journal: one JSON entry a line, appended by this node only.', 'every report, decision, closed task and card write'],
     ['journal.<node>-<YYYY-MM>.jsonl', 'A month of the journal, moved aside when the live file passed 2 MB (`.<n>` before `.jsonl` for a second one). Still read.', 'the journal\'s own rotation'],
     ['journal.life.jsonl', 'Private reports. Never leaves this node.', '`hub report --private`'],
     ['tasks.<node>.events.jsonl', 'Task events: added, changed, closed. Appended by this node only; the tasks are what all nodes\' events add up to.', '`hub task`, `hub report`'],
@@ -396,8 +396,8 @@ function filesPage(tmp, problems) {
 // Where each route of REPORT_PREFIX sends a line. {heading} is the section's heading, from the code.
 const ROUTES = {
   decide: 'appended to {decisions} as `- <time>: <what> — <why>`, split at the first `|`; also journaled as a decision',
-  fact: 'appended to {facts} as `- fact: <text>`; the card only',
-  hypo: 'appended to {facts} as `- hypothesis: <text>`; the card only',
+  fact: 'appended to {facts} as `- fact: <text>`',
+  hypo: 'appended to {facts} as `- hypothesis: <text>`',
   comm: 'appended to {communication}, dated',
   next: 'replaces {next} with the step, its time and its author, and keeps the step before as one `prev` line. A step an owner role set is replaced by no one else without `force` (`--force`)',
   done: 'closes the tasks it names, comma-separated: each id as `hub task list` shows it, `#` optional, or the bare number when one task ends in it. The reply says what closed, what was closed already, and what matched nothing',
@@ -464,6 +464,13 @@ function reportPage(tmp, mcp, problems) {
         'journal by `staleDays` (7 by default), says so (`digestStale`) with the command that fixes it.',
       '- **A section over its size limit** (`limits.json`, `card.sectionBytes`) moves its oldest entries to ' +
         '`projects/history/<slug>.md` on the write that grew it.',
+      '- **The card write** is recorded on a journal entry the report files anyway: its last decision, else its note. ' +
+        'A report with neither files an entry of kind `card` for it (`card reported: FACT ×2 · NEXT — <the first line>`). ' +
+        'The entry\'s `card` field names the sections written, the size of the card file after the write in bytes, ' +
+        'and the change. Every other card write records itself the same way: `hub card`, `hub section add`, `hub sync`, ' +
+        'an accepted law, `hub cards merge`, `compact` and `merge-sections`. A card that reads older than a write ' +
+        'is checked with `hub_whatsnew` or `hub log`, not with git. A `card` entry is bookkeeping and does not move ' +
+        'the project\'s journal on for the digest\'s age.',
     ].join('\n'),
     '## Refused',
     [

@@ -329,6 +329,8 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
   const je = core.journalTail(P, 1)[0];
   ok(je && je.kind === 'decision' && je.agent === 'dev-h' && je.law.verdict === 'accepted' && je.law.rule === L1 && je.law.count === 4 && je.law.roles['dev-b'] === 1,
     `law: and a decision in the journal, with the count and the roles (${JSON.stringify(je && je.law)})`);
+  ok(je && je.card && je.card.sections.join() === 'Laws' && je.card.op === 'law' && je.card.bytes === Buffer.byteLength(card, 'utf8'),
+    `law: the decision carries the card write, its section and the card's size (${JSON.stringify(je && je.card)})`);
   const p2 = core.runPromote({ project: P, since: '2026-10-01' });
   ok(p2.laws.length === 1 && p2.candidates.map(c => c.rule).join() === L2, 'law: a law is no candidate any more');
 

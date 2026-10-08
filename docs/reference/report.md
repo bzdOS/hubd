@@ -37,8 +37,8 @@ A prefix is a word and a colon at the start of a line, in any case: `fact:` is `
 | Prefix | Also | Where the line goes |
 | --- | --- | --- |
 | `DECIDE:` | `DECISION:` | appended to `## Decisions` as `- <time>: <what> — <why>`, split at the first `\|`; also journaled as a decision |
-| `FACT:` | `GOTCHA:`, `LEARNED:`, `LEARN:`, `DISCOVERY:` | appended to `## Facts & hypotheses` as `- fact: <text>`; the card only |
-| `HYPO:` | `HYPOTHESIS:` | appended to `## Facts & hypotheses` as `- hypothesis: <text>`; the card only |
+| `FACT:` | `GOTCHA:`, `LEARNED:`, `LEARN:`, `DISCOVERY:` | appended to `## Facts & hypotheses` as `- fact: <text>` |
+| `HYPO:` | `HYPOTHESIS:` | appended to `## Facts & hypotheses` as `- hypothesis: <text>` |
 | `COMM:` | `COMMS:`, `COMMUNICATION:`, `SHIPPED:` | appended to `## Communication`, dated |
 | `NEXT:` |  | replaces `## Next step` with the step, its time and its author, and keeps the step before as one `prev` line. A step an owner role set is replaced by no one else without `force` (`--force`) |
 | `DONE:` | `CLOSED:`, `CLOSE:` | closes the tasks it names, comma-separated: each id as `hub task list` shows it, `#` optional, or the bare number when one task ends in it. The reply says what closed, what was closed already, and what matched nothing |
@@ -53,6 +53,7 @@ A prefix is a word and a colon at the start of a line, in any case: `fact:` is `
 - **Private**: `--private` (`private: true`) puts the note in `journal.life.jsonl`, on this node only. Prose only: a prefixed line would write a card, and cards sync, so the two together are refused.
 - **The reply** says how old the card's digest is (`digestAgeDays`) and, once it trails the project's journal by `staleDays` (7 by default), says so (`digestStale`) with the command that fixes it.
 - **A section over its size limit** (`limits.json`, `card.sectionBytes`) moves its oldest entries to `projects/history/<slug>.md` on the write that grew it.
+- **The card write** is recorded on a journal entry the report files anyway: its last decision, else its note. A report with neither files an entry of kind `card` for it (`card reported: FACT ×2 · NEXT — <the first line>`). The entry's `card` field names the sections written, the size of the card file after the write in bytes, and the change. Every other card write records itself the same way: `hub card`, `hub section add`, `hub sync`, an accepted law, `hub cards merge`, `compact` and `merge-sections`. A card that reads older than a write is checked with `hub_whatsnew` or `hub log`, not with git. A `card` entry is bookkeeping and does not move the project's journal on for the digest's age.
 
 ## Refused
 

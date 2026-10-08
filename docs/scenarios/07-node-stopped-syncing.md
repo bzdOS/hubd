@@ -58,8 +58,8 @@ projects/shop.md
 Auto-merging projects/shop.md
 CONFLICT (content): Merge conflict in projects/shop.md
 mesh-sync: real content conflict on main — nothing was merged, the hub was not touched; resolve by hand in /tmp/hub-s7-elm
-2026-10-07 16:32 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release.
-2026-10-07 16:32 [shop/alice] note: Metrics: checkout conversion 3.1% last week
+2026-10-08 15:37 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release. [card Digest: 580 B, new]
+2026-10-08 15:37 [shop/alice] note: Metrics: checkout conversion 3.1% last week [card Metrics: 609 B, +29]
 ```
 
 On oak, the builder's line is not in the log. The sync on elm said why, once; on a real
@@ -112,9 +112,9 @@ CONFLICT (content): Merge conflict in projects/shop.md
 Automatic merge failed; fix conflicts and then commit the result.
   shop.md: 1 list hunk(s) unioned
 Rewrote 1 card(s). Review, then commit.
-2026-10-07 16:32 [shop/builder] note: Metrics: e2e 412/412 on 1.4.2
-2026-10-07 16:32 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release.
-2026-10-07 16:32 [shop/alice] note: Metrics: checkout conversion 3.1% last week
+2026-10-08 15:37 [shop/builder] note: Metrics: e2e 412/412 on 1.4.2 [card Metrics: 595 B, +15]
+2026-10-08 15:37 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release. [card Digest: 580 B, new]
+2026-10-08 15:37 [shop/alice] note: Metrics: checkout conversion 3.1% last week [card Metrics: 609 B, +29]
 ```
 
 `hub card resolve` keeps both sides of a list and leaves a prose conflict for you. Then
@@ -152,13 +152,13 @@ on elm hub doctor | sed -n '/^mesh: FROZEN/,/unfreeze/p'
 Frozen: mesh-sync on this node will skip every run until you unfreeze.
   /tmp/hub-s7-elm/.mesh-freeze
 Local writes still work and stay local. Back up before you touch anything:
-  tar czf ~/hub-backup-20261007.tgz -C "/tmp" "hub-s7-elm"
+  tar czf ~/hub-backup-20261008.tgz -C "/tmp" "hub-s7-elm"
 Other writers on this directory are NOT stopped by this — check them too:  hub doctor
 → builder.oak.queue.md delivered
 mesh-sync: FROZEN — skipping (/tmp/hub-s7-elm/.mesh-freeze). Run: hub unfreeze
 NO_CHANGES
 mesh: FROZEN — this node neither sends nor receives
-  since 2026-10-07 16:32 (0h) by alice: restoring the outbox from last night's backup
+  since 2026-10-08 15:37 (0h) by alice: restoring the outbox from last night's backup
   hub unfreeze
 ```
 

@@ -16,7 +16,7 @@ import {
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
   CONFLICT_RE, runHeartbeat, runPresence, ownerWaiting, runWhereAmI, HUB_GITIGNORE, ensureLocalIgnores,
-  trackedNodeLocal, freezeFile, readFreeze, setReadOnly,
+  trackedNodeLocal, freezeFile, readFreeze, setReadOnly, cardTraceText,
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
 import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
@@ -598,7 +598,7 @@ command(['whereami', 'where'], () => {
       for (const t of w.claimsTouched.touched) L(`  ${t.area} — ${t.agent}: ${t.files.join(', ')}${t.more ? ` +${t.more}` : ''}`);
     }
     L('journal:');
-    for (const e of w.journalTail) L(`  ${e.ts} [${e.agent}] ${e.kind}: ${String(e.text).slice(0, 120)}`);
+    for (const e of w.journalTail) L(`  ${e.ts} [${e.agent}] ${e.kind}: ${String(e.text).slice(0, 120)}${traced(e)}`);
     if (!w.journalTail.length) L('  (nothing yet — FACT:/DECIDE: at the moment of the finding, not at the end)');
   }
   if (w.git) {
@@ -615,6 +615,9 @@ command(['whereami', 'where'], () => {
   done(0);
 });
 
+// A card write's entry carries what it left the card at (cardTrace); a one-line render says it.
+function traced(e) { return e.card && Array.isArray(e.card.sections) ? ` [${cardTraceText(e.card)}]` : ''; }
+
 command('log', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const n = parseInt(getFlag('-n') || '20');
@@ -622,7 +625,7 @@ command('log', () => {
   // everything a one-line render drops (fleet head_sense.py, 2026-09-27).
   if (args.includes('--json')) { console.log(JSON.stringify(journalTail(proj, n))); done(0); }
   for (const e of journalTail(proj, n)) {
-    console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}`);
+    console.log(`${e.ts} [${e.project}/${e.agent}] ${e.kind}: ${e.text}${traced(e)}`);
   }
   done(0);
 });
@@ -643,7 +646,7 @@ command('watch', () => {
   const interval = iv == null ? 5 : Number(iv);
   if (!(interval > 0)) die(`--interval: "${iv}" is not a number of seconds above 0`);
   if (iv != null && !follow) die('--interval paces --follow; one pass has nothing to pace');
-  const line = (e) => json ? JSON.stringify(e) : `${e.ts} [${e.project}/${e.agent}] ${e.kind}${e.to ? ' → ' + e.to : ''}: ${e.text}`;
+  const line = (e) => json ? JSON.stringify(e) : `${e.ts} [${e.project}/${e.agent}] ${e.kind}${e.to ? ' → ' + e.to : ''}: ${e.text}${traced(e)}`;
   const emit = (e) => writeAllSync(1, line(e) + '\n', true);
   const memo = {};
   const created = (r) => {
