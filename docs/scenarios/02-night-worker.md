@@ -151,8 +151,9 @@ hub usage --days 1
 TASKS (1 open):
    #oak-3 [wiki] fix the dead links in docs/  @night
 JOURNAL (48h):
+ 10-07 16:05 [wiki/night] card: card reported: FACT — 11 of 12 dead links in docs/ fixed; th
+ 10-07 16:05 [wiki/night] card: card reported: FACT — search.spec.ts flaked because the inde
  10-07 16:05 [wiki/night] done: #oak-2 find why tests/search.spec.ts fails one run in ten
- 10-07 16:05 [wiki/night] done: #oak-1 bump the dependencies and run the full suite
  …
 LOCKS:
  [wiki] task:oak-3 — night, 7h 59m left

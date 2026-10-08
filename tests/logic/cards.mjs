@@ -445,4 +445,89 @@ core.setHubBase(T0); core.ensureHubDirs();
   ok(cc.code === 0 && /Would compact|already inside the limit/.test(cc.out), 'cards compact: a dry run reports without writing');
 }
 
+// ── every card write leaves its trace in the project's journal: who, which sections, the card's size ──
+// A head saw its card as it was before its own patches and could tell a lost write from a stale
+// read only by git log on the card file; a report of FACT:/NEXT: lines left no entry at all.
+{
+  const TR = mktmp(), env = { HUBD_DIR: TR, HUBD_TEAM_DIR: TR };
+  core.setHubBase(TR); core.ensureHubDirs();
+  const size = (p) => fs.statSync(path.join(TR, 'projects', p + '.md')).size;
+  const all = (p) => core.journalTail(p, 100);
+  const last = (p) => all(p).at(-1);
+  core.runCardSet({ project: 'tr', digest: 'first state', by: 'alice' });
+  let e = last('tr');
+  ok(e.agent === 'alice' && e.card && e.card.sections.join() === 'Digest' && e.card.op === 'set' && e.card.created === true &&
+    e.card.bytes === size('tr') && e.card.delta === size('tr'), `card set: the entry names Digest, the card's size, and a new card (${JSON.stringify(e.card)})`);
+  const s0 = size('tr');
+  core.runCardSet({ project: 'tr', replace: [{ from: 'first', to: 'second, longer' }], by: 'alice' });
+  e = last('tr');
+  ok(e.card.op === 'patch' && !e.card.created && e.card.bytes === size('tr') && e.card.delta === size('tr') - s0,
+    `card patch: the size after the write and the change against the size before (${JSON.stringify(e.card)})`);
+
+  let n = all('tr').length;
+  core.runReport({ project: 'tr', text: 'FACT: the build is green\nFACT: tests pass\nNEXT: ship it', by: 'bob' });
+  let added = all('tr').slice(n);
+  ok(added.length === 1 && added[0].kind === 'card' && added[0].agent === 'bob' && /^card reported: FACT ×2 · NEXT — the build is green$/.test(added[0].text) &&
+    added[0].card.op === 'report' && added[0].card.sections.join() === 'Facts & hypotheses,Next step' && added[0].card.bytes === size('tr'),
+    `report: FACT:/NEXT: lines alone leave one card entry with both sections (${added.map(x => x.kind + ': ' + x.text).join(' | ')})`);
+  ok(core.lastJournalByProject().tr === all('tr').filter(x => x.kind !== 'card').at(-1).ts && core.journalTail('tr', 1)[0].kind === 'card',
+    'report: the card entry is bookkeeping, outside the freshness signal');
+  n = all('tr').length;
+  core.runReport({ project: 'tr', text: 'DECIDE: use files | simple\nFACT: one more\nan aside', by: 'bob' });
+  added = all('tr').slice(n);
+  ok(added.length === 2 && added[0].kind === 'decision' && added[0].card && added[0].card.sections.join() === 'Decisions,Facts & hypotheses' &&
+    added[0].card.bytes === size('tr') && added[1].kind === 'note' && !added[1].card,
+    `report: with a decision the trace rides on it and adds no line (${added.map(x => x.kind + (x.card ? '+card' : '')).join(', ')})`);
+  n = all('tr').length;
+  core.runReport({ project: 'tr', text: 'COMM: told the team\nan aside', by: 'bob' });
+  added = all('tr').slice(n);
+  ok(added.length === 1 && added[0].kind === 'note' && added[0].card && added[0].card.sections.join() === 'Communication',
+    'report: with no decision it rides on the note');
+  n = all('tr').length;
+  core.runReport({ project: 'tr', text: 'prose only', by: 'bob' });
+  ok(all('tr').slice(n).every(x => !x.card), 'report: a report that writes no card carries no trace');
+  // a refused NEXT: used to leave its DECIDE: lines in the journal and nothing in the card
+  fs.writeFileSync(path.join(TR, 'owner-roles.json'), JSON.stringify(['own']));
+  core.runReport({ project: 'tr', text: 'NEXT: the owner step', by: 'own' });
+  n = all('tr').length;
+  let refused = null; try { core.runReport({ project: 'tr', text: 'DECIDE: half of it\nNEXT: mine instead', by: 'bob' }); } catch (x) { refused = x.message; }
+  ok(/refused/.test(refused || '') && all('tr').length === n && !/half of it/.test(core.readCard('tr')),
+    `report: a refused NEXT: leaves neither its decision in the journal nor anything in the card (${(refused || 'not refused').slice(0, 60)})`);
+
+  core.runSectionAdd({ project: 'tr', section: 'gates', text: 'gate one', by: 'carol' });
+  e = last('tr');
+  ok(e.agent === 'carol' && e.card.sections.join() === 'Gates' && e.card.op === 'section' && e.card.bytes === size('tr'), 'section add: names the section and the size');
+  const dir = mktmp();
+  core.runSync({ path: dir, name: 'trs', digest: 'synced state', agent: 'dave' });
+  e = last('trs');
+  ok(e.kind === 'sync' && e.card.created && e.card.sections.join() === 'Digest,Facts (auto)' && e.card.bytes === size('trs'), 'sync: a new card, its digest and facts');
+  core.runSync({ path: dir, name: 'trs', agent: 'dave' });
+  ok(last('trs').card.sections.join() === 'Facts (auto)', 'sync: with the digest unchanged only the facts are named');
+  core.runCardSet({ project: 'trm', digest: 'dup', by: 'alice' });
+  core.runSectionAdd({ project: 'trm', section: 'gates', text: 'moved over', by: 'alice' });
+  cardsLib.runCardsMerge({ from: 'trm', into: 'tr', apply: true, by: 'alice' });
+  e = core.journalTail('tr', 1)[0];
+  ok(/^cards merged/.test(e.text) && e.card.op === 'merge' && e.card.sections.includes('Gates') && e.card.bytes === size('tr'), 'cards merge: the canonical card\'s entry carries the write');
+
+  // compact rewrites a card nobody reported on: it says so on the card's own project, as bookkeeping
+  fs.writeFileSync(path.join(TR, 'projects', 'big.md'), '# big\n\n- slug: big\n\n## Digest\n\nd\n\n## Log\n\n' +
+    Array.from({ length: 40 }, (_, i) => `- line ${i} ` + 'x'.repeat(30)).join('\n') + '\n');
+  const b0 = size('big');
+  fs.writeFileSync(path.join(TR, 'limits.json'), JSON.stringify({ card: { sectionBytes: 400 } }));
+  cardsLib.runCardsCompact({ apply: true, by: 'own' });
+  e = core.journalTail('big', 5).find(x => x.kind === 'card');
+  ok(e && e.agent === 'own' && /^card compacted: Log \(\d+ entries\) moved to projects\/history\/big\.md$/.test(e.text) &&
+    e.card.op === 'compact' && e.card.bytes === size('big') && e.card.delta === size('big') - b0 && e.card.delta < 0 && !core.lastJournalByProject().big,
+    `cards compact: the shrunk card's own journal says why, outside the freshness signal (${e && e.text})`);
+  fs.rmSync(path.join(TR, 'limits.json'));
+
+  const lg = cli(['log', 'tr', '-n', '50'], { env });
+  ok(/note: card set: first state \[card Digest: \d+ B, new\]/.test(lg.out) && /decision: use files — simple \[card Decisions, Facts & hypotheses: \d+ B, \+\d+\]/.test(lg.out) &&
+    /card: card reported: FACT ×2 · NEXT — the build is green \[card Facts & hypotheses, Next step: \d+ B, [-+]\d+\]/.test(lg.out),
+    'log: a one-line render says the section and the size');
+  ok(core.collapseRepeats([{ kind: 'note', text: 'Gates: x', card: { bytes: 10 } }, { kind: 'note', text: 'Gates: x', card: { bytes: 20 } }]).length === 2,
+    'collapseRepeats: two writes with one text and different results are not folded');
+}
+core.setHubBase(T0); core.ensureHubDirs();
+
 done();

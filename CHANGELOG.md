@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.60 — 2026-10-08
+
+- **Every card write leaves its trace in the journal.** A head read its card as it stood
+  before its own patches, and whether the write was lost or the read was stale could be told
+  only by `git log` on the card file: the journal said who wrote and seldom what, never how
+  much, and a report of FACT:/HYPO:/COMM:/NEXT: lines left no entry at all. Now the entry of
+  every card write carries `card`: the sections it wrote, the size of the card file after it
+  in bytes, and the change. `hub card`, `hub section add`, `hub sync`, an accepted law and
+  `hub cards merge` put it on the entry they already file, and a report on its last decision,
+  else on its note. A report with neither files an entry of the new kind `card`, and so do
+  `hub cards compact` and `merge-sections`, once per card they rewrite, on that card's own
+  project. A `card` entry is bookkeeping: it does not count toward a digest's age. `hub log`,
+  `hub whereami` and `hub watch` print the field as `[card Digest: 3244 B, +12]`, and
+  `hub_whatsnew` returns it. Two writes with the same text and different sizes are no longer
+  folded into one. A report whose NEXT: is refused no longer leaves its DECIDE: lines in the
+  journal without the card.
+
 ## 0.9.59 — 2026-10-07
 
 - **`hub setup`: hubd into a harness by one command.** The first contact was a config edit

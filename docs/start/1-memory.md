@@ -140,9 +140,13 @@ hub log shop
 ```
 
 ```text
-2026-10-07 12:53 [shop/dev-shop] sync: synced with digest
-2026-10-07 12:53 [shop/dev-shop] decision: take card payments through a hosted payment page — no card data on our servers
+2026-10-08 15:36 [shop/dev-shop] sync: synced with digest [card Digest, Facts (auto): 797 B, new]
+2026-10-08 15:36 [shop/dev-shop] decision: take card payments through a hosted payment page — no card data on our servers [card Decisions, Facts & hypotheses, Next step: 906 B, +109]
 ```
+
+The bracket is what each write left the card at: the sections it touched, the card's
+size in bytes, and the change. If the card ever reads older than a write you made, the
+journal says which write shrank it; git is not needed for that.
 
 Write `FACT:` when you find it, not at the end. A session whose context is compacted
 never reaches "the end", and the finding leaves with the context.
@@ -178,16 +182,16 @@ hub whereami
 
 ```text
 project:  shop  via path   root /tmp/hub-tour-work/shop
-digest:   set 2026-10-07 12:53 by dev-shop (0d ago)
+digest:   set 2026-10-08 15:36 by dev-shop (0d ago)
   A small web shop. Checkout works end to end on staging; card payments are next.
 tasks:    0 open
 claims:   none
 here:     nobody else heartbeating under this root
 journal:
-  2026-10-07 12:53 [dev-shop] sync: synced with digest
-  2026-10-07 12:53 [dev-shop] decision: take card payments through a hosted payment page — no card data on our servers
+  2026-10-08 15:36 [dev-shop] sync: synced with digest [card Digest, Facts (auto): 797 B, new]
+  2026-10-08 15:36 [dev-shop] decision: take card payments through a hosted payment page — no card data on our servers [card Decisions, Facts & hypotheses, Next step: 906 B, +109]
 git:      master  clean
-  db00ab1 a shop
+  bde1637 a shop
   untracked (does it already exist?):
     pay.md  draft
   changed in the last 30 min:

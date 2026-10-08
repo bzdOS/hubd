@@ -13,7 +13,7 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `projects/<slug>.md` | A project's card: the digest, then a section per kind of fact (Decisions, Next step, Facts & hypotheses, Owner decisions, Laws…). Markdown with YAML front matter. Two nodes' edits merge by section once `hub card merge-driver` is in place. | `hub card`, `hub section add`, `hub report`, `hub decide`, `hub next`, `hub sync` | yes |
 | `projects/history/<slug>.md` | What a card no longer holds: a section's oldest entries over the size limit, a card merged into another. Moved here, never deleted. | any write that grows a section past its limit, `hub cards compact`, `hub cards merge` | yes |
 | `resources/<slug>.md` | A resource card: a host, a service, a role. Typed links to other cards. | `hub resource set` | yes |
-| `journal.<node>.jsonl` | The journal: one JSON entry a line, appended by this node only. | every report, decision and closed task | yes |
+| `journal.<node>.jsonl` | The journal: one JSON entry a line, appended by this node only. | every report, decision, closed task and card write | yes |
 | `journal.<node>-<YYYY-MM>.jsonl` | A month of the journal, moved aside when the live file passed 2 MB (`.<n>` before `.jsonl` for a second one). Still read. | the journal's own rotation | yes |
 | `journal.life.jsonl` | Private reports. Never leaves this node. | `hub report --private` | no |
 | `tasks.<node>.events.jsonl` | Task events: added, changed, closed. Appended by this node only; the tasks are what all nodes' events add up to. | `hub task`, `hub report` | yes |

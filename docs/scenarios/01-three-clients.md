@@ -185,13 +185,15 @@ hub log invoices
 ```
 
 ```text
-2026-10-07 15:59 [invoices/dev-api] sync: synced with digest
-2026-10-07 15:59 [invoices/dev-api] decision: render PDFs on the server, one template per locale — the web front stays a thin client
-2026-10-07 15:59 [invoices/dev-api] task: + task #oak-1: Download PDF button on the invoice page
-2026-10-07 15:59 [invoices/dev-api] task: + task #oak-2: test the PDF endpoint with a 40-line invoice
-2026-10-07 15:59 [invoices/dev-web] done: #oak-1 Download PDF button on the invoice page
-2026-10-07 15:59 [invoices/dev-tests] done: #oak-2 test the PDF endpoint with a 40-line invoice
-2026-10-07 15:59 [invoices/dev-tests] task: + task #oak-3: the PDF template breaks pages after line 31 of an invoice
+2026-10-08 15:36 [invoices/dev-api] sync: synced with digest [card Digest, Facts (auto): 828 B, new]
+2026-10-08 15:36 [invoices/dev-api] decision: render PDFs on the server, one template per locale — the web front stays a thin client [card Decisions, Facts & hypotheses, Next step: 949 B, +121]
+2026-10-08 15:36 [invoices/dev-api] task: + task #oak-1: Download PDF button on the invoice page
+2026-10-08 15:36 [invoices/dev-api] task: + task #oak-2: test the PDF endpoint with a 40-line invoice
+2026-10-08 15:36 [invoices/dev-web] done: #oak-1 Download PDF button on the invoice page
+2026-10-08 15:36 [invoices/dev-web] card: card reported: FACT — the invoice page has a Download PDF button; it saves invoice-<number>.pdf from GET /invoices/:id/pdf [card Facts & hypotheses: 1058 B, +109]
+2026-10-08 15:36 [invoices/dev-tests] done: #oak-2 test the PDF endpoint with a 40-line invoice
+2026-10-08 15:36 [invoices/dev-tests] task: + task #oak-3: the PDF template breaks pages after line 31 of an invoice
+2026-10-08 15:36 [invoices/dev-tests] card: card reported: FACT — a 40-line invoice renders 1 page and stops after line 31; there is no second page [card Facts & hypotheses: 1148 B, +90]
 ```
 
 Three clients from three vendors, one trail. The facts are on the card

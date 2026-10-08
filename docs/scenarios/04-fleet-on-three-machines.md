@@ -147,9 +147,9 @@ hub log shop
 ```text
 Reported to shop: note
   hint: a note-only report is usually coordination — "I'm on it" is a `hub claim`, not a report (see HUBD.md).
-2026-10-07 16:17 [shop/builder] done: shop-1.4.2.tgz handed in on elm: /tmp/hub-s4-files/elm/outbox/head-shop/shop-1.4.2.tgz, 86236 B, sha256 7d3cfa9ebc166b49eed519d1a5469e6de5ccf28abdb505deec4393502c5a04c1
-2026-10-07 16:17 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release.
-2026-10-07 16:17 [shop/mail-relay] delivery: elm → head-shop: shop-1.4.2.tgz 86236 B sha256 7d3cfa9ebc166b49eed519d1a5469e6de5ccf28abdb505deec4393502c5a04c1
+2026-10-08 15:37 [shop/builder] done: shop-1.4.2.tgz handed in on elm: /tmp/hub-s4-files/elm/outbox/head-shop/shop-1.4.2.tgz, 86236 B, sha256 7d3cfa9ebc166b49eed519d1a5469e6de5ccf28abdb505deec4393502c5a04c1 [card Facts & hypotheses: 581 B, +1]
+2026-10-08 15:37 [shop/alice] note: card set: Web shop: catalogue, cart, checkout. 1.4.2 is the next release. [card Digest: 580 B, new]
+2026-10-08 15:37 [shop/mail-relay] delivery: elm → head-shop: shop-1.4.2.tgz 86236 B sha256 7d3cfa9ebc166b49eed519d1a5469e6de5ccf28abdb505deec4393502c5a04c1
 ```
 
 A delivery is a journal line of kind `delivery` in one fixed form, `<from> → <to>:

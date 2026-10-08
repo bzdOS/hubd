@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  PROJ, appendHistory, readJson, atomicWrite, cardLimits, cardPath, CONFLICT_RE, editSection, HUB, isPlaceholder,
+  PROJ, appendHistory, readJson, atomicWrite, cardLimits, cardPath, cardTrace, CONFLICT_RE, editSection, HUB, isPlaceholder,
   journalAppend, keptWhole, liveHeading, MOVED_MARK, now, projectAliases, readCard, requireAuthor,
   rotateCardOverflow, sectionBody, sectionHeadings, sectionsConfig, slugify,
 } from './core.mjs';
@@ -39,6 +39,10 @@ export function runCardsCompact(a = {}) {
     const rot = rotateCardOverflow(text, slug, a.by || 'hubd', lim);
     if (!rot.moved.length) continue;
     atomicWrite(path.join(PROJ, f), rot.text);
+    // Each card's own journal hears of it too: a card that shrank with nothing in its project's
+    // journal to say why reads exactly like a write that was lost.
+    journalAppend({ ts: now(), project: slug, agent: a.by || 'hubd', kind: 'card', card: cardTrace(text, rot.text, rot.moved.map(m => m.section), 'compact'),
+      text: `card compacted: ${rot.moved.map(m => `${m.section} (${m.entries} entries)`).join(', ')} moved to projects/history/${slug}.md` });
     cards.push({ slug, before, after: Buffer.byteLength(rot.text, 'utf8'), moved: rot.moved });
   }
   if (a.apply && cards.length) {
@@ -131,7 +135,8 @@ export function mergeCardSections(text, slug, by) {
   return { text: out.replace(/\n{3,}/g, '\n\n'), merged };
 }
 
-/** Run the merge over every card. Dry by default; --apply writes, rotates and journals once. */
+/** Run the merge over every card. Dry by default; --apply writes, rotates, and journals each card
+ *  it rewrote on its own project and the run once on hub. */
 export function runCardsMergeSections(a = {}) {
   const by = a.apply ? requireAuthor(a.by, 'by') : (a.by || null);
   const cards = [];
@@ -147,6 +152,9 @@ export function runCardsMergeSections(a = {}) {
     const r = mergeCardSections(text, slug, by);
     const rot = rotateCardOverflow(r.text, slug, by);
     atomicWrite(path.join(PROJ, f), rot.text);
+    if (r.merged.length) journalAppend({ ts: now(), project: slug, agent: by, kind: 'card',
+      card: cardTrace(text, rot.text, r.merged.map(m => m.section), 'merge-sections', rot.moved),
+      text: `card sections merged: ${r.merged.map(m => `${m.from.map(h => '## ' + h).join(' + ')} into ## ${m.section}`).join('; ')}` });
     cards.push({ slug, issues, merged: r.merged, ...(rot.moved.length ? { rotated: rot.moved } : {}) });
   }
   if (a.apply && cards.some(c => c.merged)) {
@@ -212,7 +220,8 @@ export function runCardsMerge(a = {}) {
   atomicWrite(cardPath(into), rot.text);
 
   journalAppend({ ts: now(), project: into, agent: by, kind: 'note',
-    text: `cards merged: ${from} → ${into}${sections.length ? ' (' + sections.length + ' section(s) moved)' : ''}` });
+    text: `cards merged: ${from} → ${into}${sections.length ? ' (' + sections.length + ' section(s) moved)' : ''}`,
+    card: cardTrace(intoCard, rot.text, sections.map(s => s.heading), 'merge', rot.moved) });
 
   return { ok: true, from, into, sections, aliasExisted, applied: true, moved: rot.moved };
 }
