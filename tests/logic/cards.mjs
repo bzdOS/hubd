@@ -256,6 +256,26 @@ const movedCard = fs.readFileSync(moved.card, 'utf8');
 ok(/- since last sync: 1 commit\(s\), 1 file\(s\), \+1\/-0 lines/.test(movedCard),
   'runSync: card reports the real diff since last sync');
 
+// A repository without a commit yet: rev-parse and log answered nothing, and the card read
+// "- branch:  · … · last commit: " over an empty code block.
+{
+  const UB = mktmp();
+  const gu = (args) => execSync(`git -c user.email=t@t -c user.name=t -c commit.gpgsign=false ${args}`, { cwd: UB, stdio: 'ignore' });
+  gu('init -q'); gu('symbolic-ref HEAD refs/heads/trunk');
+  fs.writeFileSync(path.join(UB, 'a.txt'), 'one\n');
+  const facts = (r) => fs.readFileSync(r.card, 'utf8').split('## Facts (auto)')[1];
+  const unborn = facts(core.runSync({ path: UB, name: 'unborn', agent: 't', digest: 'before the first commit' }));
+  ok(/^- branch: trunk · uncommitted: 1 · no commits yet$/m.test(unborn) && !/```|last commit/.test(unborn),
+    `runSync: a repository with no commit names its branch and says so, no empty block (got ${JSON.stringify(unborn)})`);
+  const w = core.runWhereAmI({ cwd: UB });
+  ok(w.git && w.git.branch === 'trunk' && w.git.commits.length === 0, `whereami: the branch of a repository with no commit is named (got ${JSON.stringify(w.git && w.git.branch)})`);
+  gu('add -A'); gu('commit -qm first');
+  const born = facts(core.runSync({ path: UB, name: 'unborn', agent: 't' }));
+  ok(/^- branch: trunk · uncommitted: 0 · last commit: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}$/m.test(born) && /```\n[0-9a-f]+ first\n```/.test(born),
+    'runSync: after the first commit the line and the log are back');
+  fs.rmSync(UB, { recursive: true, force: true });
+}
+
 // projectMetrics reads the version out of package.json.
 fs.writeFileSync(path.join(GD, 'package.json'), JSON.stringify({ name: 'difftest', version: '9.9.9' }));
 const pm = core.projectMetrics(GD);

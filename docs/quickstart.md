@@ -21,8 +21,14 @@ npm i -g @bzdos/hubd
 hub doctor
 ```
 
-One-off, without installing: `npx -p @bzdos/hubd hub doctor`. The first run creates
-the hub and writes `HUBD.md`, the manual for agents, from the installed version.
+It needs Node 18 or newer. One-off, without installing: `npx -p @bzdos/hubd hub doctor`.
+The first run creates the hub and writes `HUBD.md`, the manual for agents, from the
+installed version.
+
+On Windows, PowerShell's default execution policy refuses the `hub.ps1` shim npm puts
+on the PATH ("running scripts is disabled on this system"). Type `hub.cmd` there, run
+`hub` from cmd, or allow local scripts for your account once:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ## 2. Scaffold the team folder
 
@@ -35,10 +41,10 @@ hub setup --harness claude --agent dev-myproject
 ```
 
 It starts the server and asks it for the hub's status first, then adds it with
-`claude mcp add`, and reads the entry back. `--harness gemini` and `--harness opencode`
-work the same way. `--print` shows what it would write, `--check` tries what a config
-already holds, `--uninstall` takes it out, and `--prompt` prints the steps for an agent
-in a harness it has no row for. By hand, for Claude Code:
+`claude mcp add`, and reads the entry back. `--harness gemini`, `--harness opencode` and
+`--harness omp` (oh-my-pi) work the same way. `--print` shows what it would write,
+`--check` tries what a config already holds, `--uninstall` takes it out, and `--prompt`
+prints the steps for an agent in a harness it has no row for. By hand, for Claude Code:
 
 ```bash
 claude mcp add --scope user hubd --env HUBD_AGENT=dev-myproject -- npx -y @bzdos/hubd
