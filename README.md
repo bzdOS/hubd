@@ -259,7 +259,8 @@ Shipped, by level ([changelog](CHANGELOG.md) for every version):
 - **Memory** — project cards with sections in any language (`sections.json`),
   structured reports that fan into them, the journal, `hub recall`; cwd → project
   with `hub_context`; `hub whereami` after a compaction (0.9.16); compact reads that
-  say what they left out (0.9.35); a `HUBD.md` protocol regenerated per node.
+  say what they left out (0.9.35); handoffs a new session is handed (0.9.66); a
+  `HUBD.md` protocol regenerated per node.
 - **Work and decisions** — tasks with dependencies and deadlines, `hub now`,
   `hub agenda`, `hub plan`; claims as path globs that warn before the edit (0.9.16);
   owner buttons; usage, audit and lint.

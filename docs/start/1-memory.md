@@ -204,6 +204,18 @@ else is in this checkout, what was decided, and what git says changed. The untra
 file is listed with its first line, because a session that lost its context is about
 to write that file again.
 
+What the last session was in the middle of is its handoff. A `HANDOFF:` line in a
+report replaces the author's own `## Handoff <agent>` section of the card, dated:
+
+```bash
+hub report -p shop -m "HANDOFF: payment page wired on branch pay, webhook not yet; next: verify the webhook signature"
+```
+
+and `hub whereami` (or `hub_context`) prints it under `handoffs:` with its age, the
+caller's own whole and everyone else's cut. One section per agent, so two agents on
+one project do not overwrite each other; the journal keeps every earlier one as a
+`handoff` entry.
+
 ## Connect the agent
 
 Give the agent the same hub, and a name:
@@ -236,7 +248,8 @@ What comes back is the same state, as data:
  "openTasks": [],
  "activeClaims": [],
  "presenceHere": [],
- "journalTail": [ … ]
+ "journalTail": [ … ],
+ "handoffs": []
 }
 ```
 

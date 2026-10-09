@@ -43,7 +43,7 @@ Shared sync point for all project folders and agents. In a project folder? Call 
 
 ### hub_context
 
-Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card's recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.
+Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card's recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, handoffs, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary; handoffs are the project's "## Handoff &lt;agent>" sections as {agent, at, ageHours, text}, yours first and whole (own:true), then the newest 6 of the others cut to 600 chars (cut: the whole length). project is null with a hint if nothing matched.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -52,6 +52,7 @@ Where am I — the first call of a session and the first call after a context co
 | `journalTail` | integer |  | how many recent journal entries of the project to include, default 5 |
 | `agent` | string |  | you — so `claimsTouched` (live claims whose glob covers a file changed here in the last recentMinutes) leaves your own claims out |
 | `recentMinutes` | integer |  | window for claimsTouched, default 30 |
+| `handoffs` | integer |  | how many other agents' handoffs to include, newest first, default 6 |
 
 ### hub_get
 
@@ -109,7 +110,7 @@ Create or update a project card from just a name and a digest — no folder need
 
 ### hub_section_add
 
-Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step. For those four, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT: is still the right call; use this for the rest. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).
+Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step and your own Handoff section. For those, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT:/HANDOFF: is still the right call; use this for the rest. A line set into a "Handoff &lt;agent>" section is journaled as a handoff, as HANDOFF: is. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -137,7 +138,7 @@ Local only: not offered over HTTP.
 
 ### hub_report
 
-Append a session report to the shared journal: what was done / broken / blocked.
+Append a session report to the shared journal: what was done / broken / blocked. Lines are routed by prefix: DECIDE: (what | why), FACT:, HYPO:, COMM:, NEXT:, DONE: &lt;id>, TASK:, NOTE:, TO:, HANDOFF:. HANDOFF: lines replace your own "## Handoff &lt;agent>" section of the card with where your work stands and the next step, dated, and file a `handoff` journal entry; hub_context hands it to the next session.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

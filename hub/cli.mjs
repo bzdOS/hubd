@@ -183,6 +183,7 @@ const REPORT_TEMPLATE = [
   'DONE:   <task-ids, comma-sep>     # closes tasks',
   'TASK:   <new task text>           # opens a task',
   'NOTE:   <one-line anything-else>',
+  'HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)',
   '',
   '# Example:  hub report -p hubd <<EOF',
   '#   DECIDE: ship docs in the release | npm README drifted',
@@ -600,6 +601,16 @@ command(['whereami', 'where'], () => {
     L('journal:');
     for (const e of w.journalTail) L(`  ${e.ts} [${e.agent}] ${e.kind}: ${String(e.text).slice(0, 120)}${traced(e)}`);
     if (!w.journalTail.length) L('  (nothing yet — FACT:/DECIDE: at the moment of the finding, not at the end)');
+    if (w.handoffs.length) {
+      L('handoffs:');
+      for (const h of w.handoffs) {
+        const age = h.ageHours == null ? 'undated' : h.ageHours < 48 ? `${h.ageHours}h ago` : `${Math.floor(h.ageHours / 24)}d ago`;
+        const [first, ...more] = String(h.text).split('\n');
+        L(`  ${h.agent}${h.own ? ' (you)' : ''}, ${age}: ${h.own ? first : first.slice(0, 160)}`);
+        if (h.own) for (const l of more) L(`    ${l}`);
+        else if (more.length || h.cut || first.length > 160) L(`    … hub card show ${w.project} --section "Handoff ${h.agent}"`);
+      }
+    }
   }
   if (w.git) {
     L(`git:      ${w.git.branch}  ${w.git.dirty}`);
@@ -747,6 +758,7 @@ command('report', () => {
   if (r.hypos) parts.push(r.hypos + ' hypothesis');
   if (r.comms) parts.push(r.comms + ' comm' + (r.comms > 1 ? 's' : ''));
   if (r.next) parts.push('next set');
+  if (r.handoff) parts.push(`handoff → ## ${r.handoff}${r.handoffReplaced ? ' (replaced the one of ' + r.handoffReplaced + ')' : ''}`);
   if (r.done.length) parts.push('closed #' + r.done.join(' #'));
   if (r.doneAlready && r.doneAlready.length) parts.push('already closed #' + r.doneAlready.join(' #'));
   if (r.released) parts.push('released ' + r.released + ' task claim' + (r.released > 1 ? 's' : ''));
@@ -754,14 +766,14 @@ command('report', () => {
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
   if (r.note) parts.push('note');
   if (r.reflect) parts.push(`reflection (${r.reflect.level}${r.reflect.source === 'text' ? ', read from the text' : ''})`);
-  console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)'));
+  console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE:/HANDOFF: prefixes (hub report with no input shows the template)'));
   if (r.reflect && r.reflect.problems) console.error('  reflection filed, off the rules: ' + r.reflect.problems.join('; ') + ' (the lists: prompts/meta/fragments/reflect.md)');
   if (r.doneMissed && r.doneMissed.length) {
     const amb = new Map((r.doneAmbiguous || []).map(x => [x.id, x.tasks]));
     console.error('  warning: NOT closed: ' + r.doneMissed.map(id => '#' + id + (amb.has(id) ? ' (several end in it: ' + amb.get(id).join(', ') + ')' : ' (no such task)')).join(', ') +
       ' — check the id with `hub task list`. ' + r.doneForm);
   }
-  const onlyNote = r.note && !r.reflect && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.done.length && !r.tasks.length;
+  const onlyNote = r.note && !r.reflect && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.handoff && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   done(0);
 });
@@ -2181,7 +2193,7 @@ const HELP = [
     'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to <cmd> on stdin, marked when it exits 0'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
   ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
-    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
+    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
   ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
   ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said 3 times by one role, or by 2 roles"],
   ['reflect --accept|--reject <id> --project <proj> --by <head>', "the head's verdict on a candidate; an accepted one is a law, in hub_context"],

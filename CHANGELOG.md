@@ -4,6 +4,21 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.66 — 2026-10-09
+
+- **`HANDOFF:`: a handoff is its own kind, not a note.** Agents handed work over through
+  a `## Handoff <agent>` section of the card, written with `hub_section_add` and read
+  back with awk, and the hub filed every one as a note: nothing told a handoff from an
+  aside, and a new session was not given it. A `HANDOFF:` line in `hub report` now
+  replaces the author's own section with one dated entry (several lines are one
+  handoff), refused whole when it would not fit the section cap, and journals it as a
+  `handoff` entry, the only place an earlier one survives. A line set into a
+  `Handoff <agent>` section through `hub_section_add` is journaled the same way, whole.
+  `hub_context` returns `handoffs`, `{agent, at, ageHours, text}`: the caller's own
+  first and whole, then the newest others cut (`handoffs` sets how many); `hub
+  whereami` prints them. The section's format is the one the awk readers parse: the
+  first line opens with the hub's UTC stamp.
+
 ## 0.9.65 — 2026-10-08
 
 - **`hub card show`: a card read back.** Writing a card had a command and reading one

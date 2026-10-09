@@ -49,6 +49,7 @@ without conflict; a card, which any node may edit, merges by section once
 | **section** | A part of a card, reached by key whatever its heading's language: `goal`, `next`, `facts`, `decisions`, `laws`, `owner-decisions`, ... | headings localised in `sections.json` |
 | **journal** | What everyone did, one line each: time, project, author, kind, text. Append-only and attributed. | `journal.<node>.jsonl` |
 | **report** | What an agent files at the end of a turn: `DECIDE:`, `FACT:`, `NEXT:`, `DONE:` ... lines that fan into the card's sections and the journal. | `hub report`, `hub_report` |
+| **handoff** | Where one agent's work stands for whoever picks it up: its own `## Handoff <agent>` section of the card, replaced on each write, every earlier one kept in the journal. | `HANDOFF:` in a report; `hub_context`, `hub whereami` read it |
 | **task** | Work with an id (`fir-1`), a project, an assignee, a deadline, what it depends on. Kept as events. | `tasks.<node>.events.jsonl` |
 | **claim** | A soft lock on a path glob or a task, with a time to live. It informs; it never forbids. | `hub claim`, `hub_claim` |
 | **queue** | A role's inbox: messages addressed to it, each a block with an id (`pine-17`). An agent waits on it without polling. | `queues/<role>.<node>.queue.md` |
@@ -127,7 +128,7 @@ flowchart LR
 
 - **Journal & structured reports** — an append-only team log you read with your
   eyes. At session end an agent files a `hub report` of prefix-tagged lines
-  (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`) that fan into the project
+  (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`, `HANDOFF:`) that fan into the project
   card's sections — structure in fields, not one prose blob. "What changed" is read
   from git, not retyped. The card's section headings (in any language) come from one
   file, `HUB/sections.json`, which drives both the card scaffold and the report router —

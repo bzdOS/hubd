@@ -83,6 +83,7 @@ decisions/facts = many lines (one per line):
     DONE:   <task-ids, comma-separated>   # closes tasks
     TASK:   <new task text>               # opens a task
     NOTE:   <one-line, anything else>
+    HANDOFF: <where your work stands, the next step>   # -> Handoff <you>, replaced
     EOF
 
 - Do NOT list files/commits — "what changed" is read from git, not retyped.
@@ -163,6 +164,14 @@ section, and the reply carries `nextReplaced {text, by, at}`, so a side session 
 overwrote and can put it back. A step set by an owner role (`HUB/owner-roles.json`) is not
 replaced by a non-owner: the report is refused with the step's text, unless `force:true`
 (`--force`) — and then a `DECIDE:` line saying why belongs in the same report.
+
+`HANDOFF:` is where YOUR work stands for whoever picks it up — you after a compaction, or the
+session that replaces you: what is done, what is half-done and where, the next step. It replaces
+your own `## Handoff <you>` section of the card (one per agent, so roles of one project do not
+overwrite each other), dated by the hub; several `HANDOFF:` lines are one handoff. The journal
+files it as a `handoff` entry, which is the only place an earlier one survives. `hub_context` and
+`hub whereami` return the project's handoffs with their age in hours — yours whole, the others
+cut. Write it when your state changes, not only at the end: a session that compacts never ends.
 
 A card can be fresh and still lie. `hub status` / `hub brief` flag one whose digest has
 fallen behind its OWN journal (`digestStale`, `⚠Nd behind`): the project kept moving and
@@ -582,5 +591,5 @@ own 170s default / 540s max; the loop still never stops for input, it just takes
 1. Read `AGENTS.md` (team constitution) + this `HUBD.md` (mechanics) + the top of `INBOX.md`.
 2. Before touching a shared area, `hub claim` it, with the area as a path glob; before editing a
    shared file, `hub claim check <path>` (see Channels for how areas match).
-3. At the end: ONE structured `hub report` (substance only — see Channels) + one INBOX
-   handoff line for the humans.
+3. At the end: ONE structured `hub report` (substance only — see Channels; `HANDOFF:` for
+   whoever resumes) + one INBOX line for the humans.

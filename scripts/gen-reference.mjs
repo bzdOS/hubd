@@ -413,6 +413,7 @@ const ROUTES = {
   done: 'closes the tasks it names, comma-separated: each id as `hub task list` shows it, `#` optional, or the bare number when one task ends in it. The reply says what closed, what was closed already, and what matched nothing',
   task: 'opens a task in the project',
   note: 'the journal: one entry, the report\'s note lines joined by ` · `. A line with no prefix is a note too',
+  handoff: 'replaces the author\'s own `## Handoff <agent>` section with one dated entry, the lines after the first as its continuation, and journals them as one `handoff` entry. Refused whole when it would not fit the section cap. `hub_context` and `hub whereami` return it to the next session with its age',
   to: 'whom the journal entry is for: a role, or `fleet`. The entry stays public; readers filter on it',
 };
 
