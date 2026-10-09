@@ -14,6 +14,7 @@ import {
   PRESET,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
+import { runStats, taskCost } from './lib/stats.mjs';
 import { runRecall } from './lib/recall.mjs';
 import { queueWait, queueWaitAll, queueSummaryForBrief, queueAck, briefWithQueues, queueSendChecked } from './lib/queue.mjs';
 import { sessionId, subscriberId } from './lib/session.mjs';
@@ -126,7 +127,7 @@ const TOOLS = [
     }, required: ['project', 'text', 'by'] } },
 
   { name: 'hub_task_get',
-    description: 'ONE task by id, plus what it is blocked by and what it blocks. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.',
+    description: 'ONE task by id, plus what it is blocked by and what it blocks, and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.',
     inputSchema: { type: 'object', properties: {
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' },
     }, required: ['id'] } },
@@ -218,6 +219,16 @@ const TOOLS = [
     description: 'What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add, since the hub cannot see them) and MEASURED (closed-task spans and journal events, the hub\'s own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.',
     inputSchema: { type: 'object', properties: {
       days: { type: 'integer', description: 'default 7' }, project: { type: 'string' }, agent: { type: 'string' },
+    } } },
+
+  { name: 'hub_stats',
+    description: 'What the sessions cost and what came of it, per task, model, role or day. Tokens are READ from the clients\' own databases (hub sessions ingest), bound to the task each role was ordered to work on (the queue header\'s "task #"); attempts and accept/reject are MEASURED from the journal (VERDICT: lines); `notional` is the tokens at the OpenRouter list price of their day (hub price pull), the one way to compare a free tier with a paid key. The same files give the same numbers, byte for byte. A task\'s attempts: task:<id>.',
+    inputSchema: { type: 'object', properties: {
+      group: { type: 'string', enum: ['task', 'model', 'role', 'day'], description: 'rows per; default task' },
+      since: { type: 'string', description: '"7d", "12h" or a date; default everything' },
+      project: { type: 'string' },
+      task: { type: ['integer', 'string'], description: 'one task: its attempts, each with its role, models, tokens and verdict' },
+      check: { type: 'boolean', description: 'prove every token is bound to a task, unbound, or a probe\'s' },
     } } },
 
   { name: 'hub_rules',
@@ -359,7 +370,7 @@ const TOOLS = [
       role: { type: 'string', description: 'queue/role to deliver to, e.g. "dev" or "owner"' },
       text: { type: 'string' },
       from: { type: 'string', description: 'who is sending — the function you are performing, e.g. "dev-hubd" or "orchestrator". NOT which model you are, and NOT the target role. Required like every other write: the delivered block says "from <sender>" forever.' },
-      task: { type: ['integer', 'string'], description: 'the task id this message is ABOUT, if any. Stamped into the delivered block and handed back to the consumer, so a reply (a blocker, a HOLD, a result) can be reported onto the task instead of being lost with the message. An id matching no task comes back as taskKnown:false — the ref is still recorded.' },
+      task: { type: ['integer', 'string'], description: 'the task id this message is ABOUT, if any. Stamped into the delivered block and handed back to the consumer, so a reply (a blocker, a HOLD, a result) can be reported onto the task instead of being lost with the message. A bare number that names one task is stamped as that task\'s whole id (taskAsGiven keeps what you sent). An id matching no task comes back as taskKnown:false — the ref is still recorded.' },
     }, required: ['role', 'text', 'from'] } },
 
   { name: 'hub_queue_wait',
@@ -418,6 +429,7 @@ const OUTPUT_PLANS = {
   hub_agenda:     [['blocked', 40], ['agentReady', 40], ['dueSoon', 20], ['overdue', 20], ['ownerButtons', 20]],
   hub_lint:       [['findings', 40]],
   hub_resource_list: [['resources', 100]],
+  hub_stats:      [['rows', 40]],
 };
 
 // Every capped tool advertises the same escape hatch, injected in ONE place so that adding a
@@ -453,7 +465,14 @@ const DISPATCH = {
       ...(t.assignee ? { assignee: t.assignee } : {}), ...(t.deadline ? { deadline: t.deadline } : {}),
       textPreview: String(t.text || '').slice(0, 80) + (String(t.text || '').length > 80 ? '…' : '') };
   },
-  hub_task_list: runTaskList, hub_task_update: runTaskUpdate, hub_task_get: runTaskGet,
+  hub_task_list: runTaskList, hub_task_update: runTaskUpdate,
+  // cost: only once the hub holds sessions; a ledger it cannot read never costs the task itself
+  hub_task_get: (a) => {
+    const r = runTaskGet(a);
+    let cost = null; try { cost = taskCost(r.task.id); } catch {}
+    return cost ? { ...r, cost } : r;
+  },
+  hub_stats: runStats,
   // root: teamRoot() captured synchronously here, same reasoning as hub_queue_send/wait below —
   // a plain string value, not a live reference, so a concurrent HTTP request repointing
   // HUB can't retarget an in-flight call.

@@ -2,7 +2,7 @@
 
 # MCP tools
 
-What the MCP server, `hubd`, offers a client: 42 tools, 4 prompts, and the instructions it sends when a client connects. A tool's description is what the client's model reads, word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, and "yes" under Required means required whenever the object is given.
+What the MCP server, `hubd`, offers a client: 43 tools, 4 prompts, and the instructions it sends when a client connects. A tool's description is what the client's model reads, word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, and "yes" under Required means required whenever the object is given.
 
 Over HTTP (`hubd --http`, [Self-hosting](../self-hosting.md)) every tool is offered but the local-only ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)).
 
@@ -23,7 +23,7 @@ Shared sync point for all project folders and agents. New here? Call hub_onboard
 | Claims and presence | [hub_claim](#hub_claim) · [hub_claim_check](#hub_claim_check) · [hub_release](#hub_release) · [hub_heartbeat](#hub_heartbeat) · [hub_presence](#hub_presence) |
 | Queues | [hub_queue_send](#hub_queue_send) · [hub_queue_wait](#hub_queue_wait) · [hub_queue_wait_all](#hub_queue_wait_all) · [hub_queue_ack](#hub_queue_ack) |
 | Resources and the graph | [hub_resource_set](#hub_resource_set) · [hub_resource_list](#hub_resource_list) · [hub_resource_get](#hub_resource_get) · [hub_graph](#hub_graph) |
-| Rules, health and cost | [hub_rules](#hub_rules) · [hub_operator](#hub_operator) · [hub_lint](#hub_lint) · [hub_audit](#hub_audit) · [hub_usage_add](#hub_usage_add) · [hub_usage](#hub_usage) |
+| Rules, health and cost | [hub_rules](#hub_rules) · [hub_operator](#hub_operator) · [hub_lint](#hub_lint) · [hub_audit](#hub_audit) · [hub_usage_add](#hub_usage_add) · [hub_usage](#hub_usage) · [hub_stats](#hub_stats) |
 
 ## Profiles
 
@@ -254,7 +254,7 @@ Add a task to the shared cross-project backlog.
 
 ### hub_task_get
 
-ONE task by id, plus what it is blocked by and what it blocks. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.
+ONE task by id, plus what it is blocked by and what it blocks, and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -405,7 +405,7 @@ Append a message to a role's queue (queues/&lt;role>.&lt;node>.queue.md) for cro
 | `role` | string | yes | queue/role to deliver to, e.g. "dev" or "owner" |
 | `text` | string | yes |  |
 | `from` | string | yes | who is sending — the function you are performing, e.g. "dev-hubd" or "orchestrator". NOT which model you are, and NOT the target role. Required like every other write: the delivered block says "from &lt;sender>" forever. |
-| `task` | integer or string |  | the task id this message is ABOUT, if any. Stamped into the delivered block and handed back to the consumer, so a reply (a blocker, a HOLD, a result) can be reported onto the task instead of being lost with the message. An id matching no task comes back as taskKnown:false — the ref is still recorded. |
+| `task` | integer or string |  | the task id this message is ABOUT, if any. Stamped into the delivered block and handed back to the consumer, so a reply (a blocker, a HOLD, a result) can be reported onto the task instead of being lost with the message. A bare number that names one task is stamped as that task's whole id (taskAsGiven keeps what you sent). An id matching no task comes back as taskKnown:false — the ref is still recorded. |
 
 ### hub_queue_wait
 
@@ -546,6 +546,19 @@ What the work cost, over a window, per project and per agent — with a hard lin
 | `days` | integer |  | default 7 |
 | `project` | string |  |  |
 | `agent` | string |  |  |
+
+### hub_stats
+
+What the sessions cost and what came of it, per task, model, role or day. Tokens are READ from the clients' own databases (hub sessions ingest), bound to the task each role was ordered to work on (the queue header's "task #"); attempts and accept/reject are MEASURED from the journal (VERDICT: lines); `notional` is the tokens at the OpenRouter list price of their day (hub price pull), the one way to compare a free tier with a paid key. The same files give the same numbers, byte for byte. A task's attempts: task:&lt;id>.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `group` | one of `task`, `model`, `role`, `day` |  | rows per; default task |
+| `since` | string |  | "7d", "12h" or a date; default everything |
+| `project` | string |  |  |
+| `task` | integer or string |  | one task: its attempts, each with its role, models, tokens and verdict |
+| `check` | boolean |  | prove every token is bound to a task, unbound, or a probe's |
+| `full` | boolean |  | return everything, uncapped. By default long lists are trimmed (and, where the description says so, long texts cut) to fit an agent context, and what was left out is reported in `truncated`. |
 
 ## Prompts
 

@@ -59,11 +59,12 @@ without conflict; a card, which any node may edit, merges by section once
 | **rank** | `worker` does the work; `head` runs a project's workers and rules on their work; `fleet` stands above the heads. | the role card |
 | **owner** | A person whose decisions the agents wait for. Their queue messages and the tasks assigned to them are the owner's **buttons**. | `owner-roles.json` |
 | **track** | A project with a head on record. The board shows each track: its roles, what is in work, blocked, closed. | |
-| **verdict** | A head's journal entry that names a task and holds a verdict word (`ACCEPT`, `REJECT`). | the journal |
+| **verdict** | A head's journal entry that names a task and holds a verdict word (`ACCEPT`, `REJECT`). `hub stats` reads it as the outcome of an attempt. | the journal; `VERDICT:` in a report |
 | **escalation** | A message with an id in a `fleet` role's queue. It waits on the board until the card of the fleet role's project quotes its key under Owner decisions. | the queue, the card |
 | **presence** | Who is alive: a heartbeat per agent on its node, and one published list per node. | `presence/`, `presence.<node>.json` |
 | **node snapshot** | What a node's own monitor says about it: sessions, disks, relays. hubd only reads it. | `snapshot.<node>.json` |
 | **mail** | A file delivered from one role to another, reported as a journal line with its size and sha256. | journal kind `delivery` |
+| **ledger** | What each session of a client spent, read from the client's own database: its role, models, tokens, the orders it read, the tasks it closed. `hub stats` binds it to tasks. | `ledger.<node>.jsonl`, `hub sessions ingest` |
 | **reflection** | The end of a turn's report, as fields: goal, result, obstacle (a class from a fixed list), what to do instead, a proposed rule. | the report's `reflect` field |
 | **candidate** | A rule said 3 times by one role, or by 2 roles, within 7 days. | `hub reflect --promote` |
 | **law** | A candidate the head accepted: a line of the card's Laws section, given to every role of the project. | the card's `## Laws` |

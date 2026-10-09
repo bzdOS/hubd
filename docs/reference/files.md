@@ -20,6 +20,8 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `tasks.json` | The tasks, folded from every node's events. A cache; rebuilt when missing. | any command that reads tasks | no |
 | `claims.json` | Claims (soft locks) and their expiry. | `hub claim`, `hub release` | no |
 | `usage.<node>.jsonl` | What work cost: seconds, tokens, money, per agent and task. | `hub usage add` | yes |
+| `ledger.<node>.jsonl` | The session ledger: one line per session a client ran, with its role, the orders it received, its steps by model with five token counts and the price the client paid, and the tasks it closed. No text the session said. A session that changed is appended again; the newest version counts. | `hub sessions ingest` | yes |
+| `prices.<node>.jsonl` | List prices: an OpenRouter rate a line when it is new or changed, and which listing prices which of our models. | `hub price pull`, `hub price map` | yes |
 | `presence/<agent>.json` | An agent's last heartbeat. | `hub heartbeat` | no |
 | `presence/_archive/` | Heartbeats of agents gone quiet. | `hub gc --apply` | no |
 | `presence.<node>.json` | This node's roster of heartbeats, for the other nodes to read; rewritten at most every 5 minutes. | `hub heartbeat` | yes |

@@ -4,6 +4,44 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.67 — 2026-10-09
+
+- **`hub stats`: what the sessions cost per task, and what came of it.** The hub knew who
+  was ordered to do what and who closed it; the tokens were in each client's own session
+  database, and `hub usage` held only what an agent chose to supply. `hub stats` (and
+  `hub_stats`) binds every step of every ingested session to the tasks its role was
+  working on, by one rule (`v1`, named in the output): an order in a role's queue sets
+  the role's tasks, every later step carries them, a close takes the task off. Per task:
+  tokens by kind, steps, models, roles, attempts and their outcome, notional dollars at
+  list price; `--group model|role|day` gives the same with accept rates and the notional
+  cost of an accepted attempt. Each number says what it is: READ from the ledger,
+  MEASURED from the journal, NOTIONAL at list price, never mixed with what callers
+  SUPPLIED. `--check` proves every token is bound, unbound or a probe's; the same files
+  give the same JSON, byte for byte. `hub task get` and `hub_task_get` carry the task's
+  cost.
+- **`hub sessions ingest`: a client's sessions into the ledger.** Reads an opencode
+  database (`--opencode`, read-only) or the same rows as JSON (`--rows`, for a database
+  on another machine) into `ledger.<node>.jsonl`: per session its role, model segments,
+  tokens, the orders it read from queue headers and the tasks it closed, with no message
+  text. Run again when sessions grow; a session is rewritten only when it changed.
+  `hub absorb` does not carry a ledger: ingest the sessions again on the merged hub.
+- **`hub price`: a notional price, never a bill.** `pull` keeps OpenRouter's list prices
+  in `prices.<node>.jsonl`, a line only when a rate changed; `map` points a model with no
+  list price (a local one) at a list id, or `-` to leave it unpriced; `list` shows what
+  is priced and what is not. A day is priced at the rate in force then; tokens with no
+  price are counted, not guessed.
+- **`VERDICT:`: the outcome of an attempt, in one line.** `VERDICT: accept|reject #<task>
+  [of=<agent>] [ref=<sha>] — <why>` in `hub report` (`ACCEPT:` and `REJECT:` as short
+  forms) is a `verdict` journal entry: the outcome of that role's latest attempt on the
+  task, for the stats, and the head's verdict on the Summary and the board; no task
+  status changes. A malformed line, or a task that is unknown or
+  ambiguous, refuses the whole report. Older `decision` entries that open with
+  ACCEPT or REJECT and name one task are read as verdicts too, and counted apart.
+- **A bare number in an order is the task's whole id.** `hub queue send --task 12` wrote
+  `task #12` into the header, and a reader had to work out which task that was, the
+  same way later or not; a number that names one task is now stamped as that task's id,
+  and the send says what it was given as (`taskAsGiven`).
+
 ## 0.9.66 — 2026-10-09
 
 - **`HANDOFF:`: a handoff is its own kind, not a note.** Agents handed work over through

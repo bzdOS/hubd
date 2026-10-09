@@ -71,6 +71,7 @@ hub now              # the ONE task to do next, and why it won
 hub agenda           # the day split by who can act: agent work vs owner buttons
 hub recall "<q>"     # ranked memory, every hit dated and flagged if stale
 hub usage --days 7   # what the work cost: supplied vs measured, never mixed
+hub stats            # tokens and list-price dollars per task, and the verdicts on it
 hub audit            # what the cards declare vs what happened (--apply files incidents)
 hub lint             # which of your rules are checks, not just prose
 hub gc               # everything that piled up, by class; touches nothing without --apply --by
@@ -263,7 +264,8 @@ Shipped, by level ([changelog](CHANGELOG.md) for every version):
   `HUBD.md` protocol regenerated per node.
 - **Work and decisions** — tasks with dependencies and deadlines, `hub now`,
   `hub agenda`, `hub plan`; claims as path globs that warn before the edit (0.9.16);
-  owner buttons; usage, audit and lint.
+  owner buttons; usage, audit and lint; what each task cost, read from the sessions,
+  and what came of it (0.9.67).
 - **Addressable agents** — queues with wait and ack, subscriber roles, work mode
   (0.9.28); read marks every node counts by (0.9.33, 0.9.49); messages that are
   prose, not cargo, and queues with limits (0.9.34); ids that name one message

@@ -2791,6 +2791,7 @@ const REPORT_PREFIX = {
   TASK: 'task', TODO: 'task',
   NOTE: 'note',
   HANDOFF: 'handoff',
+  VERDICT: 'verdict', ACCEPT: 'verdict', REJECT: 'verdict',
   TO: 'to',   // addressee: a role or "fleet" — the entry is still public, but readers filter
 };
 /* The DONE: form, said wherever a report's DONE went wrong. A line that reads as closing a task
@@ -2810,16 +2811,60 @@ function misshapenDone(line, tasks) {
   }
   return false;
 }
-/* An id as a DONE: line writes it: "#" dropped, and a bare number that is no task's id read as the
- * one task whose id ends in -N, since roles leave the node's prefix out. Of several, those of the
- * report's project; still several, it closes none and names them. */
-function resolveDoneId(raw, tasks, project) {
+/* A task as a reference writes it: "#" dropped, and a bare number that is no task's id read as
+ * <node>-N when the reference came with a node (a queue block's, whose sender filed the task
+ * there), else as the one task whose id ends in -N, since roles leave the node's prefix out. Of
+ * several, those of the project; still several, it resolves to none and names them. A DONE: line,
+ * a VERDICT: line, a queue header and the stats read a reference by this one rule. */
+export function resolveTaskRef(raw, tasks, { project, node } = {}) {
   const id = String(raw).replace(/^#/, '').trim();
-  if (!/^\d+$/.test(id) || tasks.some(t => String(t.id) === id)) return { id };
+  if (tasks.some(t => String(t.id) === id)) return { id, known: true };
+  if (!/^\d+$/.test(id)) return { id, known: false };
+  if (node && tasks.some(t => String(t.id) === `${node}-${id}`)) return { id: `${node}-${id}`, known: true };
   let hits = tasks.filter(t => String(t.id).endsWith('-' + id));
   if (hits.length > 1 && hits.some(t => t.project === project)) hits = hits.filter(t => t.project === project);
-  if (hits.length === 1) return { id: String(hits[0].id) };
-  return hits.length ? { id, ambiguous: hits.map(t => String(t.id)) } : { id };
+  if (hits.length === 1) return { id: String(hits[0].id), known: true };
+  return hits.length ? { id, known: false, ambiguous: hits.map(t => String(t.id)) } : { id, known: false };
+}
+const resolveDoneId = (raw, tasks, project) => resolveTaskRef(raw, tasks, { project });
+
+/* VERDICT: a head's word on a piece of work, and the one place the stats read an outcome from.
+ * The decisions heads wrote before it are free text: a third of them named a task, and none said
+ * whose work it judged. So the line has a form, and a line not in it is refused, not filed. */
+const VERDICT_FORM = 'Write "VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — why" on a line of its own ' +
+  '("VERDICT: reject #pine-471 of=pine-dev — the test still fails"); ACCEPT: and REJECT: take the same rest ("ACCEPT: #pine-471 — merged").';
+const TASK_TOKEN = /^(#\S+|[a-z][a-z0-9_-]*-\d+|\d+)$/i;
+function parseVerdictLine(word, rest) {
+  let verdict = word, toks = String(rest).trim().split(/\s+/).filter(Boolean);
+  if (!verdict) {
+    const w = (toks[0] || '').toLowerCase().replace(/[:,;]$/, '');
+    if (w !== 'accept' && w !== 'reject') return { error: 'it does not start with accept or reject' };
+    verdict = w; toks = toks.slice(1);
+  }
+  const out = { verdict, task: null, of: null, ref: null };
+  let i = 0;
+  for (; i < toks.length; i++) {
+    const t = toks[i].replace(/[,;:.]+$/, '');
+    const kv = /^(of|ref)=(\S+)$/i.exec(t);
+    if (kv) { out[kv[1].toLowerCase()] = kv[2]; continue; }
+    if (!TASK_TOKEN.test(t)) break;
+    if (out.task) return { error: 'it names two tasks; one verdict is one task, one line each' };
+    out.task = t.replace(/^#/, '');
+  }
+  if (!out.task) return { error: 'it names no task' };
+  out.why = toks.slice(i).join(' ').replace(/^[—–\-|:]+\s*/, '').trim();
+  return out;
+}
+/* Whose work a verdict without of= judged: the agent of the task's last close, as the journal
+ * holds it. A task the hub never saw closed has none, and the reader matches the verdict to the
+ * attempt it follows. */
+function lastCloser(t) {
+  if (!t || !t.done) return null;
+  let who = null;
+  for (const e of journalSinceMs(parseTs(t.done).getTime() - 5 * 60000).slice().reverse()) {
+    if (e.kind === 'done' && String(e.text || '').startsWith('#' + t.id + ' ')) who = e.agent || who;
+  }
+  return who;
 }
 // Prefixes route to section KEYS, resolved per card by liveHeading(): the heading the card already
 // uses for that key, whichever locale it was written in, before the configured one is created.
@@ -2975,7 +3020,7 @@ export function runReport(a) {
     if (isWaitingTurn(a.text)) throw new Error('reflect: a turn that only waits for a dispatch takes no reflection; send the waiting line alone');
     assertProse(renderReflect(rf), 'reflect');
   }
-  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], handoff: [], to: [] };
+  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], handoff: [], verdict: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
   let explicitNote = false, allTasks = null;
@@ -2985,7 +3030,8 @@ export function runReport(a) {
     if (!ln.trim()) continue;
     const m = ln.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
     const tag = m ? REPORT_PREFIX[m[1].toUpperCase()] : null;
-    if (tag) { if (tag === 'note') explicitNote = true; b[tag].push(m[2].trim()); }
+    if (tag === 'verdict') b.verdict.push({ word: m[1].toUpperCase() === 'VERDICT' ? null : m[1].toLowerCase(), rest: m[2].trim(), line: ln.trim() });
+    else if (tag) { if (tag === 'note') explicitNote = true; b[tag].push(m[2].trim()); }
     else if (misshapenDone(ln.trim(), knownTasks))
       throw new Error(`report: "${ln.trim().slice(0, 60)}" reads as closing a task, but it is not the DONE: form and would close nothing. ${DONE_FORM}`);
     else b.note.push(ln.trim());
@@ -2996,17 +3042,17 @@ export function runReport(a) {
   // default, because refusing a write is the harshest thing this engine can do and an upgrade
   // must never start doing it uninvited.
   const noteOnly = b.note.length && !explicitNote && !rf && !b.decide.length && !b.fact.length && !b.hypo.length &&
-    !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.handoff.length && !b.to.length;
+    !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.handoff.length && !b.verdict.length && !b.to.length;
   if (noteOnly && rulesConfig().strict.rejectNoteOnlyReport) {
     throw new Error('strict: this report is prose only. Use a prefix so it lands somewhere a later reader will find it — ' +
-      'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: / HANDOFF: — or, if you are just saying you started, hub claim instead. ' +
+      'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: / HANDOFF: / VERDICT: — or, if you are just saying you started, hub claim instead. ' +
       '(rules.json → strict.rejectNoteOnlyReport; NOTE: <text> still works for a real aside.)');
   }
   /* A private report is local by definition, and every structured prefix writes into a card that
    * IS mesh-synced — so accepting both would quietly publish the thing the caller asked to keep on
    * this machine. Refuse the combination instead of silently dropping half of it. */
-  if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length || b.handoff.length)) {
-    throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT:/HANDOFF: write into the project card, and cards are mesh-synced — ' +
+  if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length || b.handoff.length || b.verdict.length)) {
+    throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT:/HANDOFF: write into the project card and VERDICT: into the shared journal, and both are mesh-synced — ' +
       'that would publish what you asked to keep local. Send the private part as its own report, and the shareable part as a normal one.');
   }
   /* HANDOFF: replaces the author's own "## Handoff <agent>" section, so the whole of it must fit
@@ -3019,6 +3065,17 @@ export function runReport(a) {
       '(<hub>/limits.json → card.sectionBytes). A handoff is where the work stands and the next step, not the record of how it got there: ' +
       'send the findings as FACT:/DECIDE: lines in the same report and keep the handoff to what a successor needs first.');
   }
+  /* VERDICT: lines are read whole before anything is written: a verdict on no task, or on a task
+   * this hub cannot name, is refused with the report, as a handoff over the cap is. */
+  const verdicts = b.verdict.map(({ word, rest, line }) => {
+    const v = parseVerdictLine(word, rest);
+    if (v.error) throw new Error(`report: "${line.slice(0, 80)}" is not a verdict: ${v.error}. ${VERDICT_FORM}`);
+    const r = resolveTaskRef(v.task, knownTasks(), { project: slug });
+    if (r.ambiguous) throw new Error(`report: "${line.slice(0, 80)}": #${v.task} is ${r.ambiguous.join(', ')}; name one of them whole.`);
+    if (!r.known) throw new Error(`report: "${line.slice(0, 80)}": no task #${v.task}. A verdict judges a task the hub holds; hub_task_list shows the ids.`);
+    const t = knownTasks().find(x => String(x.id) === r.id);
+    return { ...v, task: r.id, project: t.project || slug, of: v.of || lastCloser(t) };
+  });
   const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false, handoff: false };
   let trace = null;
   if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || handoffBody) {
@@ -3104,6 +3161,15 @@ export function runReport(a) {
   }
   if (summary.doneMissed.length) summary.doneForm = DONE_FORM;
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
+  /* A verdict is its own entry, filed under the task's project: the stats read the outcome of an
+   * attempt from it, and nothing else about the task changes. Its text opens with the word in
+   * capitals, the form the Summary and the board read a head's verdict by. */
+  for (const v of verdicts) {
+    const text = `${v.verdict.toUpperCase()} #${v.task}${v.of ? ' of=' + v.of : ''}${v.ref ? ' ref=' + v.ref : ''}${v.why ? ' — ' + v.why : ''}`;
+    journalAppend({ ts: now(), project: v.project, agent: by, kind: 'verdict', task: v.task, verdict: v.verdict,
+      ...(v.of ? { of: v.of } : {}), ...(v.ref ? { ref: v.ref } : {}), text });
+    (summary.verdicts ||= []).push({ task: v.task, verdict: v.verdict, of: v.of || null });
+  }
   /* The handoff's journal entry is its history: the card keeps only the latest one. */
   if (handoffBody) {
     const to = b.to.length ? b.to.join(',') : (a.to || undefined);

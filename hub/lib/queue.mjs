@@ -29,7 +29,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HUB, JOURNAL_NODE, now, escRe, liveMeshNodes, shardHold, loadPresence, ownerRoles, parseTs, recordEnvObservation, clearEnvObservation, requireAuthor, shareMode, touchPresenceIfOwner, withLock, readJson, atomicWrite,
-  assertProse, envLimit, loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, runTaskGet, ownerWaiting,
+  assertProse, envLimit, loadTasks, loadClaims, activeClaims, eligibleOpen, byUrgency, taskTitle, taskClaimArea, runBrief, ownerWaiting, resolveTaskRef,
   roleRegistry, journalAppend, journalTail, nodeKey } from './core.mjs';
 
 // A directory is a hubd TEAM ROOT only if it holds a hub-DATA file that a plain
@@ -2148,11 +2148,17 @@ export function briefWithQueues({ root, ...a } = {}) {
 
 /** queueSend, and what the sender needs to know about it: whether the task it names exists, and
  *  what now waits in the role's queue. The task ref is checked but never refuses the send: the
- *  message is the urgent thing, a mistyped id a warning the caller can act on at once. */
+ *  message is the urgent thing, a mistyped id a warning the caller can act on at once.
+ *  A ref that names one task is written into the header as that task's whole id: "task #442"
+ *  meant a task of this node to its sender, and to every reader that matched ids whole, none. */
 export function queueSendChecked(role, text, { from, root, task, remote = false } = {}) {
   const r = root ?? resolveQueueRoot();
-  let taskKnown;
-  if (task != null && task !== '') { try { runTaskGet({ id: task }); taskKnown = true; } catch { taskKnown = false; } }
+  let taskKnown, asGiven;
+  if (task != null && task !== '') {
+    const ref = resolveTaskRef(task, loadTasks().tasks, { node: nodeKey(nodeName()) });
+    taskKnown = ref.known;
+    if (ref.known && ref.id !== String(task).trim()) { asGiven = String(task).trim(); task = ref.id; }
+  }
   const file = queueSend(role, text, { from, root: r, task });
   // What is actually WAITING for this role, after the append. "Sent" says the write happened; it
   // never said whether anything is reading, and a sender read it as "delivered" — while four roles
@@ -2178,7 +2184,7 @@ export function queueSendChecked(role, text, { from, root, task, remote = false 
       : readOn.length
         ? `${head} ${Here} has never consumed this role; it is read on ${readOn.map(x => x.node).join(', ')} (last read ${readOn[0].at || 'at an unknown time'}), counted ${remote ? 'on the server' : 'here'} as of the last mesh sync. A depth that keeps climbing means that reader stopped: check it there.`
         : `${depth.pending} message(s) are in this role's queue as seen ${remote ? "from the server" : 'FROM HERE'}, oldest ${depth.oldestWaiting}. ${Here} has never consumed this role, and no node has left a read mark for it — so either nobody reads it, or its reader runs a hubd from before read marks and its cursor never leaves that node. Check on the node that runs the role.`;
-  return { ...(remote ? {} : { file }), ...(taskKnown === undefined ? {} : { task, taskKnown }),
+  return { ...(remote ? {} : { file }), ...(taskKnown === undefined ? {} : { task, taskKnown, ...(asGiven ? { taskAsGiven: asGiven } : {}) }),
     ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, ...(remote ? {} : { consumedHere: seenHere }),
       ...(readOn.length ? { readOn: readOn.map(x => x.node) } : {}),
       unacked: depth.unacked || 0, ...(note ? { note } : {}) } : {}) };
