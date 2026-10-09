@@ -134,7 +134,7 @@ export function runBoard(a = {}) {
       if (v) decisions.push({ ts: e.ts, agent: e.agent || null, ...v, text: firstLine(e.text, 240) });
     }
     /* Done in the window, each with the line that accepted it. The newest journal entry naming
-     * the task, preferring, in order: a decision; an entry by the track's head; any entry that is
+     * the task, preferring, in order: a decision or a verdict; an entry by the track's head; any entry that is
      * not a stamp; the stamp itself. A stamp is what the close writes on its own — the "task #N"
      * line, or a done entry that is just "#N <task text>" — and repeats the task instead of saying
      * why it was accepted. */
@@ -146,7 +146,7 @@ export function runBoard(a = {}) {
         const found = [null, null, null, null];
         for (const e of inWindow) {
           if (!re.test(e.text || '')) continue;
-          const rank = e.kind === 'decision' ? 0 : stamp(e) ? 3 : headNames.has(e.agent) ? 1 : 2;
+          const rank = e.kind === 'decision' || e.kind === 'verdict' ? 0 : stamp(e) ? 3 : headNames.has(e.agent) ? 1 : 2;
           if (!found[rank]) found[rank] = e;
           if (rank === 0) break;
         }

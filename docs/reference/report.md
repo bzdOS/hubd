@@ -22,6 +22,7 @@ DONE:   <task-ids, comma-sep>     # closes tasks
 TASK:   <new task text>           # opens a task
 NOTE:   <one-line anything-else>
 HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)
+VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>  # a head on a piece of work
 
 # Example:  hub report -p hubd <<EOF
 #   DECIDE: ship docs in the release | npm README drifted
@@ -46,6 +47,7 @@ A prefix is a word and a colon at the start of a line, in any case: `fact:` is `
 | `TASK:` | `TODO:` | opens a task in the project |
 | `NOTE:` |  | the journal: one entry, the report's note lines joined by ` · `. A line with no prefix is a note too |
 | `HANDOFF:` |  | replaces the author's own `## Handoff <agent>` section with one dated entry, the lines after the first as its continuation, and journals them as one `handoff` entry. Refused whole when it would not fit the section cap. `hub_context` and `hub whereami` return it to the next session with its age |
+| `VERDICT:` | `ACCEPT:`, `REJECT:` | a head's verdict on a piece of work: `VERDICT: accept\|reject #<task> [of=<agent>] [ref=<sha>] — <why>`, or `ACCEPT:` / `REJECT:` with the rest. Journaled as one `verdict` entry under the task's project; the task's status does not change. `of` defaults to the agent that last closed the task. A line that names no task, two tasks, or a task the hub does not hold refuses the whole report. `hub stats` reads these as the outcome of an attempt |
 | `TO:` |  | whom the journal entry is for: a role, or `fleet`. The entry stays public; readers filter on it |
 
 ## The rest of a report

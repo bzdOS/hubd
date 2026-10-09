@@ -84,6 +84,7 @@ decisions/facts = many lines (one per line):
     TASK:   <new task text>               # opens a task
     NOTE:   <one-line, anything else>
     HANDOFF: <where your work stands, the next step>   # -> Handoff <you>, replaced
+    VERDICT: accept|reject #<task> [of=<agent>] — <why>  # a head: the outcome of an attempt
     EOF
 
 - Do NOT list files/commits — "what changed" is read from git, not retyped.
@@ -247,6 +248,17 @@ arrive (`seconds`, `tokensIn`, `tokensOut`, `costUsd`, `model`), and `hub usage`
 **SUPPLIED**, separately from what it **MEASURED** itself (closed-task spans, journal events).
 Keep the halves apart when you quote them: a cost that mixes an observed span with a guessed rate
 gets repeated later as if somebody had counted.
+
+What a session spent is not supplied: it is READ. `hub sessions ingest` reads a client's session
+database into `ledger.<node>.jsonl` — per session its role, models, tokens, the orders it read from
+queue headers (`task #<id>`) and the tasks it closed, never message text. `hub stats` binds each
+step to the tasks its role was working on (an order sets them, a close takes one off) and prices
+it at list price (`hub price pull`, `hub price map` for a local model): a NOTIONAL dollar, never a
+bill. So an order names its task: `hub_queue_send` with `task`, or the work it starts is counted as
+unbound. A head says what came of the work with one line in its report, `VERDICT: accept #<task>
+of=<agent> — <why>` (or `reject`); the stats read the outcome of each attempt from it, the Summary
+and the board read it as the head's verdict, and no task status changes. A malformed VERDICT line,
+or one naming an unknown or ambiguous task, refuses the whole report.
 
 ## Rules that are checks, and rules that are wishes
 
@@ -545,7 +557,7 @@ digest's first line); the tasks in work (open, assigned, nothing open before the
 closed in the last 24 hours, each with its age and the head's newest verdict entry in full; and
 each role's newest `blocked` entry, until the role hands that task in or it closes. A verdict is a
 head's journal entry that names the task (`#<id>`, or the bare id when it has a letter) and holds
-ACCEPT, ACCEPTED, REJECT or REJECTED in capitals. Heads who write in another language list their
+ACCEPT, ACCEPTED, REJECT or REJECTED in capitals; a `VERDICT:` line in a report writes one. Heads who write in another language list their
 words in `<hub>/verdicts.json`, `{"accept": [...], "reject": [...]}`, negated forms under reject.
 Beside the tracks, the escalations to the fleet, as the board defines them, with their text and
 answers whole; and the NODES, each as its `snapshot.<node>.json` in the hub directory states it.

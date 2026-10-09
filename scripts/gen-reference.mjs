@@ -139,7 +139,7 @@ const TOOL_GROUPS = [
   ['Claims and presence', 'hub_claim hub_claim_check hub_release hub_heartbeat hub_presence'],
   ['Queues', 'hub_queue_send hub_queue_wait hub_queue_wait_all hub_queue_ack'],
   ['Resources and the graph', 'hub_resource_set hub_resource_list hub_resource_get hub_graph'],
-  ['Rules, health and cost', 'hub_rules hub_operator hub_lint hub_audit hub_usage_add hub_usage'],
+  ['Rules, health and cost', 'hub_rules hub_operator hub_lint hub_audit hub_usage_add hub_usage hub_stats'],
 ].map(([title, names]) => [title, names.split(' ')]);
 const SCHEMA_KEYS = new Set(['type', 'description', 'enum', 'items', 'properties', 'required', 'additionalProperties']);
 
@@ -290,6 +290,8 @@ const FILES = [
     ['tasks.json', 'The tasks, folded from every node\'s events. A cache; rebuilt when missing.', 'any command that reads tasks'],
     ['claims.json', 'Claims (soft locks) and their expiry.', '`hub claim`, `hub release`'],
     ['usage.<node>.jsonl', 'What work cost: seconds, tokens, money, per agent and task.', '`hub usage add`'],
+    ['ledger.<node>.jsonl', 'The session ledger: one line per session a client ran, with its role, the orders it received, its steps by model with five token counts and the price the client paid, and the tasks it closed. No text the session said. A session that changed is appended again; the newest version counts.', '`hub sessions ingest`'],
+    ['prices.<node>.jsonl', 'List prices: an OpenRouter rate a line when it is new or changed, and which listing prices which of our models.', '`hub price pull`, `hub price map`'],
     ['presence/<agent>.json', 'An agent\'s last heartbeat.', '`hub heartbeat`'],
     ['presence/_archive/', 'Heartbeats of agents gone quiet.', '`hub gc --apply`'],
     ['presence.<node>.json', 'This node\'s roster of heartbeats, for the other nodes to read; rewritten at most every 5 minutes.', '`hub heartbeat`'],
@@ -414,6 +416,7 @@ const ROUTES = {
   task: 'opens a task in the project',
   note: 'the journal: one entry, the report\'s note lines joined by ` · `. A line with no prefix is a note too',
   handoff: 'replaces the author\'s own `## Handoff <agent>` section with one dated entry, the lines after the first as its continuation, and journals them as one `handoff` entry. Refused whole when it would not fit the section cap. `hub_context` and `hub whereami` return it to the next session with its age',
+  verdict: 'a head\'s verdict on a piece of work: `VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>`, or `ACCEPT:` / `REJECT:` with the rest. Journaled as one `verdict` entry under the task\'s project; the task\'s status does not change. `of` defaults to the agent that last closed the task. A line that names no task, two tasks, or a task the hub does not hold refuses the whole report. `hub stats` reads these as the outcome of an attempt',
   to: 'whom the journal entry is for: a role, or `fleet`. The entry stays public; readers filter on it',
 };
 

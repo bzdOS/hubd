@@ -46,6 +46,17 @@ w('card', 'alpha', '-m', 'alpha does a thing', '--by', 'dev-readonly');
 w('resource', 'set', 'box', '--type', 'host', '-m', 'a box', '--by', 'dev-readonly');
 w('queue', 'send', 'worker', 'hello', '--from', 'dev-readonly');
 w('heartbeat', 'dev-readonly', '--status', 'testing');
+// one session in the ledger, so hub stats and the cost in hub task get read something
+const rows = path.join(mktmp(), 'rows.jsonl');
+const at = Date.UTC(2026, 9, 1, 10, 0);
+fs.writeFileSync(rows, [
+  { table: 'session', row: { id: 's1', parent_id: null, time_created: at, time_updated: at + 60000, agent: 'worker' } },
+  { table: 'message', row: { id: 'm1', session_id: 's1', time_created: at, data: JSON.stringify({ role: 'user', agent: 'worker' }) } },
+  { table: 'part', row: { id: 'p1', message_id: 'm1', session_id: 's1', time_created: at, data: JSON.stringify({ type: 'text', text: '## 2026-10-01 10:00 · from head · id cedar-1 · task #cedar-1' }) } },
+  { table: 'message', row: { id: 'm2', session_id: 's1', time_created: at + 1000, data: JSON.stringify({ role: 'assistant', agent: 'worker', providerID: 'p', modelID: 'm' }) } },
+  { table: 'part', row: { id: 'p2', message_id: 'm2', session_id: 's1', time_created: at + 2000, data: JSON.stringify({ type: 'step-finish', tokens: { input: 5, output: 1 }, cost: 0 }) } },
+].map(x => JSON.stringify(x)).join('\n') + '\n');
+w('sessions', 'ingest', '--rows', rows);
 execSync('git init -q . && git add -A && git -c user.name=t -c user.email=t@t commit -q -m seed', { cwd: H });
 
 /* What a node that upgraded mid-flight looks like: the generated files gone or old, a .gitignore
@@ -69,6 +80,8 @@ const READS = [
   ['card', 'show', 'alpha'], ['card', 'show', 'alpha', '--json'], ['card', 'show', 'alpha', '--section', 'next', '--json'],
   ['log', '--since', '3h', '--json'], ['log', '--to', 'worker', '--agent', 'dev-readonly'],
   ['queue', 'repair'], ['queue', 'repair', '--json'], ['queue', 'dedupe', 'worker'], ['queue', 'dedupe', 'worker', '--json'],
+  ['stats'], ['stats', '--json', '--check'], ['stats', '--group', 'day'], ['stats', '--task', 'cedar-1'], ['price', 'list'], ['price', 'list', '--json'],
+  ['sessions', 'ingest', '--rows', rows, '--dry'],
 ];
 // Each command gets its own copy of that hub: the first one to "repair" it would otherwise hide
 // what every later one does.

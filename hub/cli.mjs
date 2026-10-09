@@ -22,6 +22,8 @@ import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './
 import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
 import { STATE_ATTRS, STATE_DRIVER, installStateDriver, removeStateDriver } from './lib/statemerge.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
+import { runSessionsIngest } from './lib/sessions.mjs';
+import { runStats, runPricePull, runPriceMap, runPriceList, taskCost } from './lib/stats.mjs';
 import { runCardsCompact, runCardsMergeSections, runCardsMerge } from './lib/cards.mjs';
 import { runRecall } from './lib/recall.mjs';
 import { WINDOW_DAYS, journalStamp, watchExec, watchPass } from './lib/watch.mjs';
@@ -122,6 +124,7 @@ declareFlags(
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
   '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
   '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
+  '--opencode', '--rows', '--node', '--db', '--dry', '--group',
 );
 
 function getFlag(name) {
@@ -184,6 +187,7 @@ const REPORT_TEMPLATE = [
   'TASK:   <new task text>           # opens a task',
   'NOTE:   <one-line anything-else>',
   'HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)',
+  'VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>  # a head on a piece of work',
   '',
   '# Example:  hub report -p hubd <<EOF',
   '#   DECIDE: ship docs in the release | npm README drifted',
@@ -764,9 +768,10 @@ command('report', () => {
   if (r.released) parts.push('released ' + r.released + ' task claim' + (r.released > 1 ? 's' : ''));
   if (r.private) parts.push('PRIVATE (journal.life.jsonl, local only, never synced)');
   if (r.tasks.length) parts.push('new task #' + r.tasks.join(' #'));
+  if (r.verdicts) parts.push(r.verdicts.map(v => `${v.verdict} #${v.task}${v.of ? ' of ' + v.of : ''}`).join(', '));
   if (r.note) parts.push('note');
   if (r.reflect) parts.push(`reflection (${r.reflect.level}${r.reflect.source === 'text' ? ', read from the text' : ''})`);
-  console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE:/HANDOFF: prefixes (hub report with no input shows the template)'));
+  console.log(`Reported to ${r.project}: ` + (parts.length ? parts.join(', ') : 'nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE:/HANDOFF:/VERDICT: prefixes (hub report with no input shows the template)'));
   if (r.reflect && r.reflect.problems) console.error('  reflection filed, off the rules: ' + r.reflect.problems.join('; ') + ' (the lists: prompts/meta/fragments/reflect.md)');
   if (r.doneMissed && r.doneMissed.length) {
     const amb = new Map((r.doneAmbiguous || []).map(x => [x.id, x.tasks]));
@@ -870,6 +875,8 @@ command('task', () => {
     for (const [label, rows] of [['blocked by', r.blockedBy], ['blocks', r.blocks]]) {
       if (rows.length) console.log(`${label}: ` + rows.map(x => `#${x.id} (${x.status})`).join(', '));
     }
+    let c = null; try { c = taskCost(t.id); } catch {}
+    if (c) console.log(`cost: ${costLine(c)}` + (c.outcome ? ` · ${c.outcome}ed` : '') + '  (hub stats --task ' + t.id + ' for the attempts)');
   } else if (sub === 'retag') {
     const apply = args.includes('--apply');
     const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
@@ -1633,6 +1640,107 @@ command('usage', () => {
   done(0);
 });
 
+/* ── sessions, prices, stats ── */
+const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
+const fmtUsd = (x) => (x === null || x === undefined ? 'unpriced' : '$' + (x >= 100 ? Math.round(x) : x >= 1 ? x.toFixed(2) : x >= 0.01 ? x.toFixed(4) : x ? +x.toPrecision(2) : 0));
+function costLine(x) {
+  return `${fmtTok(x.tokens)} tok · ${x.steps} steps · notional ${fmtUsd(x.notional)}${x.approx ? ' (approx)' : ''}` +
+    (x.notional !== null && x.unpricedTokens ? ` + ${fmtTok(x.unpricedTokens)} unpriced` : '') +
+    (x.paid ? ` · paid $${x.paid}` : '') + (x.attempts !== undefined ? ` · ${x.attempts} attempt(s)` : '');
+}
+
+command('sessions', () => args[1] === 'ingest', () => {
+  const opencode = getFlag('--opencode'), rows = getFlag('--rows'), node = getFlag('--node'), db = getFlag('--db');
+  for (const [k, v] of [['--opencode', opencode], ['--rows', rows], ['--node', node], ['--db', db]]) if (v === true) die(`${k} needs a value`);
+  runSessionsIngest({ opencode: opencode || undefined, rows: rows || undefined, node: node || undefined, db: db || undefined, dry: args.includes('--dry') })
+    .then(r => {
+      if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+      console.log(`${r.sessions} session(s) read as ${r.node}/${r.db}: ${r.added} new, ${r.updated} changed, ${r.unchanged} unchanged` +
+        (r.probes ? `, ${r.probes} probe(s)` : '') + (r.dry ? ' — dry, nothing written' : r.written ? ` → ${r.file}` : ''));
+      done(0);
+    }).catch(e => die(e.message));
+});
+
+command('price', () => {
+  const sub = args[1];
+  if (sub === 'pull') {
+    const from = getFlag('--from');
+    if (from === true) die('--from needs a file');
+    runPricePull({ from: from || undefined, dry: args.includes('--dry') }).then(r => {
+      if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+      console.log(`${r.listings} listing(s) on ${r.date}: ${r.changed} new or changed rate(s)` + (r.dry ? ' — dry, nothing written' : r.file ? ` → ${r.file}` : ''));
+      done(0);
+    }).catch(e => die(e.message));
+    return;
+  }
+  if (sub === 'map') {
+    let pos; try { pos = positionals(2, { values: ['--by'] }); } catch (e) { die(e.message); }
+    const r = runPriceMap({ ours: pos[0], to: pos[1], by: authorOrDie('--by') });
+    console.log(r.to ? `${r.map} is priced as ${r.to}` : `${r.map} is not priced`);
+    done(0);
+  }
+  if (sub === 'list') {
+    const r = runPriceList();
+    if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+    console.log(`${r.listings} listing(s) in the snapshots, ${r.maps} mapped model(s)`);
+    for (const m of r.models) {
+      const rate = m.rate ? `in $${+(m.rate.in * 1e6).toFixed(4)}/M out $${+(m.rate.out * 1e6).toFixed(4)}/M (${m.rate.date})` : 'no rate';
+      console.log(`  ${m.model}: ${fmtTok(m.tokens)} tok, ${m.steps} steps → ${m.listing || '—'} [${m.via}${m.candidates ? ': ' + m.candidates.join(', ') : ''}] ${rate}`);
+    }
+    if (r.unpriced.length) console.log(`unpriced: ${r.unpriced.join(', ')} — hub price map <model> <OpenRouter id | -> --by <you>`);
+    done(0);
+  }
+  die('price subcommands: pull [--from <file>] [--dry], map <our model> <OpenRouter id | -> --by <you>, list');
+});
+
+command('stats', () => {
+  const val = (k) => { const v = getFlag(k); if (v === true) die(`${k} needs a value`); return v || undefined; };
+  const r = runStats({ group: val('--group'), since: val('--since'), project: val('-p'), task: val('--task'), check: args.includes('--check') });
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  if (r.empty) { console.log(r.note); done(0); }
+  const n = parseInt(String(getFlag('-n') || '20'), 10);
+  const S = r.summary;
+  console.log(`\u2500\u2500 STATS \u00b7 rule ${r.rule} \u00b7 as of ${r.asOf}${r.since ? ' \u00b7 since ' + r.since : ''}${r.project ? ' \u00b7 ' + r.project : ''} \u2500\u2500`);
+  console.log(`READ      ${S.sessions.work} session(s) + ${S.sessions.probe} probe(s)`);
+  console.log(`  bound     ${costLine(S.bound)}`);
+  console.log(`  unbound   ${costLine(S.unbound)}`);
+  console.log(`  probes    ${costLine(S.probes)}`);
+  const A = S.attempts;
+  console.log(`MEASURED  ${A.total} attempt(s): ${A.accepted} accepted, ${A.rejected} rejected, ${A.open} open, ${A.abandoned} abandoned · ` +
+    `verdicts ${S.verdicts.journal} + ${S.verdicts.parsed} parsed from decisions (${S.verdicts.unreadable} unreadable, ${S.verdicts.noAttempt} without an attempt)`);
+  if (S.waste.attempts) console.log(`  rejected work: ${costLine(S.waste)}`);
+  const E = S.empty;
+  if (E.repeats || E.invalid || E.errors) console.log(`  ${E.repeats} repeated call(s), ${E.invalid} invalid call(s), ${E.errors} errored message(s)`);
+  if (S.unresolvedRefs.count) console.log(`  ${S.unresolvedRefs.count} order(s) name a task the hub does not hold: ` + S.unresolvedRefs.examples.map(x => `#${x.ref}×${x.n}`).join(' '));
+  if (r.task) {
+    const t = r.task;
+    console.log(`\n#${t.task} [${t.project}] ${t.title}`);
+    console.log(`  ${costLine(t)} · order ${fmtTok(t.order)} / carried ${fmtTok(t.carried)}` + (t.outcome ? ` · ${t.outcome}ed` : '') + (t.hours !== null ? ` · ${t.hours}h order to verdict` : ''));
+    for (const x of t.attemptList) {
+      console.log(`  ${x.start} ${x.role}${x.from ? ' (from ' + x.from + ')' : ''}: ${fmtTok(x.tokens)} tok, ${x.steps} steps, ${x.models.join(', ') || 'no model'}` +
+        ` \u2192 ${x.outcome || (x.abandoned ? 'abandoned' : x.end ? 'closed, no verdict' : 'open')}`);
+    }
+  } else {
+    const key = r.group;
+    console.log(`\nby ${key}`);
+    for (const x of r.rows.slice(0, n)) {
+      const head = key === 'task' ? `#${x.task} [${x.project}] ${x.title}` : x[key];
+      console.log(`  ${head}`);
+      console.log(`    ${costLine(x)}` + (key === 'task'
+        ? (x.outcome ? ` · ${x.outcome}ed` : '') + (x.hours !== null ? ` · ${x.hours}h` : '')
+        : ` · ${x.accepted} accepted, ${x.rejected} rejected` + (x.notionalPerAccepted ? ` · ${fmtUsd(x.notionalPerAccepted)} per accepted` : '')));
+    }
+    if (r.rows.length > n) console.log(`  … ${r.rows.length - n} more (-n ${r.rows.length})`);
+  }
+  if (r.check) {
+    const c = r.check;
+    console.log(`\ncheck: ${c.ok ? 'ok' : 'FAILED'} \u2014 sessions ${c.sessions.join('/')} = bound ${c.bound.join('/')} + unbound ${c.unbound.join('/')} + probes ${c.probes.join('/')}` +
+      (c.sessionTotalsDiffer ? ` · ${c.sessionTotalsDiffer} session(s) whose own totals differ from their steps` : ''));
+    done(c.ok ? 0 : 1);
+  }
+  done(0);
+});
+
 command('rules', () => {
   const app = getFlag('--append');
   if (typeof app === 'string') {
@@ -1915,7 +2023,7 @@ command('queue', () => {
       if (e.code === 'queue-full') { console.error('Error [queue-full]: ' + e.message); done(4); return; }
       throw e;
     }
-    console.log(`→ ${path.basename(sent.file)} delivered` + (typeof taskRef === 'string' ? `  (about task #${taskRef})` : ''));
+    console.log(`→ ${path.basename(sent.file)} delivered` + (typeof taskRef === 'string' ? `  (about task #${sent.task}${sent.taskAsGiven ? ', given as ' + sent.taskAsGiven : ''})` : ''));
     if (sent.taskKnown === false) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
     done(0);
   } else if (sub === 'wait') {
@@ -2232,6 +2340,11 @@ const HELP = [
   ['presence [--role r] [--alive] [--json]', 'fleet roster (who has heartbeated, alive/stale)'],
   ['usage [--days 7] [-p <proj>] [--json]', 'what the work cost, measured and supplied'],
   ['usage add --agent <you> [--seconds N] [--tokens-in N] [--tokens-out N] [--cost <usd>] [--model m] [-p proj] [--task id]', 'record what a piece of work cost'],
+  ['sessions ingest --opencode <db> | --rows <file|-> [--node <n>] [--db <label>] [--dry] [--json]', "a client's sessions into the ledger: tokens, model and orders per session",
+    'opened read-only; a session already taken in and unchanged is skipped; --rows: the rows as JSONL {"table","row"}, for a Node without node:sqlite'],
+  ['price pull [--from <file>] [--dry] | map <model> <OpenRouter id | -> --by <you> | list [--json]', 'list prices, to put a notional price on the ledger'],
+  ['stats [--group task|model|role|day] [--since 7d|<date>] [-p <proj>] [--task <id>] [--check] [-n 20] [--json]', 'what the sessions cost per task, model, role or day, and what came of it',
+    'tokens read from the ledger, attempts and verdicts measured from the journal, notional dollars at list price; --check: every token is bound, unbound or a probe\'s'],
   ['rules [--append "<rule>" --by <you>]', "the team's rules (AGENTS.md), or add one"],
   ['operator', "the operator's card"],
   ['lint', 'the hub against its rules; exit 1 on findings'],
@@ -2285,6 +2398,9 @@ function readOnlyRun() {
       return true;
     case 'gc': case 'audit': case 'cards': case 'absorb': return dry;
     case 'usage': return sub !== 'add';
+    case 'stats': return true;
+    case 'price': return sub === 'list' || (sub === 'pull' && args.includes('--dry'));
+    case 'sessions': return args.includes('--dry');
     case 'rules': return !args.includes('--append');
     case 'reflect': return !args.includes('--accept') && !args.includes('--reject');
     case 'resource': case 'res': return sub === 'list' || sub === 'get';

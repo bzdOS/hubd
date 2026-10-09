@@ -42,6 +42,9 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`heartbeat`](#heartbeat) | record liveness |
 | [`presence`](#presence) | fleet roster (who has heartbeated, alive/stale) |
 | [`usage`](#usage) | what the work cost, measured and supplied; record what a piece of work cost |
+| [`sessions`](#sessions) | a client's sessions into the ledger: tokens, model and orders per session |
+| [`price`](#price) | list prices, to put a notional price on the ledger |
+| [`stats`](#stats) | what the sessions cost per task, model, role or day, and what came of it |
 | [`rules`](#rules) | the team's rules (AGENTS.md), or add one |
 | [`operator`](#operator) | the operator's card |
 | [`lint`](#lint) | the hub against its rules; exit 1 on findings |
@@ -230,6 +233,22 @@ Also: `hub res`
 - `hub usage [--days 7] [-p <proj>] [--json]` — what the work cost, measured and supplied
 - `hub usage add --agent <you> [--seconds N] [--tokens-in N] [--tokens-out N] [--cost <usd>] [--model m] [-p proj] [--task id]` — record what a piece of work cost
 
+## sessions
+
+- `hub sessions ingest --opencode <db> | --rows <file|-> [--node <n>] [--db <label>] [--dry] [--json]` — a client's sessions into the ledger: tokens, model and orders per session
+
+  opened read-only; a session already taken in and unchanged is skipped; --rows: the rows as JSONL {"table","row"}, for a Node without node:sqlite
+
+## price
+
+- `hub price pull [--from <file>] [--dry] | map <model> <OpenRouter id | -> --by <you> | list [--json]` — list prices, to put a notional price on the ledger
+
+## stats
+
+- `hub stats [--group task|model|role|day] [--since 7d|<date>] [-p <proj>] [--task <id>] [--check] [-n 20] [--json]` — what the sessions cost per task, model, role or day, and what came of it
+
+  tokens read from the ledger, attempts and verdicts measured from the journal, notional dollars at list price; --check: every token is bound, unbound or a probe's
+
 ## rules
 
 - `hub rules [--append "<rule>" --by <you>]` — the team's rules (AGENTS.md), or add one
@@ -312,23 +331,26 @@ The commands each flag appears with, in their usage lines.
 | `--as` | [watch](#watch), [absorb](#absorb), [queue](#queue) |
 | `--assignee` | [now](#now) |
 | `--attr` | [resource](#resource) |
-| `--by` | [reflect](#reflect), [task](#task), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [rules](#rules), [audit](#audit), [gc](#gc) |
-| `--check` | [setup](#setup), [prompts](#prompts) |
+| `--by` | [reflect](#reflect), [task](#task), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [price](#price), [rules](#rules), [audit](#audit), [gc](#gc) |
+| `--check` | [setup](#setup), [prompts](#prompts), [stats](#stats) |
 | `--cost` | [usage](#usage) |
 | `--cwd` | [heartbeat](#heartbeat) |
 | `-d` | [task](#task) |
 | `--days` | [usage](#usage), [audit](#audit), [gc](#gc), [queue](#queue), [board](#board) |
+| `--db` | [sessions](#sessions) |
+| `--dry` | [sessions](#sessions), [price](#price) |
 | `--exec` | [watch](#watch) |
 | `--follow` | [watch](#watch) |
-| `--from` | [queue](#queue) |
+| `--from` | [price](#price), [queue](#queue) |
 | `--from-now` | [queue](#queue) |
+| `--group` | [stats](#stats) |
 | `-h` | [brief](#brief) |
 | `--harness` | [setup](#setup) |
 | `--hours` | [inbox](#inbox) |
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
-| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [card](#card), [presence](#presence), [usage](#usage), [gc](#gc), [queue](#queue), [board](#board) |
+| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
 | `--laws` | [reflect](#reflect) |
 | `--level` | [reflect](#reflect) |
 | `--limit` | [recall](#recall), [board](#board) |
@@ -336,12 +358,14 @@ The commands each flag appears with, in their usage lines.
 | `-m` | [card](#card), [resource](#resource), [sync](#sync) |
 | `--min` | [queue](#queue) |
 | `--model` | [usage](#usage) |
-| `-n` | [log](#log) |
+| `-n` | [log](#log), [stats](#stats) |
 | `--needs` | [task](#task) |
+| `--node` | [sessions](#sessions) |
 | `--note` | [claim](#claim) |
 | `--once` | [queue](#queue) |
+| `--opencode` | [sessions](#sessions) |
 | `--out` | [prompts](#prompts) |
-| `-p` | [watch](#watch), [report](#report), [decide](#decide), [next](#next), [task](#task), [graph](#graph), [claim](#claim), [usage](#usage), [serve](#serve) |
+| `-p` | [watch](#watch), [report](#report), [decide](#decide), [next](#next), [task](#task), [graph](#graph), [claim](#claim), [usage](#usage), [stats](#stats), [serve](#serve) |
 | `--print` | [setup](#setup) |
 | `--private` | [watch](#watch) |
 | `--project` | [reflect](#reflect) |
@@ -353,16 +377,17 @@ The commands each flag appears with, in their usage lines.
 | `--replace` | [card](#card) |
 | `--resource` | [task](#task) |
 | `--role` | [heartbeat](#heartbeat), [presence](#presence) |
+| `--rows` | [sessions](#sessions) |
 | `--scope` | [setup](#setup) |
 | `--seconds` | [usage](#usage) |
 | `--section` | [card](#card) |
 | `--set` | [section](#section) |
-| `--since` | [log](#log), [watch](#watch), [reflect](#reflect) |
+| `--since` | [log](#log), [watch](#watch), [reflect](#reflect), [stats](#stats) |
 | `--src` | [section](#section) |
 | `--stale-days` | [recall](#recall) |
 | `--status` | [task](#task), [resource](#resource), [heartbeat](#heartbeat) |
 | `-t` | [claim](#claim) |
-| `--task` | [claim](#claim), [release](#release), [heartbeat](#heartbeat), [usage](#usage), [queue](#queue) |
+| `--task` | [claim](#claim), [release](#release), [heartbeat](#heartbeat), [usage](#usage), [stats](#stats), [queue](#queue) |
 | `--tasks` | [queue](#queue) |
 | `--timeout` | [queue](#queue) |
 | `--to` | [log](#log) |
