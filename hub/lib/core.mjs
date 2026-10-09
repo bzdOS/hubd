@@ -1131,6 +1131,45 @@ export function cardSections(text) {
   return { preamble: (heads.length ? s.slice(0, heads[0].index) : s).trim(), sections };
 }
 
+/* ── Handoffs ──
+ * A handoff is where one agent's work stands for whoever picks it up: a "## Handoff <agent>"
+ * section of the project card, one per agent, replaced whole on each write. A fleet wrote them with
+ * hub_section_add(mode:"set") and read them back by cutting the card with awk, and the hub filed
+ * every one as a note. HANDOFF: in hub_report writes the same section, the journal files it under
+ * its own kind, and hub_context hands it to the next session. Its date is the first stamp of its
+ * entry, the hub's own UTC, which is what the awk readers parse too. */
+const HANDOFF_HEADING = /^Handoff\s+(.+)$/i;
+const HANDOFF_STAMP = /^[-*+]\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\b/gm;
+export const handoffAgent = (heading) => (HANDOFF_HEADING.exec(String(heading || '').trim()) || [])[1] || null;
+
+/** A handoff's section body: one dated entry, HANDOFF: lines after the first as its continuation,
+ *  so every reader takes it as one entry. */
+export function renderHandoff(lines) {
+  const [first, ...rest] = lines.map(l => String(l).trim()).filter(Boolean);
+  return [`- ${now()}: ${first}`, ...rest.map(l => '  ' + l)].join('\n');
+}
+
+/** One "## Handoff <agent>" section as {agent, at, ageHours, text}, or null. A section written by
+ *  hand or appended to holds several dated entries: `at` is the newest, and the text is left whole. */
+export function handoffOf(heading, body, nowMs = Date.now()) {
+  const agent = handoffAgent(heading);
+  if (!agent || isPlaceholder(body)) return null;
+  const stamps = [...String(body).matchAll(HANDOFF_STAMP)].map(m => m[1]).sort();
+  const at = stamps.length ? stamps[stamps.length - 1] : (String(body).match(/\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?/) || [null])[0];
+  const ms = at ? parseTs(at).getTime() : NaN;
+  const lead = /^[-*+]\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}:?\s*/;
+  const text = stamps.length === 1 && lead.test(body) ? String(body).replace(lead, '').replace(/\n {2}/g, '\n') : String(body);
+  return { agent, at, ageHours: Number.isFinite(ms) ? Math.max(0, Math.round((nowMs - ms) / 360000) / 10) : null, text };
+}
+
+/** Every handoff a card holds, newest first; an agent with two sections counts its newest. */
+export function cardHandoffs(card, nowMs = Date.now()) {
+  const seen = new Set();
+  return cardSections(card).sections.map(s => handoffOf(s.heading, s.body, nowMs)).filter(Boolean)
+    .sort((x, y) => String(y.at || '').localeCompare(String(x.at || '')))
+    .filter(h => !seen.has(h.agent.toLowerCase()) && seen.add(h.agent.toLowerCase()));
+}
+
 /* `hub card show`: a card read back, whole or one section. Writing a card had a command and reading
  * one had none, so a fleet cut a role's "## Handoff <role>" out of the file with awk. `section`
  * is a heading, matched as every writer matches one (case and trailing blanks aside), or a section
@@ -2751,6 +2790,7 @@ const REPORT_PREFIX = {
   DONE: 'done', CLOSED: 'done', CLOSE: 'done',
   TASK: 'task', TODO: 'task',
   NOTE: 'note',
+  HANDOFF: 'handoff',
   TO: 'to',   // addressee: a role or "fleet" — the entry is still public, but readers filter
 };
 /* The DONE: form, said wherever a report's DONE went wrong. A line that reads as closing a task
@@ -2935,7 +2975,7 @@ export function runReport(a) {
     if (isWaitingTurn(a.text)) throw new Error('reflect: a turn that only waits for a dispatch takes no reflection; send the waiting line alone');
     assertProse(renderReflect(rf), 'reflect');
   }
-  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], to: [] };
+  const b = { decide: [], fact: [], hypo: [], comm: [], next: [], done: [], task: [], note: [], handoff: [], to: [] };
   // An explicit `NOTE:` is a deliberate aside; an unprefixed line is prose that just happened.
   // Only the second kind is what the strict check below is about, so they cannot share a flag.
   let explicitNote = false, allTasks = null;
@@ -2956,22 +2996,32 @@ export function runReport(a) {
   // default, because refusing a write is the harshest thing this engine can do and an upgrade
   // must never start doing it uninvited.
   const noteOnly = b.note.length && !explicitNote && !rf && !b.decide.length && !b.fact.length && !b.hypo.length &&
-    !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.to.length;
+    !b.comm.length && !b.next.length && !b.done.length && !b.task.length && !b.handoff.length && !b.to.length;
   if (noteOnly && rulesConfig().strict.rejectNoteOnlyReport) {
     throw new Error('strict: this report is prose only. Use a prefix so it lands somewhere a later reader will find it — ' +
-      'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: — or, if you are just saying you started, hub claim instead. ' +
+      'DECIDE: / FACT: / COMM: / NEXT: / DONE: / TASK: / HANDOFF: — or, if you are just saying you started, hub claim instead. ' +
       '(rules.json → strict.rejectNoteOnlyReport; NOTE: <text> still works for a real aside.)');
   }
   /* A private report is local by definition, and every structured prefix writes into a card that
    * IS mesh-synced — so accepting both would quietly publish the thing the caller asked to keep on
    * this machine. Refuse the combination instead of silently dropping half of it. */
-  if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length)) {
-    throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT: write into the project card, and cards are mesh-synced — ' +
+  if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length || b.handoff.length)) {
+    throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT:/HANDOFF: write into the project card, and cards are mesh-synced — ' +
       'that would publish what you asked to keep local. Send the private part as its own report, and the shareable part as a normal one.');
   }
-  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false };
+  /* HANDOFF: replaces the author's own "## Handoff <agent>" section, so the whole of it must fit
+   * the section cap: rotation would move the first lines of the handoff it is writing into history.
+   * Refused before anything is written, as a refused reflection is. */
+  const handoffLines = b.handoff.filter(Boolean);
+  const handoffBody = handoffLines.length ? renderHandoff(handoffLines) : null;
+  if (handoffBody && Buffer.byteLength(handoffBody, 'utf8') > cardLimits().sectionBytes) {
+    throw new Error(`HANDOFF: ${Buffer.byteLength(handoffBody, 'utf8')} bytes, over this hub's section limit of ${cardLimits().sectionBytes} ` +
+      '(<hub>/limits.json → card.sectionBytes). A handoff is where the work stands and the next step, not the record of how it got there: ' +
+      'send the findings as FACT:/DECIDE: lines in the same report and keep the handoff to what a successor needs first.');
+  }
+  const summary = { ok: true, project: slug, decisions: 0, facts: 0, hypos: 0, comms: 0, next: false, done: [], doneAlready: [], doneMissed: [], tasks: [], note: false, handoff: false };
   let trace = null;
-  if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length) {
+  if (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || handoffBody) {
     const prevCard = readCard(project);
     let text = prevCard || cardBaseFor(project);
     const written = [], decisions = [];
@@ -3011,6 +3061,14 @@ export function runReport(a) {
       summary.next = true;
       if (prev) summary.nextReplaced = { text: prev.text, by: prev.by, at: prev.at };
     }
+    if (handoffBody) {
+      const hh = 'Handoff ' + by;
+      const prev = handoffOf(hh, sectionBody(text, hh));
+      text = editSection(text, hh, handoffBody, 'set');
+      written.push(hh);
+      summary.handoff = hh;
+      if (prev && prev.at) summary.handoffReplaced = prev.at;
+    }
     fs.mkdirSync(PROJ, { recursive: true });
     // The cap is applied HERE, on the write that grows the card, because a card that is allowed to
     // grow on one node arrives over-sized on every other one.
@@ -3046,6 +3104,14 @@ export function runReport(a) {
   }
   if (summary.doneMissed.length) summary.doneForm = DONE_FORM;
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
+  /* The handoff's journal entry is its history: the card keeps only the latest one. */
+  if (handoffBody) {
+    const to = b.to.length ? b.to.join(',') : (a.to || undefined);
+    const entry = { ts: now(), project: slug, agent: by, kind: 'handoff', text: handoffLines.join(' · ') };
+    if (to) entry.to = to;
+    if (trace) { entry.card = trace; trace = null; }
+    journalAppend(entry);
+  }
   /* A reflection field rides on the report's own entry, and its block is written into the text as
    * well: the field is what a digest counts, the text what the head's order and every grep read. */
   if (b.note.length || rf) {
@@ -3260,7 +3326,11 @@ export function runSectionAdd(a = {}) {
   // write, and a section fed only through here grew without bound on every node it synced to.
   const rot = rotateCardOverflow(after, slug, by);
   atomicWrite(cardPath(project), rot.text);
-  journalAppend({ ts: now(), project: slug, agent: by, kind: 'note', text: `${heading}: ${raw.slice(0, 100)}`,
+  /* A "## Handoff <agent>" line is a handoff whichever tool wrote it, and its entry keeps the whole
+   * text: the section is replaced on the next write, so the journal is the only place it survives. */
+  const ho = handoffAgent(heading);
+  journalAppend({ ts: now(), project: slug, agent: by, kind: ho ? 'handoff' : 'note',
+    text: ho ? (ho.toLowerCase() === by.toLowerCase() ? raw : `${heading}: ${raw}`) : `${heading}: ${raw.slice(0, 100)}`,
     card: cardTrace(prevCard, rot.text, [heading], 'section', rot.moved) });
   return { ok: true, project: slug, section: heading, created, card: cardPath(project),
     ...(rot.moved.length ? { rotated: rot.moved } : {}) };
@@ -3549,7 +3619,7 @@ export function runContext(a) {
   const local = a.local !== false;
   const ctx = resolveContext(cwd, { local });
   if (ctx.guessed) ctx.hint = `guessed from the folder name — write ${path.join(ctx.root, '.hubd')} with one line "${ctx.project}" to make it certain`;
-  if (!ctx.project) return { ...ctx, digest: null, laws: [], openTasks: [], activeClaims: [], journalTail: [], presenceHere: presenceHere({ root: ctx.root }) };
+  if (!ctx.project) return { ...ctx, digest: null, laws: [], openTasks: [], activeClaims: [], journalTail: [], handoffs: [], presenceHere: presenceHere({ root: ctx.root }) };
   const card = readCard(ctx.project);
   const digest = card ? (digestOf(card) || '').slice(0, 300) : null;
   const { at: digestSetAt, by: digestSetBy } = cardStamp(card);
@@ -3571,6 +3641,8 @@ export function runContext(a) {
     openTasks: runTaskList({ project: ctx.project, status: 'open' }).tasks,
     activeClaims: activeClaims(claimsDb.claims).filter(c => c.project === ctx.project),
     journalTail: journalTail(ctx.project, a.journalTail ?? 5),
+    // Where each agent's work stands, with its age in hours: the caller's own whole, the others cut.
+    handoffs: contextHandoffs(card, a.agent, a.handoffs ?? 6, a.handoffText ?? 600),
     presenceHere: presenceHere({ root: ctx.root, project: null }),
     // "You are already editing somebody's zone": live claims (not the caller's, when it says who
     // it is) whose glob covers a file changed in this checkout in the last half hour. Needs the
@@ -3580,6 +3652,18 @@ export function runContext(a) {
       : { touched: [], recentFiles: 0, capped: false, minutes: a.recentMinutes ?? 30,
           note: 'not checked: this server cannot see your checkout — run `hub claim check <path>` locally' },
   };
+}
+
+/* The caller's own handoff first and whole, since resuming from it is what a session start is
+ * for; then the newest `n` of the others, each cut to `chars` with `cut` saying how long the whole
+ * is (`hub card show <slug> --section "Handoff <agent>"` reads it). */
+function contextHandoffs(card, agent, n, chars) {
+  const me = String(agent || '').trim().toLowerCase();
+  const all = card ? cardHandoffs(card) : [];
+  const mine = (h) => me && h.agent.toLowerCase() === me;
+  return [...all.filter(mine).map(h => ({ ...h, own: true })),
+    ...all.filter(h => !mine(h)).slice(0, Math.max(0, n))
+      .map(h => h.text.length > chars ? { ...h, text: h.text.slice(0, chars), cut: h.text.length } : h)];
 }
 
 /* "Where am I" for a shell: hub_context plus the git-side inventory an agent otherwise rebuilds

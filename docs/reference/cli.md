@@ -128,7 +128,7 @@ Also: `hub where`
 
 - `hub report [-p <proj>] [--reflect <json|file>]` — structured report → card sections (no input prints the template)
 
-  DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE: lines, via stdin (heredoc) or -m; --reflect: the turn's reflection as checked fields
+  DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF: lines, via stdin (heredoc) or -m; --reflect: the turn's reflection as checked fields
 
 ## reflect
 

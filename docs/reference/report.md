@@ -21,6 +21,7 @@ NEXT:   <the single next action>  # → ## Next step (set)
 DONE:   <task-ids, comma-sep>     # closes tasks
 TASK:   <new task text>           # opens a task
 NOTE:   <one-line anything-else>
+HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)
 
 # Example:  hub report -p hubd <<EOF
 #   DECIDE: ship docs in the release | npm README drifted
@@ -44,6 +45,7 @@ A prefix is a word and a colon at the start of a line, in any case: `fact:` is `
 | `DONE:` | `CLOSED:`, `CLOSE:` | closes the tasks it names, comma-separated: each id as `hub task list` shows it, `#` optional, or the bare number when one task ends in it. The reply says what closed, what was closed already, and what matched nothing |
 | `TASK:` | `TODO:` | opens a task in the project |
 | `NOTE:` |  | the journal: one entry, the report's note lines joined by ` · `. A line with no prefix is a note too |
+| `HANDOFF:` |  | replaces the author's own `## Handoff <agent>` section with one dated entry, the lines after the first as its continuation, and journals them as one `handoff` entry. Refused whole when it would not fit the section cap. `hub_context` and `hub whereami` return it to the next session with its age |
 | `TO:` |  | whom the journal entry is for: a role, or `fleet`. The entry stays public; readers filter on it |
 
 ## The rest of a report

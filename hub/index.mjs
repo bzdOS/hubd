@@ -27,8 +27,8 @@ import { LEVELS, OBSTACLES, RESULTS, VERDICTS } from './lib/reflect.mjs';
  * reads. */
 const SMALL = PRESET === 'small';
 const VIEW = SMALL
-  ? { card: 2000, journal: 2, journalText: 160, entries: 5, tasks: 15, taskText: 120, contextTasks: 10 }
-  : { card: 4000, journal: 5, journalText: 240, entries: 20, tasks: 50, taskText: 160 };
+  ? { card: 2000, journal: 2, journalText: 160, entries: 5, tasks: 15, taskText: 120, contextTasks: 10, handoffs: 3, handoffText: 300 }
+  : { card: 4000, journal: 5, journalText: 240, entries: 20, tasks: 50, taskText: 160, handoffs: 6, handoffText: 600 };
 
 const TOOLS = [
   { name: 'hub_sync',
@@ -52,7 +52,7 @@ const TOOLS = [
     }, required: ['project', 'by'] } },
 
   { name: 'hub_section_add',
-    description: 'Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step. For those four, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT: is still the right call; use this for the rest. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).',
+    description: 'Append ONE line to ONE section of a project card, leaving everything around it untouched. This is how Gates / Metrics / Market and any hand-written section get written by a tool at all — hub_card_set only writes the digest, and the report router only reaches Decisions / Facts / Communication / Next step and your own Handoff section. For those, a normal hub_report with DECIDE:/FACT:/COMM:/NEXT:/HANDOFF: is still the right call; use this for the rest. A line set into a "Handoff <agent>" section is journaled as a handoff, as HANDOFF: is. The section is created if missing (you get created:true back — check it, a typo is how a card grows two nearly identical headings).',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' },
       section: { type: 'string', description: 'a key from hub sections (gates, metrics, market, ...) or the literal heading as it appears in the card' },
@@ -63,7 +63,7 @@ const TOOLS = [
     }, required: ['project', 'section', 'text', 'by'] } },
 
   { name: 'hub_report',
-    description: 'Append a session report to the shared journal: what was done / broken / blocked.',
+    description: 'Append a session report to the shared journal: what was done / broken / blocked. Lines are routed by prefix: DECIDE: (what | why), FACT:, HYPO:, COMM:, NEXT:, DONE: <id>, TASK:, NOTE:, TO:, HANDOFF:. HANDOFF: lines replace your own "## Handoff <agent>" section of the card with where your work stands and the next step, dated, and file a `handoff` journal entry; hub_context hands it to the next session.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'the project slug, as hub_status lists it' }, agent: { type: 'string' },
       text: { type: 'string' },
@@ -95,7 +95,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'project slug or name' } }, required: ['project'] } },
 
   { name: 'hub_context',
-    description: 'Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary. project is null with a hint if nothing matched.' +
+    description: 'Where am I — the first call of a session and the first call after a context compaction. Resolves which hub project YOUR working directory belongs to, most to least certain: a .hubd marker file (repo root, first line = project slug) · a project card\'s recorded sync path · the repo folder name as a last-resort guess (guessed:true, with the one-line fix in `hint`). Returns {project, via, root, guessed, digest, digestSetAt, digestSetBy, laws, digestAgeDays, digestStale?, openTasks, activeClaims, journalTail, handoffs, presenceHere, claimsTouched}, the fields that change least first. digestStale is the same verdict hub_status gives — a digest can be four months behind its own journal and still read as current; presenceHere lists live heartbeats whose cwd is under this root — who else is editing this checkout right now; journalTail is the last few entries of the project, so resuming reads state, not a summary; handoffs are the project\'s "## Handoff <agent>" sections as {agent, at, ageHours, text}, yours first and whole (own:true), then the newest ' + VIEW.handoffs + ' of the others cut to ' + VIEW.handoffText + ' chars (cut: the whole length). project is null with a hint if nothing matched.' +
       (SMALL ? ` Compact: the first ${VIEW.contextTasks} open tasks, each text cut to ${VIEW.taskText} chars; full:true for all of them whole.` : ''),
     inputSchema: { type: 'object', properties: {
       cwd: { type: 'string', description: "Absolute path to YOUR OWN current working directory — this cannot be inferred by the server (it may serve many agents in many directories), so pass it explicitly." },
@@ -103,6 +103,7 @@ const TOOLS = [
       journalTail: { type: 'integer', description: 'how many recent journal entries of the project to include, default ' + VIEW.journal },
       agent: { type: 'string', description: 'you — so `claimsTouched` (live claims whose glob covers a file changed here in the last recentMinutes) leaves your own claims out' },
       recentMinutes: { type: 'integer', description: 'window for claimsTouched, default 30' },
+      handoffs: { type: 'integer', description: 'how many other agents\' handoffs to include, newest first, default ' + VIEW.handoffs },
     }, required: ['cwd'] } },
 
   { name: 'hub_search', description: 'Full-text search across every project card and the entire journal, archived months included. Returns each matching line with its location. START HERE whenever you know a keyword, a task id or a name but not which project owns it — searching once beats guessing project × status against hub_task_list, which is how sessions have actually wasted calls. Also the way to find where something was discussed or decided.',
@@ -440,7 +441,7 @@ const DISPATCH = {
       ...(r.patched ? { patched: r.patched.length } : {}), ...(r.rotated ? { rotated: r.rotated } : {}) };
   },
   hub_section_add: runSectionAdd,
-  hub_get: runGet, hub_search: runSearch, hub_context: (a) => runContext({ ...a, journalTail: a.journalTail ?? VIEW.journal }),
+  hub_get: runGet, hub_search: runSearch, hub_context: (a) => runContext({ ...a, journalTail: a.journalTail ?? VIEW.journal, handoffs: a.handoffs ?? VIEW.handoffs, handoffText: VIEW.handoffText }),
   // The caller wrote the text a moment ago; echoing 2-3 KB of it back is context spent on nothing
   // (task maple-83). Id and the shape of what was filed by default, the whole task on
   // verbose:true — the engine's return is unchanged for the CLI and the tests.

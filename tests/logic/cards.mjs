@@ -170,6 +170,52 @@ ok(r3.next && r3.nextReplaced && r3.nextReplaced.by === 'owner-t' && /^- publish
   'report: force replaces the owner step, keeps it as prev, and reports it');
 const r4 = core.runReport({ project: 'proj', by: 'owner-t', text: 'NEXT: owner changes own mind' });
 ok(r4.next && r4.nextReplaced && r4.nextReplaced.text === 'publish v19', 'report: an owner replaces any step without force');
+
+// ── HANDOFF: the author's own section, replaced whole, journaled as its own kind ──
+const hoBefore = core.journalTail('proj', 500).length;
+const h1 = core.runReport({ project: 'proj', by: 'role-a', text: 'HANDOFF: built the parser, tests green\nHANDOFF: next: push branch parse-v2' });
+let hb = core.sectionBody(core.readCard('proj'), 'Handoff role-a');
+ok(h1.handoff === 'Handoff role-a' && h1.handoffReplaced === undefined && h1.note === false,
+  `report: HANDOFF: writes the author's own section and files no note (got ${JSON.stringify({ h: h1.handoff, r: h1.handoffReplaced, n: h1.note })})`);
+ok(/^- \d{4}-\d{2}-\d{2} \d{2}:\d{2}: built the parser, tests green\n  next: push branch parse-v2$/.test(hb),
+  `report: a handoff is one dated entry, the lines after the first its continuation (got ${JSON.stringify(hb)})`);
+let hj = core.journalTail('proj', 500).slice(hoBefore);
+ok(hj.length === 1 && hj[0].kind === 'handoff' && hj[0].agent === 'role-a' && hj[0].text === 'built the parser, tests green · next: push branch parse-v2'
+  && hj[0].card && hj[0].card.sections.includes('Handoff role-a'),
+  `report: HANDOFF: files one handoff entry, whole, carrying the card write's trace (got ${JSON.stringify(hj)})`);
+const h2 = core.runReport({ project: 'proj', by: 'role-a', text: 'HANDOFF: pushed parse-v2, waiting for review' });
+hb = core.sectionBody(core.readCard('proj'), 'Handoff role-a');
+ok(/pushed parse-v2/.test(hb) && !/built the parser/.test(hb) && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(h2.handoffReplaced || ''),
+  `report: a second HANDOFF: replaces the first and says when that one was written (got ${JSON.stringify(h2.handoffReplaced)})`);
+core.runReport({ project: 'proj', by: 'role-b', text: 'FACT: the lexer is stable\nHANDOFF: lexer done' });
+ok(/pushed parse-v2/.test(core.sectionBody(core.readCard('proj'), 'Handoff role-a')) && /lexer done/.test(core.sectionBody(core.readCard('proj'), 'Handoff role-b')),
+  'report: each agent has its own handoff section; one does not overwrite another');
+let hErr = null;
+try { core.runReport({ project: 'proj', by: 'role-a', text: 'HANDOFF: secret', private: true }); } catch (e) { hErr = e.message; }
+ok(hErr && /private/.test(hErr) && /HANDOFF/.test(hErr), `report: a private HANDOFF: is refused, since cards are synced (got ${hErr})`);
+fs.writeFileSync(path.join(TRP, 'limits.json'), JSON.stringify({ card: { sectionBytes: 120 } }));
+hErr = null;
+try { core.runReport({ project: 'proj', by: 'role-a', text: 'DECIDE: something | because\nHANDOFF: ' + 'y'.repeat(200) }); } catch (e) { hErr = e.message; }
+fs.rmSync(path.join(TRP, 'limits.json'));
+ok(hErr && /section limit of 120/.test(hErr) && /pushed parse-v2/.test(core.sectionBody(core.readCard('proj'), 'Handoff role-a'))
+  && !core.journalTail('proj', 500).some(e => /something/.test(e.text || '')),
+  `report: a handoff over the section cap is refused before anything is written (got ${hErr})`);
+const hs = core.runSectionAdd({ project: 'proj', section: 'Handoff role-c', mode: 'set', by: 'role-c', text: 'z'.repeat(150) });
+hj = core.journalTail('proj', 500);
+ok(hs.created && hj[hj.length - 1].kind === 'handoff' && hj[hj.length - 1].text === 'z'.repeat(150),
+  'section add: a line set into "Handoff <agent>" is journaled as a handoff, whole');
+core.runSectionAdd({ project: 'proj', section: 'Handoff role-d', by: 'role-a', text: 'for role-d' });
+hj = core.journalTail('proj', 500);
+ok(hj[hj.length - 1].kind === 'handoff' && hj[hj.length - 1].text === 'Handoff role-d: for role-d', 'section add: a handoff written for another agent names whose it is');
+const hList = core.cardHandoffs(core.readCard('proj'));
+ok(hList.length === 4 && hList.every(h => /^\d{4}-/.test(h.at) && h.ageHours >= 0 && h.ageHours < 1)
+  && hList.find(h => h.agent === 'role-a').text === 'pushed parse-v2, waiting for review',
+  `cardHandoffs: every section read back with its date and age, the stamp taken off the text (got ${JSON.stringify(hList)})`);
+const legacy = core.handoffOf('Handoff old', '- 2026-09-18 14:18: newer\n- 2026-09-14 21:47: older', Date.parse('2026-09-18T16:18:00Z'));
+ok(legacy.at === '2026-09-18 14:18' && legacy.ageHours === 2 && /older/.test(legacy.text),
+  `handoffOf: an appended section dates from its newest entry and keeps its text whole (got ${JSON.stringify(legacy)})`);
+ok(core.handoffOf('Handoff x', '<placeholder>') === null && core.handoffOf('Decisions', '- 2026-01-01 00:00: a') === null,
+  'handoffOf: a placeholder or another section is no handoff');
 fs.rmSync(TRP, { recursive: true, force: true });
 
 // ── sections.json: ONE i18n source drives BOTH the scaffold AND report routing (0.2.0) ──

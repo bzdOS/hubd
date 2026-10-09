@@ -130,6 +130,22 @@ ok(ctxFull.project === 'proj5' && ctxFull.via === 'marker', 'runContext: resolve
 ok(/the digest text/.test(ctxFull.digest || ''), `runContext: digest extracted from the card (got ${ctxFull.digest})`);
 ok(Array.isArray(ctxFull.openTasks) && ctxFull.openTasks.some(t => /do the thing/.test(t.text)), 'runContext: openTasks includes the seeded task');
 ok(Array.isArray(ctxFull.activeClaims) && ctxFull.activeClaims.some(c => c.area === 'app'), 'runContext: activeClaims includes the seeded claim');
+ok(Array.isArray(ctxFull.handoffs) && ctxFull.handoffs.length === 0, 'runContext: a card with no handoff gives an empty list');
+core.runReport({ project: 'proj5', by: 'dev-me', text: 'HANDOFF: ' + 'm'.repeat(700) + '\nHANDOFF: then the second line' });
+core.runReport({ project: 'proj5', by: 'other', text: 'HANDOFF: ' + 'o'.repeat(700) });
+{
+  const hc = core.runContext({ cwd: ctxFullDir, agent: 'dev-me' }).handoffs;
+  ok(hc.length === 2 && hc[0].agent === 'dev-me' && hc[0].own === true && hc[0].text === 'm'.repeat(700) + '\nthen the second line' && !hc[0].cut,
+    `runContext: the caller's own handoff comes first and whole (got ${JSON.stringify(hc.map(h => [h.agent, h.own, h.text.length, h.cut]))})`);
+  ok(hc[1].agent === 'other' && !hc[1].own && hc[1].text.length === 600 && hc[1].cut === 700 && typeof hc[1].ageHours === 'number',
+    'runContext: another agent\'s handoff is cut, says how long the whole is, and carries its age');
+  const none = core.runContext({ cwd: ctxFullDir, agent: 'dev-me', handoffs: 0 }).handoffs;
+  ok(none.length === 1 && none[0].own, 'runContext: handoffs:0 leaves only the caller\'s own');
+  const w = cli(['whereami', ctxFullDir, '--agent', 'dev-me'], { env: { HUBD_DIR: ctxRoot5 } });
+  ok(w.code === 0 && /^handoffs:$/m.test(w.out) && /^  dev-me \(you\), 0(\.\d)?h ago: m+$/m.test(w.out) && /^    then the second line$/m.test(w.out)
+    && /^    … hub card show proj5 --section "Handoff other"$/m.test(w.out),
+    `whereami: prints the handoffs, yours whole, another's cut with where to read the rest (got ${w.out.slice(w.out.indexOf('handoffs:'), w.out.indexOf('handoffs:') + 300)})`);
+}
 let ctxThrew = false;
 try { core.runContext({}); } catch { ctxThrew = true; }
 ok(ctxThrew, "runContext: throws without cwd (never silently falls back to the server's own cwd)");
