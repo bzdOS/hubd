@@ -10,7 +10,7 @@ import {
   runTaskList, runTaskUpdate, runTaskGet, runClaim, runClaimCheck, runRelease, runKanban, setAuthorTransport,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
-  envChecks, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
+  envChecks, ackEnvNotices, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
   PRESET,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
@@ -216,7 +216,7 @@ const TOOLS = [
     }, required: ['agent'] } },
 
   { name: 'hub_usage',
-    description: 'What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add, since the hub cannot see them) and MEASURED (closed-task spans and journal events, the hub\'s own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.',
+    description: 'What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add: what the hub can neither measure nor read; a session\'s tokens are READ by hub_stats) and MEASURED (closed-task spans and journal events, the hub\'s own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.',
     inputSchema: { type: 'object', properties: {
       days: { type: 'integer', description: 'default 7' }, project: { type: 'string' }, agent: { type: 'string' },
     } } },
@@ -691,14 +691,20 @@ function missingRequired(name, args, raw) {
 // Asked as THIS session, the one hub_whatsnew acknowledges: asked as nobody, a session that
 // had already been told about a protocol change was told again on every result until the
 // next release, because "nobody" never acknowledges anything.
+// A session whose HUBD_TOOLS leaves hub_whatsnew out has nothing that acknowledges, and was told
+// on every result until the next release all the same. There this line is the telling: said once,
+// then recomputed on the next call, which no longer finds it.
 let envNudgeLine = null, envNudgeAt = 0;
 function envNudge() {
   if (envNudgeAt && Date.now() - envNudgeAt < 5 * 60000) return envNudgeLine;
   envNudgeAt = Date.now();
   let n = null;
   try {
-    const env = envChecks({ session: SERVE_MODE === 'http' ? null : sessionId(), transport: SERVE_MODE });
-    if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — ${offered('hub_whatsnew', SERVE_MODE) ? 'hub_whatsnew' : '`hub doctor`'} lists them with what to do.`;
+    const session = SERVE_MODE === 'http' ? null : sessionId();
+    const env = envChecks({ session, transport: SERVE_MODE });
+    const hasWhatsnew = offered('hub_whatsnew', SERVE_MODE);
+    if (env.total) n = `⚠ environment: ${env.total} item(s) need attention (${env.items[0].id}${env.total > 1 ? ', …' : ''}) — ${hasWhatsnew ? 'hub_whatsnew' : '`hub doctor`'} lists them with what to do.`;
+    if (session && !hasWhatsnew && env.items.some(i => i.id === 'protocol-changed')) { ackEnvNotices(session); envNudgeAt = 0; }
   } catch {}
   return (envNudgeLine = n);
 }

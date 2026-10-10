@@ -208,7 +208,11 @@ What the last session was in the middle of is its handoff. A `HANDOFF:` line in 
 report replaces the author's own `## Handoff <agent>` section of the card, dated:
 
 ```bash
-hub report -p shop -m "HANDOFF: payment page wired on branch pay, webhook not yet; next: verify the webhook signature"
+hub report -p shop --agent dev-shop -m "HANDOFF: payment page wired on branch pay, webhook not yet; next: verify the webhook signature"
+```
+
+```text
+Reported to shop: handoff → ## Handoff dev-shop
 ```
 
 and `hub whereami` (or `hub_context`) prints it under `handoffs:` with its age, the

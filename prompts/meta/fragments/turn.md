@@ -15,7 +15,7 @@
 - A turn lasts no longer than 40 minutes. Anything longer (a build, a test run) goes to the background with a log
   (`command > log 2>&1 &`, note the pid). The turn exits; the next turn starts by checking the log.
 - A dispatch without an acceptance criterion is a defect of the dispatch: ask for one in a single line, do not guess.
-- When the context is filling up: first a report to the hub with the state, then compaction.
+- When the context is filling up: first a report with a `HANDOFF:` line (where the work stands), then compaction.
 - Your working directory is `{{cwd}}`. You may write and go only along the paths below; anything else is a client refusal:
 {{allowed_paths}}
   A path outside the list is not something to work around but a report `obstacle: permissions` (see the reflection).

@@ -251,7 +251,7 @@ export function writeDemo(dir, { nowMs = Date.now(), version = '' } = {}) {
     '4. What a head cannot decide goes to coord; what coord cannot decide goes to the owner, who answers in the infra card\'s Owner decisions.',
     '5. Every turn ends with a reflection. A rule the team keeps proposing goes to the head, who makes it a law or rejects it.', '',
   ].join('\n'));
-  put('INBOX.md', '# INBOX — team journal\n\nNewest entries on top — prepend your handoff before you stop.\n');
+  put('INBOX.md', '# INBOX — notes between people\n\nNewest on top: prepend yours. Agents report to the hub, not here.\n');
   put(MARKER, `made by hub demo at ${at(0)}; running hub demo here again replaces this folder\n`);
 
   return { dir, files, projects: ['atlas', 'relay', 'infra'], tracks: ['atlas', 'relay'], roles: ROLES.length, nodes: ['fir', 'pine', 'maple'],

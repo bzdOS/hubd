@@ -189,7 +189,7 @@ const REPORT_TEMPLATE = [
   'HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)',
   'VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>  # a head on a piece of work',
   '',
-  '# Example:  hub report -p hubd <<EOF',
+  '# Example:  hub report -p hubd <<\'EOF\'',
   '#   DECIDE: ship docs in the release | npm README drifted',
   '#   FACT: registry JWT expires in minutes',
   '#   NEXT: redeploy vm1 under 0.1.8',
@@ -321,10 +321,11 @@ per the rules you write in this section. (Full org template: hubd-company/ in th
 hubd repository.)
 `;
 
-const INBOX_MD = `# INBOX — team journal
+const INBOX_MD = `# INBOX — notes between people
 
-Newest entries on top — prepend your handoff before you stop.
-Agents: read this on wake-up, write a handoff entry before stopping.
+Newest on top: prepend yours. One line each: the date, who, what is left and for whom.
+Agents read the top on wake-up and report to the hub (\`hub report\`, \`HANDOFF:\` for
+where their work stands), not here.
 `;
 
 const QUEUES_README_MD = `# queues/
@@ -2300,15 +2301,15 @@ const HELP = [
   ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json | --exec <cmd>]', 'new journal entries, each shown once to the cursor <name>',
     'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to <cmd> on stdin, marked when it exits 0'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
-  ['report [-p <proj>] [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
-    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
+  ['report [-p <proj>] --agent <you> [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
+    'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF:/VERDICT: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
   ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
   ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said 3 times by one role, or by 2 roles"],
   ['reflect --accept|--reject <id> --project <proj> --by <head>', "the head's verdict on a candidate; an accepted one is a law, in hub_context"],
   ['reflect --laws --project <proj>', "the project's laws, one per line"],
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
-  ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
+  ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
   ['task done <id> --by <you>', 'close a task'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
   ['task get <id> [--json]', 'one task, and where else its id appears'],

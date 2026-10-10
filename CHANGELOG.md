@@ -4,6 +4,38 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.68 — 2026-10-10
+
+- **The Harvest prompt writes what the hub accepts.** Pasted where the chat has no hubd
+  tools, its commands named no author and were refused unless `HUBD_AGENT` was set, and
+  an unquoted heredoc let the shell expand `$` and backticks in the text; they now carry
+  `--by` / `--agent` and `<<'EOF'`. `hub card -m` replaces a whole digest, so it is only
+  for a project the hub does not have yet; with tools, a card the hub has is patched
+  (`replace`, `appendLine`), and what the dialog changed goes into the report. A task
+  names its assignee and category, fields `hub_task_add` has, instead of an owner kind,
+  counterpart, channel and waiting state it never had; waiting on a reply is a `COMM:`
+  line. A secret is never copied: the hub gets that it exists and where it is kept.
+- **The protocol says when to report, and what a handoff is.** "Reporting — structured,
+  at session end" is now "when something is settled": a session that compacts never
+  ends. `HANDOFF:` is the one handoff. Passing work to another agent is "Passing work
+  on", and `INBOX.md` is a row of the channel table, notes between people that agents
+  read and do not write: the session ritual no longer asks them for an INBOX line, and
+  the INBOX that `hub init` and `hub demo` write says so. "What the work costs" no
+  longer opens with "it cannot see tokens", which 0.9.67 made untrue, nor do the note
+  `hub usage` prints and the `hub_usage` description; `VERDICT:` shows its `ref=<sha>`.
+- **Role rules.** The report fragment carries `HANDOFF:`, and a filling context is
+  written down as one before compaction. A head's dispatch names the task it serves
+  (`task` / `--task`): a dispatch without one is work no task is counted against.
+- **Client blocks** for CLAUDE.md, AGENTS.md and .cursorrules start a session with
+  `hub_context({cwd})` / `hub whereami` instead of `hub_brief`, and report when a step is
+  settled, not at the end.
+- **`protocol-changed` once, also without `hub_whatsnew`.** A session whose `HUBD_TOOLS`
+  left `hub_whatsnew` out had nothing to acknowledge the notice with, and the line on
+  every result said it until the next release. There the line itself is the telling:
+  said once.
+- `hub help`: `report` lists `VERDICT:` and `--agent`; `task add` lists `--cat`, `--tag`
+  and `--assignee`.
+
 ## 0.9.67 — 2026-10-09
 
 - **`hub stats`: what the sessions cost per task, and what came of it.** The hub knew who

@@ -539,7 +539,7 @@ Record what only YOU can see about a piece of work: seconds, tokens, cost, model
 
 ### hub_usage
 
-What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add, since the hub cannot see them) and MEASURED (closed-task spans and journal events, the hub's own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.
+What the work cost, over a window, per project and per agent — with a hard line between SUPPLIED (seconds/tokens/money, reported by clients through hub_usage_add: what the hub can neither measure nor read; a session's tokens are READ by hub_stats) and MEASURED (closed-task spans and journal events, the hub's own arithmetic). The split is the point: a cost number that mixes an observed span with a guessed rate gets quoted later as if someone had counted.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

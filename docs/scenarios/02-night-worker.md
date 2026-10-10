@@ -166,7 +166,7 @@ BUTTONS: 1 waiting (oldest 0d) — alice
 SUPPLIED by callers (3 report(s)): 84 min · 1514000 tokens · $5.33
   wiki: 84 min · 1514000 tokens · $5.33
 MEASURED by the hub: 2 task(s) closed, median 0d open-to-close
-note: seconds/tokens/cost are SUPPLIED by callers (hub_usage_add) — the hub cannot observe them. tasksClosed and journal events are MEASURED from its own logs.
+note: seconds/tokens/cost here are SUPPLIED by callers (hub_usage_add); what a session spent is READ by hub stats, apart. tasksClosed and journal events are MEASURED from its own logs.
 ```
 
 Two tasks closed, one parked on a question, $5.33, and one button. No transcript to

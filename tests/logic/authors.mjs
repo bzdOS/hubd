@@ -351,12 +351,10 @@ ok(httpWn('dev-alpha'), 'whatsnew over HTTP: an agent is told about the protocol
 ok(!httpWn('dev-alpha'), 'whatsnew over HTTP: and not told twice');
 ok(httpWn('dev-beta'), 'whatsnew over HTTP: another agent on the same server is still told');
 
-// The same, through the line every MCP result carries. It asked as nobody, so a session told by
-// hub_whatsnew was told again on every result until the next release. One long-lived server, call
-// by call, because the line is also cached for minutes.
-{
+// One long-lived stdio server as one session: ask(method, params) and the footer of a plain call.
+function mcpSession(env) {
   const child = reap(spawn('node', [path.join(REPO, 'hub/index.mjs')], {
-    env: { ...process.env, HUBD_DIR: EV, HUBD_TEAM_DIR: EV, HUBD_AGENT: 'dev-hubd', HUBD_SESSION: 'footer' },
+    env: { ...process.env, HUBD_DIR: EV, HUBD_TEAM_DIR: EV, HUBD_AGENT: 'dev-hubd', ...env },
     stdio: ['pipe', 'pipe', 'ignore'] }));
   const waiting = new Map();
   let buf = '';
@@ -377,13 +375,31 @@ ok(httpWn('dev-beta'), 'whatsnew over HTTP: another agent on the same server is 
   });
   const footer = async () => (await ask('tools/call', { name: 'hub_presence', arguments: {} }))
     .result.content.slice(1).map(c => c.text).join('\n');
+  return { ask, footer, kill: () => child.kill() };
+}
+// The same, through the line every MCP result carries. It asked as nobody, so a session told by
+// hub_whatsnew was told again on every result until the next release. One long-lived server, call
+// by call, because the line is also cached for minutes.
+{
+  const { ask, footer, kill } = mcpSession({ HUBD_SESSION: 'footer' });
   await ask('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } });
   const before = await footer();
   ok(/protocol-changed/.test(before), `footer: a session not yet told sees the protocol change (got ${before})`);
   await ask('tools/call', { name: 'hub_whatsnew', arguments: { agent: 'dev-hubd' } });
   const after = await footer();
   ok(!/protocol-changed/.test(after), `footer: once hub_whatsnew told it, the session is not told again (got ${after})`);
-  child.kill();
+  kill();
+}
+// A session whose tools leave hub_whatsnew out has nothing to acknowledge with, and was told on
+// every result until the next release. The line itself is the telling there: once.
+{
+  const { ask, footer, kill } = mcpSession({ HUBD_SESSION: 'footer-bare', HUBD_TOOLS: 'hub_presence' });
+  await ask('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } });
+  const first = await footer();
+  ok(/protocol-changed/.test(first) && /hub doctor/.test(first), `footer without hub_whatsnew: told, and pointed at hub doctor (got ${first})`);
+  const second = await footer();
+  ok(!/protocol-changed/.test(second), `footer without hub_whatsnew: told once, not on every result (got ${second})`);
+  kill();
 }
 
 // The floor check reads the environment it actually runs in.

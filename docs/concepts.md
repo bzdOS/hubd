@@ -69,7 +69,7 @@ without conflict; a card, which any node may edit, merges by section once
 | **candidate** | A rule said 3 times by one role, or by 2 roles, within 7 days. | `hub reflect --promote` |
 | **law** | A candidate the head accepted: a line of the card's Laws section, given to every role of the project. | the card's `## Laws` |
 | **AGENTS.md** | The team's own rules, yours to write. | the team folder |
-| **INBOX.md** | Hand-off notes between sessions, newest on top, written by hand. | the team folder |
+| **INBOX.md** | Notes between people, newest on top, written by hand. Agents read it and report to the hub. | the team folder |
 | **HUBD.md** | hubd's mechanics for agents, regenerated on each node from the installed version. Never synced. | the hub |
 | **board** | `hub serve`: Summary, Tracks, Live, History. Read-only; its one button opens the rules. | `localhost:7777` |
 
@@ -128,7 +128,7 @@ flowchart LR
 ## How each part works
 
 - **Journal & structured reports** — an append-only team log you read with your
-  eyes. At session end an agent files a `hub report` of prefix-tagged lines
+  eyes. When a step is settled an agent files a `hub report` of prefix-tagged lines
   (`DECIDE: … | why`, `FACT:`, `COMM:`, `NEXT:`, `DONE: ids`, `HANDOFF:`) that fan into the project
   card's sections — structure in fields, not one prose blob. "What changed" is read
   from git, not retyped. The card's section headings (in any language) come from one
