@@ -102,8 +102,8 @@ export function runUsage(a = {}) {
     supplied,
     measured: { tasksClosed: closed.length, medianDaysToClose: median, journalEventsByProject: events },
     note: supplied.calls
-      ? 'seconds/tokens/cost are SUPPLIED by callers (hub_usage_add) — the hub cannot observe them. tasksClosed and journal events are MEASURED from its own logs.'
-      : 'nothing supplied in this window: the hub cannot see time, tokens or money — a client has to report them with hub_usage_add. The measured half below is the hub\'s own arithmetic.',
+      ? 'seconds/tokens/cost here are SUPPLIED by callers (hub_usage_add); what a session spent is READ by hub stats, apart. tasksClosed and journal events are MEASURED from its own logs.'
+      : 'nothing supplied in this window: what the hub can neither measure nor read arrives through hub_usage_add (a session\'s tokens are read by hub stats). The measured half below is the hub\'s own arithmetic.',
     generated: now(),
   };
 }

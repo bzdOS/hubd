@@ -12,11 +12,11 @@ policy) live in `AGENTS.md`, which is yours to write; this file is the tool's ma
 | "this needs doing" | `hub task add "<text>" -p <proj>` | until closed |
 | "this is now true / decided / learned / shipped" | `hub report` (below) | durable — journal + card |
 | "agent, do this" | `hub queue send <role> "<text>" --from <you>` | until consumed |
+| a note between people | `INBOX.md`, newest on top — agents read it, never write it | by hand |
 | a trivial step ("starting", "looking", "still going") | NOTHING | — |
 
 Report SUBSTANCE, never play-by-play. "I'm on it / in progress" is a **claim**, not a
-report. A trivial step is **nothing**. Spamming the journal with progress is the failure
-mode this table exists to prevent.
+report. Spamming the journal with progress is the failure mode this table exists to prevent.
 
 A claim's `area` is a path glob relative to the project root — `src/**/*.ts`,
 `docs/{a,b}.md`, a bare directory, several joined with ` + ` — so that `hub claim check
@@ -52,10 +52,9 @@ hubd does not know what you are working on — you do. Re-read the ones that tou
 
 `agent` / `by` is **required** on everything that writes: report, sync, card set, task
 add, task update, resource set, claim, heartbeat, whatsnew — and `from` on queue send,
-because a delivered block says "from <sender>" forever. The journal is append-only,
-so a write that lands unattributed stays unattributable forever. The three are synonyms:
-name yourself under any one of them and every tool reads that name; `HUBD_AGENT` fills in
-only when a call named nobody at all.
+because a delivered block says "from <sender>" forever, and so does the append-only journal.
+The three are synonyms: name yourself under any one of them and every tool reads that name;
+`HUBD_AGENT` fills in only when a call named nobody at all.
 
 Name **the function you are performing** — `dev-hubd`, `reviewer-bsdos`,
 `orchestrator`. Not which model you are: that is recorded in your client's own
@@ -65,16 +64,17 @@ model or client names (`claude`, `opus`, `gpt`, `cursor`, `opencode`) and placeh
 (`unknown`, `cli`, `root`, `agent`) are refused, and the error will say so.
 
 If a call of yours is rejected for this, do not retry with a placeholder — pick the
-name that says what you are doing. Whoever configured your server may have set
-`HUBD_AGENT` as a floor, in which case an omitted author becomes that name plus a
-per-session suffix rather than an error; being explicit still beats the floor.
+name that says what you are doing. A `HUBD_AGENT` set by whoever configured your server is a
+floor: an omitted author becomes that name plus a per-session suffix. Explicit still beats it.
 
-## Reporting — structured, at session end
+## Reporting — structured, when something is settled
 
-File ONE `hub report` of prefix-tagged lines; each routes into the project card. Many
-decisions/facts = many lines (one per line):
+When a step is settled — decided, learned, shipped, closed, or your own state moved — file ONE
+`hub report` of prefix-tagged lines; each routes into the project card. Many decisions/facts =
+many lines (one per line). Not only at the end: a session that compacts never ends, and what it
+held back goes with its context. The quoted `'EOF'` keeps `$` and backticks in the text as written:
 
-    hub report -p <proj> <<EOF
+    hub report -p <proj> <<'EOF'
     DECIDE: <what> | <why>      # -> Decisions
     FACT:   <reusable fact>     # -> Facts & hypotheses
     HYPO:   <belief, unproven>  # -> Facts & hypotheses
@@ -84,7 +84,7 @@ decisions/facts = many lines (one per line):
     TASK:   <new task text>               # opens a task
     NOTE:   <one-line, anything else>
     HANDOFF: <where your work stands, the next step>   # -> Handoff <you>, replaced
-    VERDICT: accept|reject #<task> [of=<agent>] — <why>  # a head: the outcome of an attempt
+    VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>  # a head: the outcome of an attempt
     EOF
 
 - Do NOT list files/commits — "what changed" is read from git, not retyped.
@@ -243,10 +243,10 @@ Not everything belongs to a project.
 
 ## What the work costs
 
-The hub knows WHO did WHAT. It cannot see time, tokens or money — so `hub_usage_add` is how those
-arrive (`seconds`, `tokensIn`, `tokensOut`, `costUsd`, `model`), and `hub usage` reports them as
-**SUPPLIED**, separately from what it **MEASURED** itself (closed-task spans, journal events).
-Keep the halves apart when you quote them: a cost that mixes an observed span with a guessed rate
+The hub knows WHO did WHAT, and reads what a session spent (below). What it can neither measure
+nor read arrives through `hub_usage_add` (`seconds`, `tokensIn`, `tokensOut`, `costUsd`, `model`),
+and `hub usage` reports it as **SUPPLIED**, separately from what it **MEASURED** itself
+(closed-task spans, journal events). Keep the classes apart when you quote them: a cost that mixes an observed span with a guessed rate
 gets repeated later as if somebody had counted.
 
 What a session spent is not supplied: it is READ. `hub sessions ingest` reads a client's session
@@ -256,7 +256,7 @@ step to the tasks its role was working on (an order sets them, a close takes one
 it at list price (`hub price pull`, `hub price map` for a local model): a NOTIONAL dollar, never a
 bill. So an order names its task: `hub_queue_send` with `task`, or the work it starts is counted as
 unbound. A head says what came of the work with one line in its report, `VERDICT: accept #<task>
-of=<agent> — <why>` (or `reject`); the stats read the outcome of each attempt from it, the Summary
+of=<agent> ref=<sha> — <why>` (or `reject`; `of` and `ref` may be left out); the stats read the outcome of each attempt from it, the Summary
 and the board read it as the head's verdict, and no task status changes. A malformed VERDICT line,
 or one naming an unknown or ambiguous task, refuses the whole report.
 
@@ -484,8 +484,8 @@ were his, the oldest 80 days: the queue had been read, the decisions never made.
 either list. hubd does not hibernate, defer or close your work because you did not answer — silence
 is not consent, and a default executed in your name is not a default, it is a decision.
 
-### Handoff convention — the queue IS the channel, not the terminal
-When you hand a task to another agent, the task text goes in the QUEUE (`hub queue send`),
+### Passing work on — the queue IS the channel, not the terminal
+When you pass a task to another agent, the task text goes in the QUEUE (`hub queue send`),
 a durable file that mesh/Zenoh-replicates across nodes. Do NOT paste task bodies into an
 agent's terminal — that is a fragile side-channel. If you must poke a running agent, send
 only a short pointer ("new work in your queue"); the substance lives in the queue.
@@ -603,5 +603,5 @@ own 170s default / 540s max; the loop still never stops for input, it just takes
 1. Read `AGENTS.md` (team constitution) + this `HUBD.md` (mechanics) + the top of `INBOX.md`.
 2. Before touching a shared area, `hub claim` it, with the area as a path glob; before editing a
    shared file, `hub claim check <path>` (see Channels for how areas match).
-3. At the end: ONE structured `hub report` (substance only — see Channels; `HANDOFF:` for
-   whoever resumes) + one INBOX line for the humans.
+3. When a step is settled and before you stop: ONE structured `hub report` (substance only —
+   see Channels; `HANDOFF:` for whoever resumes).

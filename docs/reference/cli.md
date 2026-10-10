@@ -129,9 +129,9 @@ Also: `hub where`
 
 ## report
 
-- `hub report [-p <proj>] [--reflect <json|file>]` — structured report → card sections (no input prints the template)
+- `hub report [-p <proj>] --agent <you> [--reflect <json|file>]` — structured report → card sections (no input prints the template)
 
-  DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF: lines, via stdin (heredoc) or -m; --reflect: the turn's reflection as checked fields
+  DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF:/VERDICT: lines, via stdin (heredoc) or -m; --reflect: the turn's reflection as checked fields
 
 ## reflect
 
@@ -150,7 +150,7 @@ Also: `hub where`
 
 ## task
 
-- `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
+- `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
 - `hub task done <id> --by <you>` — close a task
 - `hub task list [-p proj] [--status open|done|all] [--json]` — tasks
 - `hub task get <id> [--json]` — one task, and where else its id appears
@@ -322,16 +322,17 @@ The commands each flag appears with, in their usage lines.
 | --- | --- |
 | `--accept` | [reflect](#reflect) |
 | `--addr` | [resource](#resource) |
-| `--agent` | [setup](#setup), [log](#log), [claim](#claim), [release](#release), [usage](#usage) |
+| `--agent` | [setup](#setup), [log](#log), [report](#report), [claim](#claim), [release](#release), [usage](#usage) |
 | `--alive` | [presence](#presence) |
 | `--all` | [board](#board) |
 | `--append` | [rules](#rules) |
 | `--append-line` | [card](#card) |
 | `--apply` | [task](#task), [cards](#cards), [absorb](#absorb), [audit](#audit), [gc](#gc), [queue](#queue) |
 | `--as` | [watch](#watch), [absorb](#absorb), [queue](#queue) |
-| `--assignee` | [now](#now) |
+| `--assignee` | [now](#now), [task](#task) |
 | `--attr` | [resource](#resource) |
 | `--by` | [reflect](#reflect), [task](#task), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [price](#price), [rules](#rules), [audit](#audit), [gc](#gc) |
+| `--cat` | [task](#task) |
 | `--check` | [setup](#setup), [prompts](#prompts), [stats](#stats) |
 | `--cost` | [usage](#usage) |
 | `--cwd` | [heartbeat](#heartbeat) |
@@ -387,6 +388,7 @@ The commands each flag appears with, in their usage lines.
 | `--stale-days` | [recall](#recall) |
 | `--status` | [task](#task), [resource](#resource), [heartbeat](#heartbeat) |
 | `-t` | [claim](#claim) |
+| `--tag` | [task](#task) |
 | `--task` | [claim](#claim), [release](#release), [heartbeat](#heartbeat), [usage](#usage), [stats](#stats), [queue](#queue) |
 | `--tasks` | [queue](#queue) |
 | `--timeout` | [queue](#queue) |

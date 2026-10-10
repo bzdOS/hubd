@@ -24,7 +24,7 @@ NOTE:   <one-line anything-else>
 HANDOFF: <where your work stands, the next step>  # → ## Handoff <you> (set)
 VERDICT: accept|reject #<task> [of=<agent>] [ref=<sha>] — <why>  # a head on a piece of work
 
-# Example:  hub report -p hubd <<EOF
+# Example:  hub report -p hubd <<'EOF'
 #   DECIDE: ship docs in the release | npm README drifted
 #   FACT: registry JWT expires in minutes
 #   NEXT: redeploy vm1 under 0.1.8

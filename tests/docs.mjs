@@ -190,6 +190,7 @@ const MASKS = [
   [/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?( ?Z| \+0000)?/g, '<time>'],
   [/\b\d{2}-\d{2} \d{2}:\d{2}\b/g, '<time>'],
   [/\b\d{4}-\d{2}-\d{2}\b/g, '<date>'],
+  [/(?<=-)20\d{2}[01]\d[0-3]\d(?=\.)/g, '<date>'],   // a dated file name: hub-backup-20261008.tgz
   [/\b\d{2}:\d{2}\b/g, '<hh:mm>'],
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, '<uuid>'],
   [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, '<hash>'],   // commits, a workspace's folder
@@ -208,6 +209,7 @@ for (const [s, want] of [
   ['  8641485 a shop', ' <hash> a shop'],
   ['  bde1637 a shop', ' <hash> a shop'],
   ['commit 8641485', 'commit <hash>'],
+  ['  tar czf ~/hub-backup-20261008.tgz -C', ' tar czf ~/hub-backup-<date>.tgz -C'],
   ['Task #oak-1 added: set nofile to 1048576 in the load box image', 'Task #oak-1 added: set nofile to 1048576 in the load box image'],
   ['84 min · 1514000 tokens · $5.33', '84 min · 1514000 tokens · $5.33'],
 ]) if (mask(s) !== want) { console.log(`FAIL masks: ${JSON.stringify(s)} became ${JSON.stringify(mask(s))}, not ${JSON.stringify(want)}`); process.exit(1); }

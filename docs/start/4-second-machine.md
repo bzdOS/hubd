@@ -175,7 +175,7 @@ hub base:
   resources:0
   tasks:    4 open
   claims:   1 active, 0 expired
-  journal:  2 file(s), 17 entries
+  journal:  2 file(s), 18 entries
   writers:  elm 0.9.56 - oak 0.9.56
   fleet:    elm SILENT - oak (here, 2)  WARNING
             no registry at all from elm - a role running there is

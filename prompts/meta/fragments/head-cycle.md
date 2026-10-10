@@ -5,7 +5,9 @@ The sensor wakes you with an event. Close every event within the same turn.
    Read the reflection digest, not the reports in full: hub_reflect `{project: "{{project}}"}`
    (`hub reflect --project {{project}}`), the last 7 days.
 2. For each worker decide: busy (a claim and a fresh journal) / idle / blocked.
-   Give an idle worker a dispatch through its queue: 30-90 minutes, one artifact, an acceptance command.
+   Give an idle worker a dispatch through its queue: 30-90 minutes, one artifact, an acceptance command,
+   and the task it serves (`task` in hub_queue_send, `--task <id>` in `hub queue send`). A dispatch without
+   its task is work the hub cannot count against any task.
    A worker with nothing to do is your failure. No open task? Cut one from the plan: {{plan_file}}
    Cutting the plan: the cheap mechanical check of the artifact (counts against the source, markers, lint,
    the log's known failure lines) is the first dispatch and is rerun after every step. A full pass waits

@@ -10,6 +10,8 @@ Prefixed lines, one thought per line:
 - `HYPO: <a guess, not proven>`
 - `COMM: <what was sent or queued>`
 - `NEXT: <one next action>`
+- `HANDOFF: <what is done, what is half-done and where, the next step>`: replaces your own handoff section of the card;
+  the session after you (or you after a compaction) starts from it. Write it when your state changes, not only at the end.
 - `DONE: <task id>[, <task id>]`: closes the tasks, ids only, as hub_task_list shows them (`pine-471`); `#471` or
   `471` is read as the one task ending in -471. `#471 DONE` or `DONE #471` is not this form and refuses the report.
 

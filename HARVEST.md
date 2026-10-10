@@ -18,20 +18,20 @@ meaning, not transcript.
 
 1. PROJECTS — every project, product, or recurring "obsession" touched here,
    even ones I never call a project. For each:
-   - slug · one-line what-it-is · 3–6 line digest (state + what THIS dialog changed)
+   - slug · one-line what-it-is · 3–6 line digest of where it stands now
    - MODE: active-sprint | live | background-slow-burn | frozen | idea.
      A years-old background idea is NOT a deadline item — mark it "do not push"
      and never invent urgency for it.
    - links: [[other-slug]] for every project this one relates to.
    - communication: what has gone OUT (channel · what · date) and what's still
-     queued. A project isn't finished until it's been communicated — every card
-     ends with a Communication section (shipped vs queued).
+     queued. A project isn't finished until it's been communicated.
 
 2. TASKS — one per line:
    [project] action · cat (technical | communicative | decision | chore)
-   · owner (role/agent or person) · owner_kind (agent | human) · due? · importance (high|med|normal).
-   Include implicit ones ("we should…", "later…"). A communicative task carries
-   counterpart + channel and can be in a "waiting" state (done my part, awaiting reply).
+   · assignee (role, agent or person) · due? · importance (high|med|normal).
+   Include implicit ones ("we should…", "later…"). A communicative task names
+   its counterpart and channel in its text; "my part is done, waiting for a
+   reply" is a COMM: line, not a task status.
 
 3. LINKS & THEMES (what a tracker misses) — look across the projects: shared
    audiences, tools, distribution, or a shared underlying obsession. Write 1–3
@@ -48,16 +48,24 @@ TRUTH DISCIPLINE (this is the point):
   ask, don't assume.
 - Record what I actually said over what would be tidy.
 - If you revise an earlier entry, LOG the correction — don't silently overwrite.
+- Never copy a secret into the hub: no password, key, token, private link or
+  someone's personal data. Write that it exists and where it is kept, not its value.
 
 OUTPUT (structured — facts land in card fields, never one prose blob):
-- With hubd MCP tools: hub_task_list first (skip duplicates) -> hub_card_set each
-  project digest -> hub_task_add each task -> hub_report the decisions / facts /
-  hypotheses / communication as structured lines (below).
+- With hubd MCP tools: hub_task_list first (skip duplicates) -> hub_get each
+  project -> a project the hub does not have: hub_card_set with the digest; one
+  it has: patch only the lines that are now wrong (replace / appendLine), never
+  rewrite the owner's digest -> hub_task_add each task -> hub_report the
+  decisions / facts / hypotheses / communication as structured lines (below).
+  What THIS dialog changed goes into the report, not into the digest.
 - Without hubd tools: output ONE shell code block of ready-to-paste commands,
-  this exact syntax, properly quoted, nothing else in the block:
-    hub card "<slug>" -m "<3-6 line digest>"
-    hub task add "<text>" -p <slug> [-i high|med] [-d YYYY-MM-DD]
-    hub report -p <slug> <<EOF
+  this exact syntax, properly quoted, nothing else in the block. <you> is the
+  name the entries are signed with: mine in the hub if I gave it, otherwise
+  harvest. hub card replaces a whole digest, so it is only for a project the
+  hub does not have yet; for the rest, the report carries the change:
+    hub card "<slug>" -m "<3-6 line digest>" --by <you>
+    hub task add "<text>" -p <slug> [-i high|med] [-d YYYY-MM-DD] [--cat <cat>] [--assignee <who>] --by <you>
+    hub report -p <slug> --agent <you> <<'EOF'
     DECIDE: <decision> | <why>
     FACT: <confirmed fact>
     HYPO: <inferred connection, still unproven>
@@ -73,7 +81,7 @@ OUTPUT (structured — facts land in card fields, never one prose blob):
   HARVEST.md."* Then the whole pass is one word.
 - **Foreign chats:** bind the prompt to an OS text-replacement snippet like `;harvest`.
 - **Harvest beats memory.** Run it before closing a long dialog — the next
-  agent's `hub_brief` inherits everything this one learned, correctly.
+  agent's `hub_context` inherits everything this one learned, correctly.
 
 ## Why these rules exist
 Every line is a scar from real use: a decade-old background idea got mislabeled

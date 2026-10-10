@@ -41,23 +41,24 @@ TRUTH DISCIPLINE (this is the point):
   ask, don't assume.
 - Record what I actually said over what would be tidy.
 - If you revise an earlier entry, LOG the correction — don't silently overwrite.
+- Never copy a secret into the hub: no password, key, token, private link or
+  someone's personal data. Write that it exists and where it is kept, not its value.
 ```
 
 ## What the chat answered
 
 A chat without the tools answers with one block of commands, for you to read and then
-run. This one, from the evening's conversation:
+run. This one, from the evening's conversation, where you told it your name in the hub:
 
 ```bash
-export HUBD_AGENT=alice
 hub card "payments-move" -m "Moving the shop's card payments off the current provider, whose fee went from 1.4% to 2.1% in September.
-Decided tonight: a provider with a flat fee of at most 1.5%; the old one stays open 120 days for refunds."
-hub task add "Ask two providers for a quote at our volume (about 3,000 payments a month)" -p payments-move -i high
-hub task add "Find out whether the new provider moves stored cards, or customers enter them again" -p payments-move
-hub task add "Give the current provider notice once the new contract is signed" -p payments-move
-hub task add "Checkout: swap the payment form for the new provider's" -p shop -i med
-hub task add "Decide who tells subscription customers, and when" -p payments-move
-hub report -p payments-move <<EOF
+Decided tonight: a provider with a flat fee of at most 1.5%; the old one stays open 120 days for refunds." --by alice
+hub task add "Ask two providers for a quote at our volume (about 3,000 payments a month)" -p payments-move -i high --by alice
+hub task add "Find out whether the new provider moves stored cards, or customers enter them again" -p payments-move --by alice
+hub task add "Give the current provider notice once the new contract is signed" -p payments-move --by alice
+hub task add "Checkout: swap the payment form for the new provider's" -p shop -i med --by alice
+hub task add "Decide who tells subscription customers, and when" -p payments-move --by alice
+hub report -p payments-move --agent alice <<'EOF'
 DECIDE: move card payments to a provider with a flat fee of at most 1.5% | the 2.1% fee costs about 1,900 a month at current volume
 DECIDE: keep the current provider open 120 days after the move | refunds and chargebacks on old payments go back through it
 HYPO: [?] unconfirmed: the contract allows leaving with 30 days' notice
@@ -77,8 +78,10 @@ Task #oak-6 added: Decide who tells subscription customers, and when
 Reported to payments-move: 2 decisions, 2 hypothesis, 1 comm, next set
 ```
 
-The commands name no author, so hubd takes it from `HUBD_AGENT`: whoever runs the
-block answers for it. You said you thought the contract had a 30-day notice; the chat
+Every command names its author: without one, a write is refused unless `HUBD_AGENT`
+is set, and whoever runs the block answers for it. The card is set only because the
+hub has no such project yet; `hub card -m` replaces a whole digest, so a project the
+hub knows gets its news through the report. You said you thought the contract had a 30-day notice; the chat
 wrote that down as a guess, marked `[?]`. The link between the 3-D Secure screen and
 the drop in sales was the chat's own idea, so it is a guess too.
 
@@ -139,8 +142,8 @@ hub task list -p payments-move
 The answer adds only what is new, and closes what you said is done:
 
 ```bash
-hub task add "Plan the cut-over weekend with the new provider" -p payments-move
-hub report -p payments-move <<EOF
+hub task add "Plan the cut-over weekend with the new provider" -p payments-move --by alice
+hub report -p payments-move --agent alice <<'EOF'
 DECIDE: go with the provider that quoted 1.3% flat | the lowest fee, and it moves stored cards itself
 FACT: the contract allows leaving with 30 days' written notice (clause 14.2)
 FACT: the new provider moves stored cards; subscription customers need not enter them again
@@ -186,7 +189,8 @@ above; with tools, the protocol's first step is `hub_task_list`.
 
 **A key in the chat.** A token you pasted while debugging is in the chat, and a
 harvest can copy it into a card, which goes to every node and stays in the hub's git
-history. Look for one in the block; a secret belongs in `hub secret set`.
+history. The protocol forbids it, and you are still the last check: look for one in
+the block; a secret belongs in `hub secret set`.
 
 **A guess written as a fact.** "The 3-D Secure screen cost us sales" reads like a
 finding once it is on a card. The protocol writes an inferred connection as `HYPO:`,

@@ -198,6 +198,7 @@ hub watch --as phone
  "doneMissed": [],
  "tasks": [],
  "note": true,
+ "handoff": false,
  "digestAgeDays": 0
 }
 2026-10-07 13:14 [shop/dev-remote] note: the refund page links to the old FAQ in 3 places; fixed on staging
