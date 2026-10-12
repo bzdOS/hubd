@@ -58,14 +58,19 @@ export const isWaitingTurn = (body) => {
   return lines.length === 1 && WAITING.test(lines[0]);
 };
 /* What the block's own rules refuse beyond the lists, in the words both forms use: the field throws
- * the first, the text names them all. */
+ * the first, the text names them all. `no` with `none` is not among them: it is a turn that found
+ * no work, nothing to do and nothing in the way (isIdle). It was refused once, as a result that
+ * hid its obstacle, and a role on an empty queue then gave its emptiness a class: one fleet's
+ * worker wrote seven such turns in two days, as environment and as unclear-dispatch, each with
+ * the queue's emptiness for its fact, and the digest counted a trouble that was not there. */
 const manyRules = (rule) => String(rule || '').replace(/`[^`]*`/g, '').includes(';');
+/** A reflection of a turn that found no work: result no, obstacle none. */
+export const isIdle = (r) => !!r && r.result === 'no' && r.obstacle === 'none';
 function shapeProblems({ result, obstacle, instead, rule }) {
   const out = [];
-  if (result === 'no' && obstacle === 'none')
-    out.push(`result "no" with obstacle "none": a turn that delivered nothing names what held it up, one of ${OBSTACLES.filter(o => o !== 'none').join(' | ')}`);
-  if (instead && isNothing(instead) && !(result === 'done' && obstacle === 'none'))
-    out.push(`instead ${JSON.stringify(instead)} only with result "done" and obstacle "none"; say what you would do differently` +
+  // a turn that found no work has nothing to do differently either
+  if (instead && isNothing(instead) && !((result === 'done' || result === 'no') && obstacle === 'none'))
+    out.push(`instead ${JSON.stringify(instead)} only with obstacle "none" and result "done", or "no" for a turn that found no work; say what you would do differently` +
       (result === 'partial' && obstacle === 'none' ? ', or, for a run not finished yet, what it waits for' : ''));
   if (manyRules(rule)) out.push('rule holds more than one rule (";" outside backticks); send the one this turn taught most');
   return out;
@@ -281,7 +286,8 @@ export function promoteCandidates(said, { laws = [], rejected = [] } = {}) {
 }
 
 /** The digest a head reads instead of the reports (prompts/meta/fragments/head-cycle.md): per role,
- *  how turns ended and what got in the way; per obstacle class, how often and the latest facts;
+ *  how turns ended and what got in the way, and how many found no work (`idle`, also in the total);
+ *  per obstacle class, how often and the latest facts;
  *  the rules proposed more than once, a rule's other wordings counted with it (`variants`); how
  *  many rules held the example's (`exampleRule`, never among the rules); the verdicts given.
  *  `entries` are journal entries in time order, already narrowed to the project and the window. Every count lists every value of its
@@ -291,14 +297,15 @@ export function reflectDigest(entries, { level = null, facts = 3 } = {}) {
   const zero = (list, extra) => Object.fromEntries([...list, extra].map(k => [k, 0]));
   const roles = {}, obstacles = {}, said = [], decisions = [], exampleRule = { count: 0, roles: [] };
   for (const k of [...OBSTACLES, 'unclassified']) obstacles[k] = { count: 0, facts: [] };
-  let total = 0;
+  let total = 0, idle = 0;
   for (const e of entries) {
     const r = entryReflect(e);
     if (!r || (level && r.level !== level)) continue;
     total++;
     const role = e.agent || '?';
-    const p = roles[role] || (roles[role] = { reflections: 0, result: zero(RESULTS, 'other'), obstacle: zero(OBSTACLES, 'unclassified') });
+    const p = roles[role] || (roles[role] = { reflections: 0, idle: 0, result: zero(RESULTS, 'other'), obstacle: zero(OBSTACLES, 'unclassified') });
     p.reflections++;
+    if (isIdle(r)) { p.idle++; idle++; }
     p.result[RESULTS.includes(r.result) ? r.result : 'other']++;
     const cls = OBSTACLES.includes(r.obstacle) ? r.obstacle : 'unclassified';
     p.obstacle[cls]++;
@@ -314,6 +321,7 @@ export function reflectDigest(entries, { level = null, facts = 3 } = {}) {
   return {
     level: level || null,
     reflections: total,
+    idle,
     roles,
     obstacles,
     rules: groupRules(said).filter(g => g.at.length > 1).map(g => ({ rule: g.rule, count: g.at.length,

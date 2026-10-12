@@ -37,7 +37,7 @@ import { runHubGc } from './lib/gc.mjs';
 import { renderPrompt, templateNames, lineDiff } from './lib/prompts.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, runQueueRepair, runQueueDedupe, queueLedger } from './lib/queue.mjs';
+import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, runQueueRepair, runQueueDedupe, queueLedger, queueList } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -124,7 +124,7 @@ declareFlags(
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
   '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
   '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
-  '--opencode', '--rows', '--node', '--db', '--dry', '--group',
+  '--opencode', '--rows', '--node', '--db', '--dry', '--group', '--pending',
 );
 
 function getFlag(name) {
@@ -813,7 +813,7 @@ command('task', () => {
     // once filed a task whose text was "-p", and that task is in the append-only log forever.
     let pos;
     try { pos = positionals(2, { values: ['-p', '-i', '-d', '--needs', '--resource', '--cat', '--tag', '--assignee', '--by'] }); }
-    catch (e) { die(e.message + '\nUsage: hub task add "<text>" -p <proj> [-i high|med] [-d <date>] [--needs <ids>] [--resource <slug>] [--cat <cat>] [--tag <t>] [--assignee <who>] --by <who>'); }
+    catch (e) { die(e.message + '\nUsage: hub task add "<text>" -p <proj> [-i high|med] [-d <date>|+Nd] [--needs <ids>] [--resource <slug>] [--cat <cat>] [--tag <t>] [--assignee <who>] --by <who>'); }
     const text = pos[0];
     if (!text || text.startsWith('-')) die('Text required: hub task add "<text>" -p <proj>');
     if (pos.length > 1) die(`unexpected extra argument ${JSON.stringify(pos[1].slice(0, 40))} — quote the whole text as one argument`);
@@ -1590,7 +1590,7 @@ command('reflect', () => {
     (roles.length ? `, from ${roles.length} role(s)` : ''));
   for (const role of roles) {
     const p = r.roles[role];
-    console.log(`  ${role}  ${p.reflections}: ${nz(p.result)} · obstacles: ${nz(p.obstacle)}`);
+    console.log(`  ${role}  ${p.reflections}: ${nz(p.result)}${p.idle ? ` (${p.idle} found no work)` : ''} · obstacles: ${nz(p.obstacle)}`);
   }
   const obs = Object.entries(r.obstacles).filter(([k, o]) => o.count && k !== 'none');
   if (obs.length) console.log('\nobstacles');
@@ -2136,6 +2136,29 @@ command('queue', () => {
           (rd.behind ? `, ${rd.behind} behind` : ''));
     }
     done(0);
+  } else if (sub === 'list') {
+    // Looking without reading: blocks as data, and nothing written, so a view or a check can run
+    // as often as it likes beside the reader that does consume the role (lib/queue.mjs, queueList).
+    const usage = 'Usage: hub queue list <role>... [--pending] [--since 3h|<time>] [--as <subscriber>] [-n <N>] [--json]';
+    let roles; try { roles = positionals(2, { values: ['--since', '--as', '-n'], booleans: ['--pending', '--json'] }); } catch (e) { die(e.message + '\n' + usage); }
+    if (!roles.length) die(usage);
+    const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
+    const since = flag('--since'), as = flag('--as'), nArg = flag('-n');
+    let sinceMs = 0;
+    if (since != null) { try { sinceMs = sinceToMs(since); } catch (e) { die(e.message); } }
+    const last = nArg == null ? 0 : /^\d+$/.test(String(nArg)) && Number(nArg) > 0 ? Number(nArg) : die(`-n: "${nArg}" is not a count above 0`);
+    let blocks;
+    try { blocks = queueList(roles, { root: resolveQueueRoot(), sinceMs, pendingOnly: args.includes('--pending'), as: as || null, last }); }
+    catch (e) { die(e.message); }
+    if (args.includes('--json')) { console.log(JSON.stringify({ roles, blocks })); done(0); }
+    for (const b of blocks) {
+      const where = `${b.role}${b.node ? '.' + b.node : ''}${b.files.length > 1 ? ` +${b.files.length - 1} copy` : ''}`;
+      const state = b.pending === true ? 'pending' : b.pending === false ? 'read' : 'per reader';
+      console.log(`## ${b.ts} · from ${b.from}${b.id != null ? ' · id ' + b.id : ''}${b.task ? ' · task #' + b.task : ''}   [${where}, ${state}]\n${b.text}\n`);
+    }
+    const pend = blocks.filter(b => b.pending === true).length;
+    console.log(`${blocks.length} block(s)${blocks.some(b => b.pending !== null) ? `, ${pend} pending` : ''}; listed, not read: no cursor or mark moved.`);
+    done(0);
   } else if (sub === 'resolve') {
     /* Queue files are append-only by contract but have no union merge, so two sides that both
      * appended really do conflict — one node came back after two days with five queue files
@@ -2235,7 +2258,7 @@ command('queue', () => {
     if (!apply && r.files.some(f => f.drop && !f.held)) console.log(`Nothing changed: --apply folds every flood of ${r.min}+ copies.`);
     done(0);
   } else {
-    die('queue subcommands: send, wait, monitor, work, status, resolve, gc, repair, dedupe');
+    die('queue subcommands: send, wait, monitor, work, status, list, resolve, gc, repair, dedupe');
   }
 });
 
@@ -2309,7 +2332,7 @@ const HELP = [
   ['reflect --laws --project <proj>', "the project's laws, one per line"],
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
-  ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
+  ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
   ['task done <id> --by <you>', 'close a task'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
   ['task get <id> [--json]', 'one task, and where else its id appears'],
@@ -2360,6 +2383,7 @@ const HELP = [
   ['queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]', 'the same, again and again'],
   ['queue work <role> [--json]', "the role's ready tasks, as its queue"],
   ['queue status [<role>] [--json]', 'per role and node: delivered and pending'],
+  ['queue list <role>... [--pending] [--since 3h|<time>] [--as <sub>] [-n N] [--json]', 'the blocks, each pending or read; moves no cursor'],
   ['queue resolve [file...]', 'a conflicted queue file: ours in place, theirs appended'],
   ['queue gc [--days 30] [--apply]', 'archive queue files nobody ever read'],
   ['queue repair [--apply] [--json]', 'dead waiter markers, readers of a dead process, cursors this node cannot write',

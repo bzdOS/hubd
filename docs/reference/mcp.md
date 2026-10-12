@@ -165,7 +165,7 @@ Append a session report to the shared journal: what was done / broken / blocked.
 
 ### hub_reflect
 
-The reflection digest of one project, what a head reads instead of its workers' reports in full: per role, how turns ended (result) and what got in the way (obstacle class); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment's example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule's other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report's reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project's laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.
+The reflection digest of one project, what a head reads instead of its workers' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment's example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule's other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report's reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project's laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -243,7 +243,7 @@ Add a task to the shared cross-project backlog.
 | `project` | string | yes | the project slug, as hub_status lists it |
 | `text` | string | yes | what the task is, in a line or two |
 | `importance` | one of `high`, `med`, `normal` |  | default normal |
-| `deadline` | string |  | YYYY-MM-DD, optional |
+| `deadline` | string |  | YYYY-MM-DD, or +Nd for N days from today (UTC), optional |
 | `cat` | string |  | one of technical \| communicative \| decision \| chore. Anything else is kept — as a tag, not a category: the four values are the axis every by-type number is counted on, so it stays closed. |
 | `tags` | string[] |  | free-form labels — the open vocabulary next to the closed cat one |
 | `assignee` | string |  | agent name or owner, optional |
@@ -282,7 +282,7 @@ Update a task: close it (status=done), reassign, reprioritise, edit text/deadlin
 | `status` | one of `open`, `done` |  |  |
 | `importance` | one of `high`, `med`, `normal` |  |  |
 | `text` | string |  |  |
-| `deadline` | string |  |  |
+| `deadline` | string |  | YYYY-MM-DD, or +Nd for N days from today (UTC) |
 | `cat` | string |  | technical \| communicative \| decision \| chore — anything else is kept as a tag instead |
 | `tags` | string[] |  | free-form labels; replaces the task's tag list |
 | `assignee` | string |  |  |

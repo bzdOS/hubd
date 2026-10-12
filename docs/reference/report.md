@@ -101,8 +101,8 @@ decision: accepted — check staging health before a payment test
 | `decisions` |  | a list of `{rule, verdict, reason}`, the verdict one of `accepted`, `rejected`, `needs-owner` | head and fleet only: the verdict on each proposal from below |
 
 - `obstacle` `none` takes no `obstacle_fact`; any other obstacle needs one, or `not measured`.
-- `result` `no` with `obstacle` `none` is refused: a turn that delivered nothing names what held it up.
-- `instead` `nothing` only with `result` `done` and `obstacle` `none`.
+- `result` `no` with `obstacle` `none` is a turn that found no work: accepted, and the digest counts it as idle, apart from obstacles.
+- `instead` `nothing` only with `obstacle` `none` and `result` `done`, or `no` for a turn that found no work.
 - `rule` is one rule: a `;` outside backticks makes it several, refused. `none` when the turn taught none. The example's rule ("keep build recipes only inside the role's allowed paths") is refused: it is not this turn's.
 - `decisions` only at level `head` or `fleet`.
 

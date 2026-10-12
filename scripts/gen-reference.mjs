@@ -505,8 +505,8 @@ function reportPage(tmp, mcp, problems) {
     table(['Field', 'Required', 'Values', 'What'], fieldRows),
     [
       '- `obstacle` `none` takes no `obstacle_fact`; any other obstacle needs one, or `not measured`.',
-      '- `result` `no` with `obstacle` `none` is refused: a turn that delivered nothing names what held it up.',
-      '- `instead` `nothing` only with `result` `done` and `obstacle` `none`.',
+      '- `result` `no` with `obstacle` `none` is a turn that found no work: accepted, and the digest counts it as idle, apart from obstacles.',
+      '- `instead` `nothing` only with `obstacle` `none` and `result` `done`, or `no` for a turn that found no work.',
       '- `rule` is one rule: a `;` outside backticks makes it several, refused. `none` when the turn taught none. ' +
         'The example\'s rule ("' + EXAMPLE_RULE + '") is refused: it is not this turn\'s.',
       '- `decisions` only at level `head` or `fleet`.',

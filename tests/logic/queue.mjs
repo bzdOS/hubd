@@ -1058,7 +1058,17 @@ const AK = mktmp();
   for (let i = 1; i <= 8; i++) send('dfile', 'order ' + i);
   ok(queueLib.unreadLoad('dfile', { root: D }).msgs === 8 && queueLib.queuesNearFull({ root: D }).some(q => q.role === 'dcfg') &&
     !queueLib.queuesNearFull({ root: D }).some(q => q.role === 'dfile'), 'depth: a role in queue.exempt is never refused and never listed');
+  // its send is told hubd cannot see its reads, never that its reader stopped, even with an old read mark about
+  fs.mkdirSync(path.join(D, 'queues', 'read'), { recursive: true });
+  fs.writeFileSync(path.join(D, 'queues', 'read', 'dfile.elm.json'), JSON.stringify({ at: '2026-09-01 10:00', files: { 'dfile.cedar.queue.md': { offset: 10 } } }));
+  const ex = queueLib.queueSendChecked('dfile', 'order 9', { from: 'head-x', root: D });
+  ok(ex.readerUnseen === true && ex.inFile === 9 && ex.pending === undefined && !ex.readOn && /queue\.exempt/.test(ex.note) &&
+    /cannot see what it has read/.test(ex.note) && !/stopped|never consumed/.test(ex.note),
+    `send: to a role in queue.exempt the answer says hubd cannot see its reads, not that its reader stopped (${ex.note})`);
+  fs.rmSync(path.join(D, 'queues', 'read', 'dfile.elm.json'));
   fs.rmSync(path.join(T0, 'limits.json'));
+  const nx = queueLib.queueSendChecked('dfile', 'order 10', { from: 'head-x', root: D });
+  ok(nx.pending === 10 && !nx.readerUnseen && /no node has left a read mark/.test(nx.note), 'send: out of queue.exempt, the same role gets the depth and the plain note again');
 
   // what doctor lists: 80% of a limit and up, fullest first
   const E = mktmp();
@@ -1180,6 +1190,56 @@ const AK = mktmp();
   ok(after.changed && lines.length === 2 && lines.every(l => sha(l) === sha(line) && Buffer.byteLength(l) === Buffer.byteLength(line)),
     `short read: once the file is whole, the block arrives byte for byte (${Buffer.byteLength(line)}-byte lines, sha256 equal)`);
   fs.rmSync(SR, { recursive: true, force: true });
+}
+
+// ── hub queue list: the blocks looked at, nothing read ──
+{
+  const L = mktmp();
+  const send = (role, text) => queueLib.queueSend(role, text, { from: 'head-l', root: L });
+  const snap = () => { const st = path.join(L, '.qstate'), rd = path.join(L, 'queues', 'read');
+    const all = (d) => { try { return fs.readdirSync(d, { recursive: true }).sort().map(f => { const p = path.join(d, f);
+      return fs.statSync(p).isFile() ? f + '=' + fs.readFileSync(p, 'utf8') : f; }).join('|'); } catch { return ''; } };
+    return all(st) + '#' + all(rd); };
+  send('lv', 'first order'); send('lv', 'second order');
+  await queueLib.queueWait('lv', { root: L, timeout: 0 });
+  send('lv', 'third order'); send('lv', 'fourth order\n## not a header, a line of the body');
+  const before = snap(), readTo = queueLib.queueLedger({ root: L, role: 'lv' }).roles[0].files[0].readTo;
+  const all = queueLib.queueList('lv', { root: L });
+  ok(all.length === 4 && all.map(b => b.pending).join() === 'false,false,true,true' && all[3].text.endsWith('a line of the body') &&
+    all.every(b => b.role === 'lv' && b.node === 'cedar' && b.from === 'head-l' && b.files.length === 1),
+    `queue list: every block as data, the ones past the read position pending (${JSON.stringify(all.map(b => [b.text.slice(0, 6), b.pending]))})`);
+  ok(queueLib.queueList('lv', { root: L, pendingOnly: true }).map(b => b.text.split('\n')[0]).join() === 'third order,fourth order' &&
+    queueLib.queueList('lv', { root: L, last: 1 }).length === 1 && queueLib.queueList('lv', { root: L, sinceMs: Date.now() + 3600000 }).length === 0,
+    'queue list: --pending keeps what is unread, -n the newest, --since the window');
+  ok(snap() === before && queueLib.queueLedger({ root: L, role: 'lv' }).roles[0].files[0].readTo === readTo,
+    'queue list: no cursor, mark or ack is written, and the read position is where it was');
+  const w = await queueLib.queueWait('lv', { root: L, timeout: 0 });
+  ok(w.changed && /third order/.test(w.text) && /fourth order/.test(w.text) && !/first order/.test(w.text),
+    'queue list: the reader still gets what was listed, and only that');
+  ok(queueLib.queueList('lv', { root: L, pendingOnly: true }).length === 0, 'queue list: after the read, nothing is pending');
+  // a block whole in two files, as a union merge leaves it, is listed once with both files
+  fs.copyFileSync(path.join(L, 'queues', 'lv.cedar.queue.md'), path.join(L, 'queues', 'lv.elm.queue.md'));
+  const twice = queueLib.queueList('lv', { root: L });
+  ok(twice.length === 4 && twice.every(b => b.files.join() === 'lv.cedar.queue.md,lv.elm.queue.md') && twice.every(b => b.pending === true),
+    'queue list: a copy in another file is one block with both files, pending while any copy is unread');
+  // a broadcast role has a position per reader
+  fs.writeFileSync(path.join(L, 'subscriber-roles.json'), '["lb"]');
+  send('lb', 'news one');
+  await queueLib.queueWait('lb', { root: L, subscriber: 'r1', timeout: 0 });
+  send('lb', 'news two');
+  ok(queueLib.queueList('lb', { root: L }).every(b => b.pending === null) &&
+    queueLib.queueList('lb', { root: L, as: 'r1' }).map(b => b.pending).join() === 'false,true' &&
+    queueLib.queueList('lb', { root: L, as: 'r2' }).map(b => b.pending).join() === 'true,true',
+    'queue list: a broadcast block is pending per reader, --as names it, and without it nobody\'s');
+  ok(queueLib.queueList(['lv', 'lb'], { root: L }).length === 6, 'queue list: several roles in one call');
+  const env = { HUBD_QUEUE_DIR: L, HUBD_TEAM_DIR: L };
+  const c = cli(['queue', 'list', 'lb', '--as', 'r1', '--pending'], { env, cwd: L });
+  ok(c.code === 0 && /^## \S+ \S+ · from head-l · id cedar-\d+   \[lb\.cedar, pending\]\nnews two\n/m.test(c.stdout) && !/news one/.test(c.stdout) &&
+    /1 block\(s\), 1 pending; listed, not read/.test(c.stdout), `queue list: the CLI prints the header, where and whether pending (${c.stdout.slice(0, 120)})`);
+  const j = cli(['queue', 'list', 'lv', '--json', '-n', '2'], { env, cwd: L });
+  ok(j.code === 0 && JSON.parse(j.stdout).blocks.length === 2, 'queue list: --json gives the blocks');
+  ok(cli(['queue', 'list'], { env, cwd: L }).code === 1 && cli(['queue', 'list', 'lv', '-n', '0'], { env, cwd: L }).code === 1,
+    'queue list: no role, or a count of 0, is refused');
 }
 
 done();

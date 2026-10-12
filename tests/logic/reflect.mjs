@@ -132,20 +132,23 @@ const tail = () => core.journalTail(P, 1000);
   // instead "none": only with done and none.
   ok(R.checkReflect({ ...GOOD, result: 'done', obstacle: 'none', obstacle_fact: '', instead: 'none' }).instead === 'none', 'shape: instead "none" with done and none is kept');
   for (const instead of ['none', 'nothing', 'N/A', '-'])
-    ok(throws(() => R.checkReflect({ ...GOOD, instead }), /instead ".*" only with result "done" and obstacle "none"; say what you would do differently$/), `shape: instead ${JSON.stringify(instead)} with partial and a class is refused`);
+    ok(throws(() => R.checkReflect({ ...GOOD, instead }), /instead ".*" only with obstacle "none" and result "done", or "no" for a turn that found no work; say what you would do differently$/), `shape: instead ${JSON.stringify(instead)} with partial and a class is refused`);
   ok(throws(() => R.checkReflect({ ...GOOD, obstacle: 'none', obstacle_fact: '', instead: 'nothing' }), /or, for a run not finished yet, what it waits for/),
     'shape: with partial and none the refusal says what instead is for');
   ok(R.checkReflect({ ...GOOD, obstacle: 'none', obstacle_fact: '', instead: 'waiting for the test run, tests.log' }).result === 'partial', 'shape: partial with none and what it waits for is kept');
-  // `no` names what held it up.
-  ok(throws(() => R.checkReflect({ ...GOOD, result: 'no', obstacle: 'none', obstacle_fact: '' }), /result "no" with obstacle "none": .* one of permissions \| path \| unclear-dispatch \| environment \| model$/),
-    'shape: no with none is refused, the classes listed');
+  // `no` with `none` is a turn that found no work, accepted as such.
+  const idle = R.checkReflect({ ...GOOD, result: 'no', obstacle: 'none', obstacle_fact: '', instead: 'wait for the head\'s next order' });
+  ok(idle.result === 'no' && idle.obstacle === 'none' && R.isIdle(idle) && !R.isIdle(GOOD), 'shape: no with none is accepted, a turn that found no work');
+  ok(R.checkReflect({ ...GOOD, result: 'no', obstacle: 'none', obstacle_fact: '', instead: 'none' }).instead === 'none', 'shape: and has nothing to do differently');
+  ok(throws(() => R.checkReflect({ ...GOOD, result: 'no', instead: 'none' }), /only with obstacle "none"/), 'shape: a no that had work and a class still says what it would do instead');
   // One rule.
   ok(throws(() => R.checkReflect({ ...GOOD, rule: 'measure first; name the artifact; ask once' }), /rule holds more than one rule/), 'shape: three rules joined with ";" are refused');
   ok(R.checkReflect({ ...GOOD, rule: 'run `make clean; make` before a build' }).rule, 'shape: a ";" inside backticks is a command, not a second rule');
   const text = R.readReflect('x · REFLECT · goal: g · result: partial · obstacle: none · instead: none · rule: a; b');
   ok(text.problems.length === 2 && /instead "none" only with/.test(text.problems[0]) && /more than one rule/.test(text.problems[1]),
     `shape: the text names every one of them (${JSON.stringify(text.problems)})`);
-  ok(/result "no" with obstacle "none"/.test(R.readReflect('REFLECT · goal: g · result: no · obstacle: none · instead: i · rule: none').problems.join()), 'shape: and no with none');
+  const idleText = R.readReflect('REFLECT · goal: take an order · result: no · obstacle: none · instead: wait for one · rule: none');
+  ok(idleText.problems.length === 0 && R.isIdle(idleText), `shape: and no with none read from the text is no problem (${JSON.stringify(idleText.problems)})`);
 }
 
 // ── a turn that found no work: the waiting line, no block ──
@@ -194,6 +197,19 @@ const tail = () => core.journalTail(P, 1000);
   ok(d.rules.length === 1 && d.rules[0].count === 3 && d.rules[0].roles.join() === 'dev-a,dev-b' && d.rules[0].rule === 'MEASURE the disk, first!',
     `digest: one rule written three ways is one rule proposed three times, "none" is no rule (${JSON.stringify(d.rules)})`);
   ok(d.decisions.length === 1 && d.decisions[0].role === 'head-a' && d.decisions[0].verdict === 'accepted' && d.decisions[0].level === 'head', 'digest: the verdicts given are listed');
+  ok(d.idle === 0 && d.roles['dev-a'].idle === 0, 'digest: no turn found no work yet');
+  add('dev-d', '2026-10-01 17:00', R.checkReflect({ ...GOOD, result: 'no', obstacle: 'none', obstacle_fact: '', instead: 'wait for an order' }));
+  core.journalAppend({ ts: '2026-10-01 17:30', project: D, agent: 'dev-d', kind: 'note',
+    text: 'queue empty · REFLECT · goal: take an order · result: no · obstacle: none · instead: wait for one · rule: none' });
+  const di = core.runReflect({ project: D, since: '2026-09-30' });
+  ok(di.idle === 2 && di.roles['dev-d'].idle === 2 && di.roles['dev-d'].obstacle.none === 2 && di.obstacles.environment.count === 4,
+    `digest: a turn that found no work counts idle, field and text alike, and not as an obstacle (${di.idle}, ${JSON.stringify(di.roles['dev-d'])})`);
+  const dc = cli(['reflect', '--project', D, '--since', '2026-09-30']);
+  ok(/dev-d  2: no 2 \(2 found no work\) · obstacles: none 2/.test(dc.out), `digest: the CLI says how many found no work (${dc.out.split('\n').find(l => /dev-d/.test(l))})`);
+  for (const f of fs.readdirSync(T0).filter(f => /^journal.*\.jsonl$/.test(f))) {
+    const p = path.join(T0, f);
+    fs.writeFileSync(p, fs.readFileSync(p, 'utf8').split('\n').filter(l => !/"agent":"dev-d"/.test(l)).join('\n'));
+  }
   const h = core.runReflect({ project: D, since: '2026-09-30', level: 'head' });
   ok(h.reflections === 1 && Object.keys(h.roles).join() === 'head-a', 'digest: --level keeps one level');
   ok(core.runReflect({ project: D, since: '2026-08-01' }).reflections === 8, 'digest: --since moves the window');
@@ -206,7 +222,7 @@ const tail = () => core.journalTail(P, 1000);
     ? Object.fromEntries(Object.keys(o).sort().map(k => [k, shape(o[k])])) : typeof o;
   const j = JSON.parse(cli(['reflect', '--project', D, '--since', '2026-09-30', '--json']).stdout);
   const empty = JSON.parse(cli(['reflect', '--project', 'nothing-here', '--json']).stdout);
-  ok(JSON.stringify(Object.keys(j)) === JSON.stringify(['project', 'since', 'level', 'reflections', 'roles', 'obstacles', 'rules', 'exampleRule', 'decisions']) &&
+  ok(JSON.stringify(Object.keys(j)) === JSON.stringify(['project', 'since', 'level', 'reflections', 'idle', 'roles', 'obstacles', 'rules', 'exampleRule', 'decisions']) &&
     JSON.stringify(Object.keys(empty)) === JSON.stringify(Object.keys(j)), 'CLI: hub reflect --json has the same keys, empty or full');
   ok(JSON.stringify(shape(empty.obstacles)) === JSON.stringify(shape(Object.fromEntries(Object.entries(j.obstacles).map(([k, v]) => [k, { ...v, facts: [] }])))),
     'CLI: every obstacle class is there with no data');

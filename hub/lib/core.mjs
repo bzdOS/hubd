@@ -3843,6 +3843,15 @@ function requireTaskText(text) {
     throw new Error('text required: what the task is, in a line or two, e.g. "fix the checkout timeout on carts of 50+ items"');
 }
 
+/* A deadline as a task keeps it: a date stays as given, and `+Nd` becomes the date N days from today,
+ * on the same UTC calendar "overdue" and "due soon" are counted on. A page or a script that names a
+ * date rots once the date passes; one that says "in three days" means the same thing every day. */
+export function resolveDeadline(v, nowMs = Date.now()) {
+  if (v == null || v === '') return null;
+  const m = /^\+(\d{1,4})d$/.exec(String(v).trim());
+  return m ? new Date(nowMs + Number(m[1]) * 86400000).toISOString().slice(0, 10) : v;
+}
+
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
   requireTaskText(a.text);
@@ -3853,7 +3862,7 @@ export function runTaskAdd(a) {
     const t = {
       // New work lands on the canonical slug, so an alias never grows a fresh backlog of its own.
       id, project: canonProject(a.project), text: a.text,
-      importance: a.importance || 'normal', deadline: a.deadline || null,
+      importance: a.importance || 'normal', deadline: resolveDeadline(a.deadline),
       cat: norm.cat, tags: norm.tags, assignee: a.assignee || null, status: 'open',
       created: now(), by: author,
       depends_on: Array.isArray(a.depends_on) ? a.depends_on : [],
@@ -3938,6 +3947,7 @@ export function runTaskUpdate(a) {
     // given a priority at creation and never change it again, while `deadline` right
     // next to it was editable. Passing it to update returned ok and silently did nothing.
     for (const k of ['status', 'importance', 'text', 'deadline', 'assignee']) if (a[k] != null) patch[k] = a[k];
+    if (patch.deadline) patch.deadline = resolveDeadline(patch.deadline);
     // cat and tags move together: an off-enum cat becomes a tag (see normalizeCat), so
     // editing either one has to recompute both from the task's current pair.
     if (a.cat != null || a.tags != null) {

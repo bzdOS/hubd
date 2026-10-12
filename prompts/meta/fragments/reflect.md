@@ -18,9 +18,10 @@ rule: <one rule for the prompt, or "none">
 - `result: done` is allowed only if this report named an artifact. Otherwise `partial`.
 - `partial` with `obstacle: none` is only for a run not finished yet (a build, a test run in the background), and
   `instead` then says what it waits for and where: "waiting for the test run, tests.log". Any other `partial` names
-  the class of what held it up. So does every `no`: `no` with `none` is refused.
+  the class of what held it up, and so does a `no` that had work. `no` with `none` is a turn that found no work.
 <!-- wish: partial with none only for a run not finished yet; no check -->
-- `instead` is `none` only with `result: done` and `obstacle: none`; anywhere else `none` there is refused.
+- `instead` is `none` only with `obstacle: none` and `result: done`, or `no` for a turn that found no work; anywhere else
+  `none` there is refused.
 - Do not invent measurements; with no measurement, write "not measured" and say in `instead` what you would measure it with.
 - `rule`: one rule, what this turn taught, in your own words, or `none`. Not the lines of this block restated, and
   not several joined: a `;` outside backticks is refused.
@@ -33,6 +34,8 @@ rule: <one rule for the prompt, or "none">
 <!-- wish: the values in the dispatch's language; no check -->
 - A turn that found no work (the queue empty, no task) is not a step: its whole report is the one line
   "waiting for a dispatch", with no REFLECT, and it is not a turn without reflection. That line with a block is refused.
+  Where a block is written for such a turn anyway, it is `result: no` and `obstacle: none`: an empty queue is not an
+  obstacle, and given a class it is counted as one.
 - Nothing follows the block. The loop counts any other report without it as "a turn without reflection"; the head sees it.
 - The same lines can go as hub_report's `reflect` field instead of the block, never both:
   `{goal, result, obstacle, obstacle_fact, instead, rule}` (`hub report --reflect '<json>'`). The field is checked

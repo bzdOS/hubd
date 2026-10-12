@@ -154,16 +154,20 @@ rule said three ways is still said three times.
 
 ## What hubd refuses here, and why
 
-**A reflection that hides the obstacle.** A turn that delivered nothing names what held
-it up; "no result, no obstacle" is the one answer a head can do nothing with.
+**An obstacle without its fact.** A class says what kind of thing got in the way; the
+fact says how much, and a head weighs the one by the other.
 
 ```bash
-hub report -p shop --agent worker -m "FACT: nothing shipped" --reflect '{"goal":"rotate the staging key","result":"no","obstacle":"none","instead":"none","rule":"none"}'
+hub report -p shop --agent worker -m "FACT: nothing shipped" --reflect '{"goal":"rotate the staging key","result":"no","obstacle":"environment","instead":"check the vault first","rule":"none"}'
 ```
 
 ```text
-Error: reflect: result "no" with obstacle "none": a turn that delivered nothing names what held it up, one of permissions | path | unclear-dispatch | environment | model
+Error: reflect: obstacle "environment" needs obstacle_fact: the fact with a number or a quote, or "not measured"
 ```
+
+A turn that found no work is not this: `result` `no` with `obstacle` `none` is accepted,
+and `hub reflect` counts it as idle, apart from the obstacles. An empty queue given a
+class would be counted as trouble that was not there.
 
 The `--reflect` field (and `hub_report`'s `reflect` over MCP) is checked as it is
 written: a value off a list refuses the whole report, with the reason. The text block

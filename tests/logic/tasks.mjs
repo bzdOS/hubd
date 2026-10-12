@@ -429,6 +429,21 @@ const jwT = core.runTaskAdd({ project: 'p', text: 'the work', by: 'dev-t' }).tas
 core.runTaskUpdate({ id: jwT.id, assignee: 'dev-atlas', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, importance: 'high', deadline: '2026-12-01', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, status: 'done', by: 'dev-atlas' });
+// A deadline in days from today: what a page or a script can say that does not rot.
+{
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const rel = core.runTaskAdd({ project: 'p', text: 'due in three days', deadline: '+3d', by: 'dev-t' }).task;
+  ok(rel.deadline === day(3), `deadline: +3d is the date three days from today (${rel.deadline})`);
+  ok(core.runNext({ project: 'p' }).why === `due ${day(3)}`, 'deadline: and is due soon, not overdue');
+  core.runTaskUpdate({ id: rel.id, deadline: '+10d', by: 'lead-t' });
+  ok(core.runTaskGet({ id: rel.id }).task.deadline === day(10), 'deadline: update takes +Nd too');
+  core.runTaskUpdate({ id: rel.id, deadline: '2026-12-01', by: 'lead-t' });
+  ok(core.runTaskGet({ id: rel.id }).task.deadline === '2026-12-01' && core.resolveDeadline(null) === null && core.resolveDeadline('soon') === 'soon',
+    'deadline: a date, or anything else, is kept as given');
+  const c = cli(['task', 'add', 'due tomorrow', '-p', 'p', '-d', '+1d', '--by', 'dev-t'], { env: { HUBD_DIR: JW, HUBD_TEAM_DIR: JW, HUBD_NODE: 'cedar' } });
+  ok(c.code === 0 && new RegExp(`⏰${day(1)}`).test(cli(['task', 'list', '-p', 'p'], { env: { HUBD_DIR: JW, HUBD_TEAM_DIR: JW, HUBD_NODE: 'cedar' } }).out),
+    `deadline: the CLI's -d +1d is tomorrow's date (${c.out})`);
+}
 const jwAll = core.journalTail('p', 20);
 const jwLines = jwAll.filter(e => e.kind === 'task').map(e => e.text);
 ok(jwLines.some(l => /@dev-atlas/.test(l)), `journal: an assignment names the new owner (got ${JSON.stringify(jwLines)})`);

@@ -439,7 +439,7 @@ function blocksIn(text) {
   let prev = null;
   for (const m of text.matchAll(BLOCK_RE)) {
     if (prev) out.push({ ...prev.h, body: text.slice(prev.end, m.index) });
-    prev = { h: { ts: m[1], from: m[2].trim(), id: m[3] ? idOf(m[3]) : null, task: m[4] ? m[4].trim() : null }, end: m.index + m[0].length };
+    prev = { h: { ts: m[1], from: m[2].trim(), id: m[3] ? idOf(m[3]) : null, task: m[4] ? m[4].trim() : null, at: m.index }, end: m.index + m[0].length };
   }
   if (prev) out.push({ ...prev.h, body: text.slice(prev.end) });
   return out;
@@ -1699,6 +1699,58 @@ export function queueLedger({ root, role } = {}) {
   return { roles: [...byRole.values()].sort((a, b) => (a.role < b.role ? -1 : 1)) };
 }
 
+/* ── A queue looked at, not read ──
+ *
+ * `hub queue wait` hands blocks out and moves the reader on; `hub queue status` only counts them.
+ * A reader that must only look (an inbox view, a check whether a decision came) had neither, so it
+ * parsed the files itself and kept a read mark of its own beside the hub's, and the two told
+ * different stories about one file: "431 pending, nobody has read this file". This lists the
+ * blocks of one or more roles as data and writes nothing: no cursor, no mark, no ack, no waiter.
+ * Each block says whether it lies past its file's read position, the one `hub queue status`
+ * counts: this node's cursor or the furthest read mark of any node. A broadcast role has one per
+ * reader, so `as` names the reader; without it a broadcast block's `pending` is null. A block
+ * found whole in more than one file (a union merge can leave copies) is listed once, with every
+ * file it is in. Oldest first; `last` keeps the newest N. */
+export function queueList(roles, { root, sinceMs = 0, pendingOnly = false, as = null, last = 0 } = {}) {
+  const want = new Set([].concat(roles).map(assertRole));
+  assertSubscriber(as);
+  const r = root ?? resolveQueueRoot();
+  const qdir = path.join(r, 'queues');
+  const stateDir = as ? path.join(r, '.qstate', as) : path.join(r, '.qstate');
+  const fanout = new Set(subscriberRoles(r));
+  const marksByRole = new Map();
+  const out = [], byText = new Map();
+  for (const { file: f, role: rl, node } of listShards(qdir).sort((a, b) => (a.file < b.file ? -1 : 1))) {
+    if (!want.has(rl)) continue;
+    const full = path.join(qdir, f);
+    let buf; try { buf = fs.readFileSync(full); } catch { continue; }
+    const text = buf.toString('utf8');
+    let readChars = null;
+    if (!fanout.has(rl) || as) {
+      if (!marksByRole.has(rl)) marksByRole.set(rl, readMarks(qdir, rl));
+      const offFile = path.join(fanout.has(rl) ? stateDir : path.join(r, '.qstate'), `${f}.offset`);
+      const cursor = fs.existsSync(offFile) ? Math.min(Math.max(0, readCursor(offFile).off), buf.length) : null;
+      const pos = readPosition(full, buf.length, cursor, marksFor(marksByRole.get(rl), f, fanout.has(rl) ? as : null), buf);
+      readChars = buf.subarray(0, pos.off).toString('utf8').length;
+    }
+    for (const b of blocksIn(text)) {
+      if (sinceMs && !(parseTs(b.ts).getTime() >= sinceMs)) continue;
+      const pending = readChars == null ? null : b.at >= readChars;
+      const nl = text.indexOf('\n', b.at);
+      const whole = `${rl}\n${text.slice(b.at, nl === -1 ? undefined : nl)}\n${b.body.trim()}`;
+      const seen = byText.get(whole);
+      // a copy still past its file's position is still handed out: the block is pending if any copy is
+      if (seen) { seen.files.push(f); if (pending === true || seen.pending === null) seen.pending = pending; continue; }
+      const x = { role: rl, node, files: [f], ts: b.ts, from: b.from, id: b.id, task: b.task, pending, text: b.body.trim() };
+      byText.set(whole, x);
+      out.push(x);
+    }
+  }
+  out.sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
+  const kept = pendingOnly ? out.filter(x => x.pending === true) : out;
+  return last > 0 ? kept.slice(-last) : kept;
+}
+
 /* ── Subscriber namespaces that nobody reads with any more ──
  *
  * Every per-reader cursor namespace (.qstate/<subscriber>/, and taps under __watchall__/) lived
@@ -2170,6 +2222,21 @@ export function queueSendChecked(role, text, { from, root, task, remote = false 
    * here. Saying "nothing is consuming" about that would be wrong, and a warning that is often wrong
    * is one its reader learns to skip. So: consumed here, or marked as read elsewhere, gets the real
    * warning and says where; neither gets the caveat instead of an accusation. */
+  /* A role in limits.json queue.exempt is read by a reader that reads the file itself: it leaves
+   * no cursor, mark or ack, so the depth is the file's, not what is unread, and a read mark
+   * found for it is stale by construction — a reader that once used hubd and then stopped. Its
+   * send is told exactly that, and never that its reader stopped: a reader answering orders
+   * every quarter hour was called stopped on each send to it. */
+  const unseen = (() => { try { return queueLimits().exempt.includes(role); } catch { return false; } })();
+  if (unseen) {
+    const Here = remote ? "The server's node" : 'This node';
+    const note = !depth || depth.pending <= 1 ? null
+      : `${depth.pending} message(s) are in this role's queue file, oldest ${depth.oldestWaiting}. The role is in limits.json queue.exempt: ` +
+        `its reader reads the file itself, without hubd's cursor or read marks, so hubd cannot see what it has read. ${Here} cannot tell ` +
+        'from this count what is unread or whether the reader runs; ask the reader.';
+    return { ...(remote ? {} : { file }), ...(taskKnown === undefined ? {} : { task, taskKnown, ...(asGiven ? { taskAsGiven: asGiven } : {}) }),
+      ...(depth ? { inFile: depth.pending, readerUnseen: true, ...(note ? { note } : {}) } : {}) };
+  }
   const seenHere = (() => { try { return everConsumedHere(role, { root: r }); } catch { return false; } })();
   const readOn = seenHere ? [] : (() => { try { return whereRead(role, { root: r }); } catch { return []; } })();
   const head = depth ? `${depth.pending} message(s) now wait in this role's queue, oldest ${depth.oldestWaiting} — sending appends, it does not deliver.` : '';

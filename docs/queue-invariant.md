@@ -318,4 +318,12 @@ reader hands a file out in order, so every block above that one was handed out
 too, including blocks written before ids, which no ack can name. A reader that
 leaves neither — one that reads the file itself — stays invisible; `hub doctor`
 says so where it reports queues no node has read, and the hub lists such a role
-in `queue.exempt` of `limits.json`.
+in `queue.exempt` of `limits.json`. A send to a role listed there (0.9.69) says
+`readerUnseen` and how many blocks the file holds (`inFile`), never that its reader
+stopped: a mark found for it is stale by construction.
+
+A reader that must only look, not read, has `hub queue list` (0.9.69): the blocks of
+one or more roles, each `pending` or read by the same position every count uses
+(`--as` names the reader of a broadcast role), a block copied into two files listed
+once. It writes no cursor, mark, ack or waiter, so it is what such a reader uses
+instead of parsing the files and keeping a mark of its own.

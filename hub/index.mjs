@@ -116,7 +116,7 @@ const TOOLS = [
       project: { type: 'string', description: 'the project slug, as hub_status lists it' },
       text: { type: 'string', description: 'what the task is, in a line or two' },
       importance: { type: 'string', enum: ['high', 'med', 'normal'], description: 'default normal' },
-      deadline: { type: 'string', description: 'YYYY-MM-DD, optional' },
+      deadline: { type: 'string', description: 'YYYY-MM-DD, or +Nd for N days from today (UTC), optional' },
       cat: { type: 'string', description: 'one of technical | communicative | decision | chore. Anything else is kept — as a tag, not a category: the four values are the axis every by-type number is counted on, so it stays closed.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'free-form labels — the open vocabulary next to the closed cat one' },
       assignee: { type: 'string', description: 'agent name or owner, optional' },
@@ -145,7 +145,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' }, status: { type: 'string', enum: ['open', 'done'] },
       importance: { type: 'string', enum: ['high', 'med', 'normal'] },
-      text: { type: 'string' }, deadline: { type: 'string' },
+      text: { type: 'string' }, deadline: { type: 'string', description: 'YYYY-MM-DD, or +Nd for N days from today (UTC)' },
       cat: { type: 'string', description: 'technical | communicative | decision | chore — anything else is kept as a tag instead' },
       tags: { type: 'array', items: { type: 'string' }, description: 'free-form labels; replaces the task\'s tag list' },
       assignee: { type: 'string' }, by: { type: 'string' },
@@ -188,7 +188,7 @@ const TOOLS = [
     }, required: ['query'] } },
 
   { name: 'hub_reflect',
-    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule\'s other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project\'s laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.',
+    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule\'s other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project\'s laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'the project; its aliases count as it' },
       since: { type: 'string', description: 'the window: a duration (7d, 12h, 30m) or a time (2026-10-01, 2026-10-01 14:00); default 7d' },

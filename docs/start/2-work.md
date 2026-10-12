@@ -23,7 +23,7 @@ echo '["alice"]' > "$HUBD_DIR/owner-roles.json"
 ```bash
 hub task add "choose the payment provider" -p shop --assignee alice --by dev-shop
 hub task add "wire the hosted payment page into checkout" -p shop -i high --needs oak-1 --by dev-shop
-hub task add "fix the 30 s checkout timeout on big carts" -p shop -d 2026-10-10 --by dev-shop
+hub task add "fix the 30 s checkout timeout on big carts" -p shop -d +3d --by dev-shop
 hub task add "load-test checkout with 200 items" -p shop --needs oak-3 --by dev-shop
 ```
 
@@ -35,8 +35,8 @@ Task #oak-4 added: load-test checkout with 200 items
 ```
 
 A task id carries the node that made it (`oak-1`), so two machines never hand out
-the same number. `--needs` says what a task waits on; `-d` is a deadline; `-i high`
-is importance.
+the same number. `--needs` says what a task waits on; `-d` is a deadline, a date or
+`+3d` for three days from today; `-i high` is importance.
 
 ```bash
 hub task list -p shop

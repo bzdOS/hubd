@@ -53,7 +53,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`install-hook`](#install-hook) | git post-commit hook |
 | [`gc`](#gc) | what has piled up, by class — dry: touches nothing; archive it (moved, never deleted) and clear this node's litter |
 | [`secret`](#secret) | values kept outside the replicated hub |
-| [`queue`](#queue) | address work to a role; block until real content, then exit 0; the same, again and again; the role's ready tasks, as its queue; per role and node: delivered and pending; a conflicted queue file: ours in place, theirs appended; archive queue files nobody ever read; dead waiter markers, readers of a dead process, cursors this node cannot write; fold one message said --min times or more about one task into its newest copy |
+| [`queue`](#queue) | address work to a role; block until real content, then exit 0; the same, again and again; the role's ready tasks, as its queue; per role and node: delivered and pending; the blocks, each pending or read; moves no cursor; a conflicted queue file: ours in place, theirs appended; archive queue files nobody ever read; dead waiter markers, readers of a dead process, cursors this node cannot write; fold one message said --min times or more about one task into its newest copy |
 | [`board`](#board) | every track: roles, done, next, blocked, and what waits for you |
 | [`sense`](#sense) | a head's sensor: exit 0 = wake with this text, 1 = nothing |
 | [`serve`](#serve) | read-only dashboard: summary, tracks, kanban, history |
@@ -150,7 +150,7 @@ Also: `hub where`
 
 ## task
 
-- `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
+- `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
 - `hub task done <id> --by <you>` — close a task
 - `hub task list [-p proj] [--status open|done|all] [--json]` — tasks
 - `hub task get <id> [--json]` — one task, and where else its id appears
@@ -289,6 +289,7 @@ Also: `hub res`
 - `hub queue monitor <role> [--timeout <N>] [--once] [--as <sub>] [--from-now]` — the same, again and again
 - `hub queue work <role> [--json]` — the role's ready tasks, as its queue
 - `hub queue status [<role>] [--json]` — per role and node: delivered and pending
+- `hub queue list <role>... [--pending] [--since 3h|<time>] [--as <sub>] [-n N] [--json]` — the blocks, each pending or read; moves no cursor
 - `hub queue resolve [file...]` — a conflicted queue file: ours in place, theirs appended
 - `hub queue gc [--days 30] [--apply]` — archive queue files nobody ever read
 - `hub queue repair [--apply] [--json]` — dead waiter markers, readers of a dead process, cursors this node cannot write
@@ -359,7 +360,7 @@ The commands each flag appears with, in their usage lines.
 | `-m` | [card](#card), [resource](#resource), [sync](#sync) |
 | `--min` | [queue](#queue) |
 | `--model` | [usage](#usage) |
-| `-n` | [log](#log), [stats](#stats) |
+| `-n` | [log](#log), [stats](#stats), [queue](#queue) |
 | `--needs` | [task](#task) |
 | `--node` | [sessions](#sessions) |
 | `--note` | [claim](#claim) |
@@ -367,6 +368,7 @@ The commands each flag appears with, in their usage lines.
 | `--opencode` | [sessions](#sessions) |
 | `--out` | [prompts](#prompts) |
 | `-p` | [watch](#watch), [report](#report), [decide](#decide), [next](#next), [task](#task), [graph](#graph), [claim](#claim), [usage](#usage), [stats](#stats), [serve](#serve) |
+| `--pending` | [queue](#queue) |
 | `--print` | [setup](#setup) |
 | `--private` | [watch](#watch) |
 | `--project` | [reflect](#reflect) |
@@ -383,7 +385,7 @@ The commands each flag appears with, in their usage lines.
 | `--seconds` | [usage](#usage) |
 | `--section` | [card](#card) |
 | `--set` | [section](#section) |
-| `--since` | [log](#log), [watch](#watch), [reflect](#reflect), [stats](#stats) |
+| `--since` | [log](#log), [watch](#watch), [reflect](#reflect), [stats](#stats), [queue](#queue) |
 | `--src` | [section](#section) |
 | `--stale-days` | [recall](#recall) |
 | `--status` | [task](#task), [resource](#resource), [heartbeat](#heartbeat) |

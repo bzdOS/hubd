@@ -4,6 +4,36 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.69 — 2026-10-12
+
+- **`hub queue list`: a queue looked at, not read.** `hub queue wait` hands blocks out
+  and moves the reader on; `hub queue status` only counts them. A reader that must
+  only look (an inbox view, a check whether an answer came) had neither, so it parsed
+  the files itself and kept a read mark of its own, and the two told different
+  stories about one file. `hub queue list <role>... [--pending] [--since]
+  [--as <sub>] [-n N] [--json]` lists the blocks, each `pending` or read by the same
+  position every count uses (this node's cursor or the furthest mark), and writes no
+  cursor, mark, ack or waiter. A broadcast role is pending per reader, so `--as`
+  names one; without it `pending` is null. A block a union merge left in two files is
+  listed once, with both files.
+- **A send to a role in `queue.exempt` no longer calls its reader stopped.** Such a
+  reader reads the file itself and leaves no cursor or mark, so a mark found for it is
+  stale by construction, and a role answering every quarter hour was told it had
+  stopped on each send. Its send says `readerUnseen` and how many blocks the file
+  holds (`inFile`), and that the count cannot tell what is unread.
+- **A reflection of a turn that found no work is accepted.** `result: no` with
+  `obstacle: none` was refused as a result hiding its obstacle; a role on an empty
+  queue then gave its emptiness a class, `environment` or `unclear-dispatch`, and the
+  digest counted trouble that was not there. It is now an idle turn: `hub reflect`
+  and `hub_reflect` count it per role and in all (`idle`, "N found no work"), never as
+  an obstacle, and its `instead` may be `none`. A `no` that had work still names its
+  class. The reflect fragment says so.
+- **A deadline in days from today.** `-d +3d` on `hub task add`, and `deadline: "+3d"`
+  in `hub_task_add` and `hub_task_update`, is stored as the date three days from today,
+  on the UTC calendar "overdue" and "due soon" are counted on; a date is kept as given.
+  The tutorial on work and decisions named a fixed date for its "due soon" task, and
+  once that date passed, every run of it read "overdue".
+
 ## 0.9.68 — 2026-10-10
 
 - **The Harvest prompt writes what the hub accepts.** Pasted where the chat has no hubd
