@@ -566,7 +566,8 @@ command(['plan', 'trajectory'], () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
   const r = runTrajectory({ project: proj });
   const label = (id) => { const t = r.ready.concat(r.blocked).find(x => String(x.id) === String(id)); return `#${id}${t ? ' ' + (t.text || '').slice(0, 40) : ''}`; };
-  console.log(`── TRAJECTORY${proj ? ' · ' + proj : ''} · ${r.generated} ──  open ${r.counts.open} · ready ${r.counts.ready} · blocked ${r.counts.blocked} · depth ${r.counts.depth}${r.counts.cyclic ? ' · ⚠cyclic ' + r.counts.cyclic : ''}`);
+  console.log(`── TRAJECTORY${proj ? ' · ' + proj : ''} · ${r.generated} ──  open ${r.counts.open} · held ${r.counts.held ?? 0} · ready ${r.counts.ready} · blocked ${r.counts.blocked} · depth ${r.counts.depth}${r.counts.cyclic ? ' · ⚠cyclic ' + r.counts.cyclic : ''}`);
+  if (r.held && r.held.length) console.log('  HELD by the owner (not ready): ' + r.held.map(x => '#' + x.id).slice(0, 12).join(', '));
   console.log(`\nREADY NOW (${r.ready.length}):`);
   for (const t of r.ready) console.log(`  #${t.id} [${t.project}] ${t.importance === 'high' ? '! ' : ''}${(t.text || '').slice(0, 70)}`);
   if (r.criticalPath.length) console.log(`\nCRITICAL PATH (${r.criticalPath.length}): ` + r.criticalPath.map(id => '#' + id).join(' → '));

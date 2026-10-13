@@ -4322,7 +4322,13 @@ export function runTrajectory(a = {}) {
   // deps that are THEMSELVES still open (i.e. actually blocking); a done/absent dep is satisfied.
   const openDeps = (t) => (Array.isArray(t.depends_on) ? t.depends_on.map(String) : []).filter(d => openIds.has(d));
 
-  const ready = open.filter(t => openDeps(t).length === 0);
+  // A task under the owner's hold is NOT ready: a formal ready count otherwise
+  // reads as available work while the tasks are frozen by the owner's decision.
+  // Same tag set the head sensor uses on the fleet side.
+  const HOLD_TAGS = new Set(["hold", "parked", "owner-hold", "owner-blocked", "owner-held"]);
+  const isHeld = (t) => (Array.isArray(t.tags) ? t.tags : []).some(x => HOLD_TAGS.has(String(x).toLowerCase()));
+  const ready = open.filter(t => openDeps(t).length === 0 && !isHeld(t));
+  const held = open.filter(t => isHeld(t));
   const blocked = open.filter(t => openDeps(t).length > 0)
     .map(t => ({ ...short(t), waitingOn: openDeps(t) }));
 
@@ -4350,8 +4356,9 @@ export function runTrajectory(a = {}) {
 
   return {
     project: proj,
-    counts: { open: open.length, ready: ready.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length },
+    counts: { open: open.length, ready: ready.length, held: held.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length },
     ready: ready.map(short),
+    held: held.map(short),
     blocked,
     layers,
     criticalPath,
