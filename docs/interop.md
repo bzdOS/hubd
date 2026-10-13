@@ -167,7 +167,7 @@ document nor a peer project's README is authoritative about a given deployment:
 # itself the way `pgrep -f <pattern>` can -- and it returns one pid per process,
 # so loop rather than interpolating (a bare $(pgrep) with two matches produces
 # an invalid path and a misleading "No such file or directory").
-for pid in $(pgrep -x the bridge service); do
+for pid in $(pgrep -x hub-bridge); do
   echo "pid $pid:"
   tr '\0' '\n' < "/proc/$pid/environ" | grep HUBD || echo "  (no HUBD_* set -- bridge off)"
 done
