@@ -4345,12 +4345,42 @@ export function runTrajectory(a = {}) {
   const cyclic = graphable.filter(t => !placed.has(String(t.id))
     && !openDeps(t).some(d => heldIds.has(d))).map(t => String(t.id)); // unplaceable = in/behind a cycle
 
+  // WEIGHT = MEASURED TIME, not a task count. Every closed task carries created and
+  // done, so honest durations are already derivable; the estimate for an open task is
+  // the median measured duration of its project's closed tasks. Fallback is 1 unit,
+  // i.e. the old task-count behaviour, and `weighting` below says which was used.
+  const _mins = (a, b) => {
+    const x = Date.parse(String(a || '').replace(' ', 'T') + 'Z');
+    const y = Date.parse(String(b || '').replace(' ', 'T') + 'Z');
+    return (Number.isFinite(x) && Number.isFinite(y) && y > x) ? (y - x) / 60000 : null;
+  };
+  const _closed = new Map();
+  for (const t of all) {
+    if (t.status !== 'done') continue;
+    const m = _mins(t.created, t.done);
+    if (m == null) continue;
+    if (!_closed.has(t.project)) _closed.set(t.project, []);
+    _closed.get(t.project).push(m);
+  }
+  const _median = (xs) => {
+    if (!xs || !xs.length) return null;
+    const v = [...xs].sort((a, b) => a - b);
+    return v[Math.floor(v.length / 2)];
+  };
+  const _weight = (t) => {
+    const own = _mins(t.created, t.done);
+    if (own != null) return Math.max(1, own);
+    const med = _median(_closed.get(t.project));
+    return med != null ? Math.max(1, med) : 1;
+  };
+  const _timed = [..._closed.entries()].filter(([, v]) => v.length >= 3).length;
+
   // Longest dependency chain (critical path) over the acyclic part — DP in layer order, no recursion.
   const depth = new Map(), parent = new Map();
   for (const layer of layers) for (const id of layer) {
     let best = 0, bp = null;
     for (const d of openDeps(byId.get(id))) if ((depth.get(d) || 0) >= best) { best = depth.get(d) || 0; bp = d; }
-    depth.set(id, best + 1); parent.set(id, bp);
+    depth.set(id, best + _weight(byId.get(id) || {})); parent.set(id, bp);
   }
   let end = null, max = 0;
   for (const [id, d] of depth) if (d > max) { max = d; end = id; }
@@ -4359,14 +4389,17 @@ export function runTrajectory(a = {}) {
 
   return {
     project: proj,
-    counts: { open: open.length, ready: ready.length, held: held.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length },
+    counts: { open: open.length, ready: ready.length, held: held.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length,
+              criticalMinutes: Math.round(max) },
     ready: ready.map(short),
     held: held.map(short),
     blocked,
     layers,
     criticalPath,
     cycles: cyclic,
-    weighting: 'task-count (unweighted; weighted critical path pending honest durations from logd #193)',
+    weighting: _timed
+      ? `measured minutes: median duration of closed tasks in ${_timed} project(s); fallback 1 unit`
+      : 'task-count (no project has 3+ closed tasks with timestamps yet)',
     generated: now(),
   };
 }
