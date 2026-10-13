@@ -4327,20 +4327,23 @@ export function runTrajectory(a = {}) {
   // Same tag set the head sensor uses on the fleet side.
   const HOLD_TAGS = new Set(["hold", "parked", "owner-hold", "owner-blocked", "owner-held"]);
   const isHeld = (t) => (Array.isArray(t.tags) ? t.tags : []).some(x => HOLD_TAGS.has(String(x).toLowerCase()));
-  const ready = open.filter(t => openDeps(t).length === 0 && !isHeld(t));
-  const held = open.filter(t => isHeld(t));
-  const blocked = open.filter(t => openDeps(t).length > 0)
+  const heldIds = new Set(open.filter(isHeld).map(t => String(t.id)));
+  const held = open.filter(isHeld);
+  const graphable = open.filter(t => !isHeld(t));
+  const ready = graphable.filter(t => openDeps(t).length === 0);
+  const blocked = graphable.filter(t => openDeps(t).length > 0)
     .map(t => ({ ...short(t), waitingOn: openDeps(t) }));
 
   // Kahn layers: layer 0 = ready now; layer k unlocks once all lower layers done.
-  const layers = []; const placed = new Set();
-  let frontier = ready.map(t => String(t.id));
+  const layers = []; const placed = new Set(heldIds);  // held = frozen root
+  let frontier = graphable.filter(t => openDeps(t).every(d => placed.has(d))).map(t => String(t.id));
   while (frontier.length) {
     layers.push(frontier); frontier.forEach(id => placed.add(id));
-    frontier = open.filter(t => !placed.has(String(t.id)) && openDeps(t).every(d => placed.has(d)))
+    frontier = graphable.filter(t => !placed.has(String(t.id)) && openDeps(t).every(d => placed.has(d)))
       .map(t => String(t.id));
   }
-  const cyclic = open.filter(t => !placed.has(String(t.id))).map(t => String(t.id)); // unplaceable = in/behind a cycle
+  const cyclic = graphable.filter(t => !placed.has(String(t.id))
+    && !openDeps(t).some(d => heldIds.has(d))).map(t => String(t.id)); // unplaceable = in/behind a cycle
 
   // Longest dependency chain (critical path) over the acyclic part — DP in layer order, no recursion.
   const depth = new Map(), parent = new Map();
