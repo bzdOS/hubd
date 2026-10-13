@@ -4359,6 +4359,7 @@ export function runTrajectory(a = {}) {
     if (t.status !== 'done') continue;
     const m = _mins(t.created, t.done);
     if (m == null) continue;
+    if (m > 10080) continue;   // > 7 days = sat in the backlog, not work time
     if (!_closed.has(t.project)) _closed.set(t.project, []);
     _closed.get(t.project).push(m);
   }
@@ -4398,7 +4399,7 @@ export function runTrajectory(a = {}) {
     criticalPath,
     cycles: cyclic,
     weighting: _timed
-      ? `measured minutes: median duration of closed tasks in ${_timed} project(s); fallback 1 unit`
+      ? `measured minutes: median of tasks closed within 7 days in ${_timed} project(s); fallback 1 unit`
       : 'task-count (no project has 3+ closed tasks with timestamps yet)',
     generated: now(),
   };
