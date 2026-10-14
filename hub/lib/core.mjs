@@ -4414,11 +4414,20 @@ export function runTrajectory(a = {}) {
  * The order is the same one hub_brief sorts by (overdue, then importance, then age) with one
  * addition that matters more than any of them: a task whose dependencies are still open is not
  * eligible, no matter how loud it is. */
+/** Tags that mean "frozen by the owner's decision": such a task is not ready work.
+ *  Same set the trajectory uses and the fleet-side head sensor honours. */
+const HOLD_TAGS = new Set(["hold", "parked", "owner-hold", "owner-blocked", "owner-held"]);
+export const isHeldTask = (t) =>
+  (Array.isArray(t.tags) ? t.tags : []).some((x) => HOLD_TAGS.has(String(x).toLowerCase().replace(/^#/, "")));
+
 export function eligibleOpen(tasks, { project, assignee } = {}) {
   const open = tasks.filter(t => t.status === 'open');
   const openIds = new Set(open.map(t => String(t.id)));
   const blocked = (t) => (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).some(d => openIds.has(d));
-  let list = open.filter(t => !blocked(t));
+  // 14.10: холд владельца убирает задачу из готовых. Без этого agenda и next
+  // показывали planck-694 как «AGENT WORK, READY NOW», хотя у неё метки hold и
+  // owner-hold: 212 готовых при фактически замороженных задачах.
+  let list = open.filter(t => !blocked(t) && !isHeldTask(t));
   if (project) { const set = projectSlugSet(project); list = list.filter(t => set.has(t.project)); }
   if (assignee) list = list.filter(t => t.assignee === assignee);
   return { list, blocked: open.filter(blocked), openIds };
