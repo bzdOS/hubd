@@ -37,7 +37,7 @@ import { runHubGc } from './lib/gc.mjs';
 import { renderPrompt, templateNames, lineDiff } from './lib/prompts.mjs';
 import { runSenseEvents, runSenseVerdict, runSenseBrief, senseConf, senseConfig, loadSenseState, checkBranch, escalationsPath } from './lib/sense.mjs';
 import { secretsRoot, setSecret, getSecret, secretPath, listSecrets, removeSecret, auditModes, backupSecret, restoreSecret, verifyBackups, backupDir } from './lib/secrets.mjs';
-import { roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, runQueueRepair, runQueueDedupe, queueLedger, queueList } from './lib/queue.mjs';
+import { queueAck, roleWork, assertRole, briefWithQueues, queueSendChecked, queueWait, queueWaitAll, resolveQueueRoot, queueSummaryForBrief, runQueueGc, runQueueRepair, runQueueDedupe, queueLedger, queueList } from './lib/queue.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -2216,6 +2216,20 @@ command('queue', () => {
       console.log(`  note: ${r.neverRead} of ${r.total} queue file(s) have never been consumed at all — ${r.neverRead - r.count} of them newer than ${days}d and left alone. Lower the bar with --days <N> once you know they are dead.`);
     }
     done(0);
+  } else if (sub === 'ack') {
+    // ПОДТВЕРДИТЬ ПРОЧТЕНИЕ БЛОКА. Без этого глагола «прочитано» и «сделано»
+    // неразличимы: отправитель видит pending=0 и не знает, обработали его или
+    // сессия прочла и умерла (fedora-280, слово владельца 12.10). Библиотека
+    // умела queueAck с самого начала, а CLI не выставлял его наружу — поэтому
+    // цикл ролей физически не мог подтвердить блок.
+    const rest = positionals(2, {});
+    if (rest.length < 2) die('Usage: hub queue ack <role> <block-id>');
+    try {
+      const r = queueAck(rest[0], rest[1], { root: resolveQueueRoot() });
+      console.log(r && r.ok === false ? `  ack ${rest[1]}: ${r.reason || 'не подтверждён'}`
+        : `  ack ${rest[1]}: подтверждён`);
+      done(0);
+    } catch (e) { die('queue ack: ' + (e && e.message ? e.message : e)); }
   } else if (sub === 'repair') {
     try { if (positionals(2, { booleans: ['--apply', '--json'] }).length) die('Usage: hub queue repair [--apply] [--json]'); } catch (e) { die(e.message); }
     const apply = args.includes('--apply');
@@ -2259,7 +2273,7 @@ command('queue', () => {
     if (!apply && r.files.some(f => f.drop && !f.held)) console.log(`Nothing changed: --apply folds every flood of ${r.min}+ copies.`);
     done(0);
   } else {
-    die('queue subcommands: send, wait, monitor, work, status, list, resolve, gc, repair, dedupe');
+    die('queue subcommands: send, wait, monitor, work, status, list, resolve, ack, gc, repair, dedupe');
   }
 });
 
