@@ -4424,9 +4424,9 @@ export function eligibleOpen(tasks, { project, assignee } = {}) {
   const open = tasks.filter(t => t.status === 'open');
   const openIds = new Set(open.map(t => String(t.id)));
   const blocked = (t) => (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).some(d => openIds.has(d));
-  // 14.10: холд владельца убирает задачу из готовых. Без этого agenda и next
-  // показывали planck-694 как «AGENT WORK, READY NOW», хотя у неё метки hold и
-  // owner-hold: 212 готовых при фактически замороженных задачах.
+  // 14.10: a task frozen by the owner is not ready work. Without this the agenda
+  // and next listed such a task under AGENT WORK, READY NOW, and the ready count
+  // read as available work while the tasks were frozen by decision.
   let list = open.filter(t => !blocked(t) && !isHeldTask(t));
   if (project) { const set = projectSlugSet(project); list = list.filter(t => set.has(t.project)); }
   if (assignee) list = list.filter(t => t.assignee === assignee);
