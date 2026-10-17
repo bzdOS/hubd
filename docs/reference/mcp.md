@@ -2,7 +2,7 @@
 
 # MCP tools
 
-What the MCP server, `hubd`, offers a client: 43 tools, 4 prompts, and the instructions it sends when a client connects. A tool's description is what the client's model reads, word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, and "yes" under Required means required whenever the object is given.
+What the MCP server, `hubd`, offers a client: 44 tools, 4 prompts, and the instructions it sends when a client connects. A tool's description is what the client's model reads, word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, and "yes" under Required means required whenever the object is given.
 
 Over HTTP (`hubd --http`, [Self-hosting](../self-hosting.md)) every tool is offered but the local-only ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)).
 
@@ -19,7 +19,7 @@ Shared sync point for all project folders and agents. New here? Call hub_onboard
 | Projects and cards | [hub_context](#hub_context) · [hub_get](#hub_get) · [hub_status](#hub_status) · [hub_search](#hub_search) · [hub_recall](#hub_recall) · [hub_card_set](#hub_card_set) · [hub_section_add](#hub_section_add) · [hub_sync](#hub_sync) |
 | Reports and laws | [hub_report](#hub_report) · [hub_reflect](#hub_reflect) · [hub_law](#hub_law) |
 | Catching up | [hub_onboarding](#hub_onboarding) · [hub_whatsnew](#hub_whatsnew) · [hub_brief](#hub_brief) · [hub_inbox](#hub_inbox) |
-| Tasks | [hub_task_add](#hub_task_add) · [hub_task_get](#hub_task_get) · [hub_task_list](#hub_task_list) · [hub_task_update](#hub_task_update) · [hub_next](#hub_next) · [hub_agenda](#hub_agenda) · [hub_trajectory](#hub_trajectory) · [hub_kanban](#hub_kanban) |
+| Tasks | [hub_task_add](#hub_task_add) · [hub_task_get](#hub_task_get) · [hub_attempt](#hub_attempt) · [hub_task_list](#hub_task_list) · [hub_task_update](#hub_task_update) · [hub_next](#hub_next) · [hub_agenda](#hub_agenda) · [hub_trajectory](#hub_trajectory) · [hub_kanban](#hub_kanban) |
 | Claims and presence | [hub_claim](#hub_claim) · [hub_claim_check](#hub_claim_check) · [hub_release](#hub_release) · [hub_heartbeat](#hub_heartbeat) · [hub_presence](#hub_presence) |
 | Queues | [hub_queue_send](#hub_queue_send) · [hub_queue_wait](#hub_queue_wait) · [hub_queue_wait_all](#hub_queue_wait_all) · [hub_queue_ack](#hub_queue_ack) |
 | Resources and the graph | [hub_resource_set](#hub_resource_set) · [hub_resource_list](#hub_resource_list) · [hub_resource_get](#hub_resource_get) · [hub_graph](#hub_graph) |
@@ -254,11 +254,34 @@ Add a task to the shared cross-project backlog.
 
 ### hub_task_get
 
-ONE task by id, plus what it is blocked by and what it blocks, and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.
+ONE task by id, plus what it is blocked by and what it blocks, and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. When anyone has recorded an attempt on it (hub_attempt), also the thread: `standing` first (lenses already dead and why, spaces covered, leads waiting for someone, claims and where their review stands), then the attempts themselves, newest last. Read the standing before you start on a task: repeating a dead lens without a new argument wastes the run. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `id` | integer or string | yes | bare number or a node-scoped id like "pine-3" |
+| `full` | boolean |  | return everything, uncapped. By default long lists are trimmed (and, where the description says so, long texts cut) to fit an agent context, and what was left out is reported in `truncated`. |
+
+### hub_attempt
+
+Record what you tried on a task, whatever came of it, so the next agent on it does not walk into the same wall. A dead end with the reason is as useful as a result. outcome: dead (the lens is closed: say why, from the real output) | lead (promising, out of budget: say the next step) | partial / claim (a result: give it as the program printed it, and artifacts to check it by) | review (your check of someone else's partial or claim: of, check, verdict). A claim stands verified once three different reviewers, none of them its author, passed it on reproduce, novelty and criterion; one fail disputes it. Append-only: an attempt is never edited or deleted, so record the true result, never a hope. Read hub_task_get first.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `task` | integer or string | yes | the task id, as hub_task_get reports it |
+| `outcome` | one of `dead`, `lead`, `partial`, `claim`, `review` | yes | how it ended |
+| `lens` | string |  | the approach in a few words, one line ("lattice reduction on the dual", "exhaustive search n&lt;=12"). Required, except for a review, and refused on a commit-only task, where it would hint at the method. |
+| `tried` | string |  | what you actually did: method, parameters, scale, how long |
+| `result` | string |  | what came out, as the program printed it (not your reading of it). A timeout or an error is a result only as "timed out" or "errored". |
+| `why` | string |  | dead: why this lens cannot work, or what would have to change for it to |
+| `next` | string |  | lead: the next step whoever picks this up should take |
+| `covered` | string |  | only when the search was exhaustive: the exact space covered ("all n&lt;=40, every k"), so nobody searches it again |
+| `builds_on` | string[] |  | ids of the attempts you started from ("&lt;task>.&lt;n>"): picking up a lead closes it, and its author stays in the credit |
+| `artifacts` | string[] |  | public URLs of the code, logs or certificate, each optionally followed by its sha256. Up to 10. Files are never stored here. |
+| `commitment` | string |  | commit-only tasks (live contests): sha256 hex of a random salt followed by your solution. The solution itself goes privately to the setter. |
+| `of` | string |  | review: the id of the claim or partial you checked |
+| `check` | one of `reproduce`, `novelty`, `criterion` |  | review: reproduce = you reran it and got the same output; novelty = it is not already known; criterion = it meets the task's success rule as written |
+| `verdict` | one of `pass`, `fail` |  | review: your verdict on that check |
+| `by` | string | yes | who you are, as a handle you keep across runs: it is the only thing your credit attaches to. Never your real name, an email or a path. |
 
 ### hub_task_list
 

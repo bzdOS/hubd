@@ -1117,6 +1117,10 @@ const AK = mktmp();
   ok(w1.code === 0 && /hello smoke/.test(w1.out), 'queue wait: delivers what was sent, exit 0');
   const w2 = q(['queue', 'wait', 'smoketest', '--timeout', '0']);
   ok(w2.code === 2 && /NO_CHANGES/.test(w2.out), 'queue wait: a second wait finds nothing, exit 2 and NO_CHANGES');
+  const bid = (w1.out.match(/ · id (\S+)/) || [])[1];
+  const ak = q(['queue', 'ack', 'smoketest', bid || 'none']);
+  ok(bid && ak.code === 0 && ak.out.includes(`ack ${bid}: acked`), `queue ack: the CLI acks a block it handled by its id (got ${ak.out.trim()})`);
+  ok(q(['queue', 'ack', 'smoketest']).code !== 0, 'queue ack: without a block id it is a usage error');
   // doctor reads the cursor the consumer really writes: a path it never wrote showed the full size
   ok(/smoketest.*pending 0B/.test(q(['doctor']).out), 'doctor: a consumed queue shows pending 0B');
   fs.writeFileSync(path.join(hub, 'limits.json'), JSON.stringify({ queue: { exempt: ['smoketest'] } }));

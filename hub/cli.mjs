@@ -11,7 +11,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, JOURNAL_NODE, VERSION, now, parseTs, slugify, sh, cardPath, digestOf, requireAuthor, runSync,
-  runCardSet, runReport, runReflect, runPromote, runLaw, projectLaws, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet,
+  runCardSet, runReport, runReflect, runPromote, runLaw, projectLaws, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runAttemptAdd, ATTEMPT_OUTCOMES,
   runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
@@ -125,6 +125,7 @@ declareFlags(
   '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
   '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
   '--opencode', '--rows', '--node', '--db', '--dry', '--group', '--pending',
+  '-o', '--lens', '--tried', '--result', '--next', '--covered', '--builds-on', '--artifact', '--of', '--verdict', '--commitment',
 );
 
 function getFlag(name) {
@@ -879,6 +880,7 @@ command('task', () => {
     }
     let c = null; try { c = taskCost(t.id); } catch {}
     if (c) console.log(`cost: ${costLine(c)}` + (c.outcome ? ` · ${c.outcome}ed` : '') + '  (hub stats --task ' + t.id + ' for the attempts)');
+    if (r.standing) printThread(r);
   } else if (sub === 'retag') {
     const apply = args.includes('--apply');
     const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
@@ -890,6 +892,47 @@ command('task', () => {
   } else {
     die('task subcommands: add, get, done, list, retag');
   }
+  done(0);
+});
+
+/* A task's thread as `hub task get` prints it: where it stands, then every attempt in order. */
+function printThread(r) {
+  const s = r.standing;
+  const one = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+  const lens = (x) => x.lens ? ` [${x.lens}]` : '';  // a commit-only attempt has none
+  console.log(`\nthread: ${s.attempts} attempt${s.attempts === 1 ? '' : 's'}, ${s.authors} ${s.authors === 1 ? 'person' : 'people'}  (${r.attemptsNote})`);
+  for (const c of s.claims) console.log(`  ${c.outcome} ${c.id}${lens(c)} ${c.status}` + (c.missing ? ` — needs ${c.missing.join(', ')}` : '') + (c.reviewers.length ? ` — reviewed by ${c.reviewers.join(', ')}` : ''));
+  for (const l of s.leads) console.log(`  lead ${l.id}${lens(l)} next: ${one(l.next)}`);
+  for (const d of s.dead) console.log(`  dead ${d.id}${lens(d)} ${one(d.why)}`);
+  for (const c of s.covered) console.log(`  covered ${c.id}: ${one(c.covered)}`);
+  for (const a of r.attempts) {
+    const head = a.outcome === 'review' ? `review of ${a.of}: ${a.check} ${a.verdict}` : a.outcome + lens(a);
+    console.log(`\n#${a.id} ${head} — ${a.by}, ${a.ts}` + ((a.builds_on || []).length ? `  (builds on ${a.builds_on.join(', ')})` : ''));
+    for (const k of ['tried', 'result', 'why', 'next', 'covered', 'commitment']) if (a[k]) console.log(`  ${k}: ${String(a[k]).replace(/\n/g, '\n    ')}`);
+    for (const x of a.artifacts || []) console.log(`  artifact: ${x}`);
+  }
+}
+
+/* `hub attempt <task> -o <outcome> --lens "<approach>" ... --by <you>` — what was tried on a task and
+ * what came of it, so the next agent on it starts from there (hub_attempt; docs/commons.md). */
+command('attempt', () => {
+  const AU = `Usage: hub attempt <task> -o ${ATTEMPT_OUTCOMES.join('|')} --lens "<approach>" [--tried "..."] [--result "..."] ` +
+    `[--why "..."] [--next "..."] [--covered "..."] [--builds-on <ids>] [--artifact <url>] [--commitment <sha256>] ` +
+    `[--of <attempt> --check reproduce|novelty|criterion --verdict pass|fail] --by <you>`;
+  const V = ['-o', '--lens', '--tried', '--result', '--why', '--next', '--covered', '--builds-on', '--artifact',
+    '--commitment', '--of', '--check', '--verdict', '--by'];
+  let pos; try { pos = positionals(1, { values: V, booleans: ['--json'] }); } catch (e) { die(e.message + '\n' + AU); }
+  if (!pos[0]) die(AU);
+  if (pos.length > 1) die(`unexpected extra argument ${JSON.stringify(pos[1].slice(0, 40))} — quote each text as one argument.\n${AU}`);
+  const str = (f) => { const v = getFlag(f); return typeof v === 'string' ? v : undefined; };
+  let r;
+  try {
+    r = runAttemptAdd({ task: pos[0], outcome: str('-o'), lens: str('--lens'), tried: str('--tried'), result: str('--result'),
+      why: str('--why'), next: str('--next'), covered: str('--covered'), builds_on: getFlags('--builds-on'), artifacts: getFlags('--artifact'),
+      commitment: str('--commitment'), of: str('--of'), check: str('--check'), verdict: str('--verdict'), by: authorOrDie('--by') });
+  } catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(r)); done(0); }
+  console.log(`Attempt #${r.id} on #${r.task}: ${r.outcome}` + (r.claim ? ` — ${r.claim.id} ${r.claim.status}${r.claim.missing ? ', needs ' + r.claim.missing.join(', ') : ''}` : ''));
   done(0);
 });
 
@@ -1430,14 +1473,15 @@ command('agenda', () => {
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
   const r = runAgenda({ project: proj || undefined });
   const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); } };
-  console.log(`\u2500\u2500 AGENDA${proj ? ' \u00b7 ' + proj : ''} \u00b7 ${r.generated} \u2500\u2500  ready ${r.counts.eligible} \u00b7 blocked ${r.counts.blocked}`);
+  console.log(`\u2500\u2500 AGENDA${proj ? ' \u00b7 ' + proj : ''} \u00b7 ${r.generated} \u2500\u2500  ready ${r.counts.eligible} \u00b7 held ${r.counts.held} \u00b7 blocked ${r.counts.blocked}`);
   const line = (x) => `#${x.id} [${x.project}]${x.deadline ? ' \u23f0' + x.deadline : ''}${x.assignee ? ' @' + x.assignee : ''} ${x.text}`;
   P('OVERDUE', r.overdue, line);
   P('DUE SOON', r.dueSoon, line);
   P('OWNER BUTTONS (only a human can press)', r.ownerButtons, line);
   P('AGENT WORK, READY NOW', r.agentReady, line);
+  P('HELD BY THE OWNER (not ready)', r.held, line);
   P('BLOCKED', r.blocked, x => line(x) + '  \u2190 waits on #' + x.waitingOn.join(' #'));
-  if (!r.counts.eligible && !r.counts.blocked) console.log('\nnothing open');
+  if (!r.counts.eligible && !r.counts.held && !r.counts.blocked) console.log('\nnothing open');
   done(0);
 });
 
@@ -2349,7 +2393,8 @@ const HELP = [
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
   ['task done <id> --by <you>', 'close a task'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
-  ['task get <id> [--json]', 'one task, and where else its id appears'],
+  ['task get <id> [--json]', 'one task, where else its id appears, and its thread of attempts'],
+  ['attempt <task> -o dead|lead|partial|claim|review --lens "<approach>" [--tried ..] [--result ..] [--why ..] [--next ..] [--covered ..] [--builds-on <id>] [--artifact <url>] [--commitment <sha256>] [--of <id> --check <c> --verdict pass|fail] --by <you> [--json]', 'record what you tried on a task and what came of it'],
   ['task retag [--apply --by <you>]', 'move categories off the fixed list into tags (dry run without --apply)'],
   ['card <slug> -m "<digest>"', 'set a project card without a folder'],
   ['card <slug> --replace "<old>" --with "<new>" [--append-line "<line>"]', 'fix lines of a card, leave the rest byte-for-byte'],

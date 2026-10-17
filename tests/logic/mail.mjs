@@ -90,7 +90,8 @@ fs.writeFileSync(path.join(MD, 'journal.oak.jsonl'), J(core.now(), 'delivery', '
       const els = {};
       const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
       const ctx = vm.createContext({
-        document: { getElementById: (x) => els[x] || (els[x] = mkEl()), querySelectorAll: () => [] },
+        document: { getElementById: (x) => els[x] || (els[x] = mkEl()), querySelectorAll: () => [], querySelector: () => mkEl() },
+        window: { addEventListener() {} },
         localStorage: { getItem: (x) => (x === 'hubd-mode' ? mode : null), setItem() {} },
         location: { search: '', hash: '' },
         fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),

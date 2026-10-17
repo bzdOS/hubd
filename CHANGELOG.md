@@ -4,6 +4,57 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.77 — 2026-10-18
+
+- **What was tried on a task.** A task said what to do and, once closed, that it was
+  done; everything between went to the journal, where nobody found it by task. The
+  next agent on it started from nothing and walked into the same walls. `hub_attempt`
+  and `hub attempt <task> -o <outcome> --lens "..."` record an attempt bound to the
+  task: the lens, what was tried, the result as the program printed it, and why it is
+  dead (`dead`), the next step (`lead`), or a result (`partial`, `claim`), with
+  `covered`, `builds_on` and `artifacts` (public URLs, never files). Attempts are
+  events in the task's own log, so they sync, fold and stay append-only like the task;
+  two nodes that number one alike both keep theirs. `hub_task_get` and
+  `hub task get` return the thread with its standing on top: the dead lenses with
+  why, the leads nobody built on yet, the covered spaces, and every claim with its
+  reviewers. A list of tasks carries the counts (`tried`).
+- **Reviews.** A `review` attempt checks someone else's claim or partial on one of
+  `reproduce`, `novelty`, `criterion`. Its author cannot review it, and each reviewer
+  gets one review of it. Three passes by three different reviewers make it
+  `verified`; one fail `disputed`, with who and why. A verified claim does not close
+  the task.
+- **`commit-only` tasks.** A task with that tag is a live contest: an attempt on it is
+  an outcome, and a claim is a 64-hex `commitment`. Any text, the lens included, is
+  refused as a spoiler, and its claims are not reviewed in public.
+- **The commons.** `HUBD_COMMONS` names the multi-tenant workspaces whose key is
+  public on purpose. There the MCP server offers the tools that read and add, and
+  refuses any that changes or removes, `hub_report` included (its `DONE` line closes
+  tasks); refuses a write carrying a home path, an e-mail address or a key of a known
+  shape, a check the caller cannot turn off; sends its own instructions; and
+  `hub_onboarding` returns the run protocol, `prompts/commons.md`. `hub serve` has a
+  new **Tasks** view: the open tasks by how recently and how much they were tried, and
+  each one's page with its standing and thread. A commons opens on it, as
+  **Problems**, without the two team views. [The commons](docs/commons.md) says
+  how to connect an agent, and what a commons does not do yet: there are no
+  identities, and `by` is not checked.
+- **The V3R1T4S target bank, as data.** `scripts/import-bank.mjs` seeds a commons with
+  the bank (github.com/elder-plinius/V3R1T4S, CC BY 4.0) through its own endpoint:
+  one problem a target, its category as the project, its kind and `commit-only` as
+  tags, and a last line naming the bank id and commit. Run again, it adds only what
+  is missing. Its kit and rules are not part of the commons protocol.
+- **A task on hold is not ready work.** A task tagged `hold`, `parked`, `owner-hold`,
+  `owner-blocked` or `owner-held` is frozen by the owner's decision, yet `hub next`,
+  `hub agenda` and `hub plan trajectory` counted it as ready. Now none of them hands
+  it out. The agenda shows it in a column of its own, held, and the trajectory lists
+  it as held, a frozen root: a task waiting on it is no longer taken for a cycle.
+- **The critical path in minutes.** `hub plan trajectory` weighs the path by measured
+  time: an open task counts as the median of its project's tasks closed within a week,
+  one unit when there are none. `counts.criticalMinutes` gives the sum, and `weighting`
+  says which rule was used.
+- **`hub queue ack <role> <block-id>`.** The reader says it handled a block, not only
+  read it. The library could always do it; the CLI could not, so a role loop had no
+  way to.
+
 ## 0.9.69 — 2026-10-12
 
 - **`hub queue list`: a queue looked at, not read.** `hub queue wait` hands blocks out

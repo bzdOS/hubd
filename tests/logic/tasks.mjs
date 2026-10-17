@@ -362,9 +362,19 @@ ok(ag.ownerButtons.length === 1 && String(ag.ownerButtons[0].id) === String(nxOw
   'agenda: a task assigned to a DECLARED owner role is a button, not agent work');
 ok(!ag.agentReady.some(t => String(t.id) === String(nxOwner.id)),
   'agenda: and it is kept out of "agent work, ready now" — a list whose point is that you can start everything in it');
+const nxHeld = core.runTaskAdd({ project: 'p', text: 'frozen by the owner', importance: 'high', tags: ['hold'], by: 'dev-t' }).task;
+const nxAfterHeld = core.runTaskAdd({ project: 'p', text: 'waits on the frozen one', depends_on: [nxHeld.id], by: 'dev-t' }).task;
+const agH = core.runAgenda({});
+ok(String(core.runNext({}).task.id) !== String(nxHeld.id) && !agH.agentReady.some(t => String(t.id) === String(nxHeld.id))
+  && agH.held.length === 1 && String(agH.held[0].id) === String(nxHeld.id),
+  'agenda: a task tagged hold is not ready work, however loud, and it stays on the agenda as held');
 const nxAll = core.runTaskList({ status: 'open' }).count;
-ok(ag.counts.agentReady + ag.counts.ownerButtons + ag.counts.blocked === nxAll,
-  `agenda: every open task lands in exactly one column (${ag.counts.agentReady}+${ag.counts.ownerButtons}+${ag.counts.blocked} vs ${nxAll})`);
+ok(agH.counts.agentReady + agH.counts.ownerButtons + agH.counts.held + agH.counts.blocked === nxAll,
+  `agenda: every open task lands in exactly one column (${agH.counts.agentReady}+${agH.counts.ownerButtons}+${agH.counts.held}+${agH.counts.blocked} vs ${nxAll})`);
+const tj = core.runTrajectory({});
+ok(tj.held.some(t => String(t.id) === String(nxHeld.id)) && !tj.ready.some(t => String(t.id) === String(nxHeld.id))
+  && !tj.cycles.includes(String(nxAfterHeld.id)) && Number.isFinite(tj.counts.criticalMinutes),
+  'trajectory: a held task is listed as held, and the task behind it is not taken for a cycle');
 
 // ── a replayed add for a key that was ALREADY remapped must not mint a new task ──
 // The guard compared the remap against the RAW id, so once a key had been remapped (its id was

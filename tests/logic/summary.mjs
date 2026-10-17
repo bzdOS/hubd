@@ -139,7 +139,8 @@ fs.writeFileSync(path.join(SM, 'projects', 'web.md'), '# web\n\n## Goal\n\nship 
     const els = {};
     const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
     const ctx = vm.createContext({
-      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [] },
+      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [], querySelector: () => mkEl() },
+      window: { addEventListener() {} },
       localStorage: { getItem: () => null, setItem() {} },   // nothing saved: a hub with heads opens on Summary
       location: { search: '', hash: '' },
       fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),

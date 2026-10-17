@@ -12,7 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { HUB, setHubBase, ensureHubDirs, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath } from './core.mjs';
+import { HUB, setHubBase, ensureHubDirs, tenantKey, now, parseTs, journalSinceMs, sparklineData, runKanban, rulesFilePath,
+  loadTasks, runTaskGet, isCommons } from './core.mjs';
 import { runBoard } from './board.mjs';
 import { runSummary, emptySummary } from './summary.mjs';
 import { resolveQueueRoot } from './queue.mjs';
@@ -46,6 +47,21 @@ export function startServer(port) {
 
   function apiSparkline() { return { months: sparklineData() }; }
 
+  // The problems view: every open task with the counts of its thread, newest attempt first in the
+  // page's own sort. Texts are cut here: the list is a list, the task page has the whole text.
+  function apiTasks() {
+    const tasks = loadTasks().tasks.filter(t => t.status === 'open').map(t => ({
+      id: t.id, project: t.project, text: String(t.text || '').slice(0, 400), tags: t.tags || [],
+      created: t.created, by: t.by, tried: t.tried || null,
+    }));
+    return { tasks };
+  }
+  function apiTask(query) {
+    const r = runTaskGet({ id: query.get('id') || '' });
+    const { _origin, ...task } = r.task;
+    return { ...r, task };
+  }
+
   const handler = (req, res) => {
     if (req.method !== 'GET') { res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' }); return res.end(JSON.stringify({ error: 'method not allowed' })); }
     try {
@@ -62,12 +78,21 @@ export function startServer(port) {
             waiting: { queue: [], tasks: [], ownerGo: [], escalations: [], answered: [] }, unknownAssignees: [], generated: now() }));
           if (url.pathname === '/api/summary') return res.end(JSON.stringify(emptySummary()));
           if (url.pathname === '/api/rules') return res.end(JSON.stringify({ text: 'No workspace yet for this token — connect an agent and create work first.' }));
+          if (url.pathname === '/api/tasks') return res.end(JSON.stringify({ tasks: [] }));
+          if (url.pathname === '/api/mode') return res.end(JSON.stringify({ commons: isCommons(dir) }));
           res.writeHead(404); return res.end(JSON.stringify({ error: 'not found' }));
         }
         setHubBase(dir); ensureHubDirs();
       }
       if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(HTML); }
       if (url.pathname === '/api/kanban') return res.end(JSON.stringify(runKanban({})));
+      if (url.pathname === '/api/tasks') return res.end(JSON.stringify(apiTasks()));
+      if (url.pathname === '/api/task') {
+        try { return res.end(JSON.stringify(apiTask(url.searchParams))); }
+        catch (e) { res.writeHead(404); return res.end(JSON.stringify({ error: e.message })); }
+      }
+      // A commons opens on its problems; a team's board on its own views.
+      if (url.pathname === '/api/mode') return res.end(JSON.stringify({ commons: MT && isCommons(HUB) }));
       if (url.pathname === '/api/rules') return res.end(JSON.stringify(getRules()));
       if (url.pathname === '/api/sparkline') return res.end(JSON.stringify(apiSparkline()));
       if (url.pathname === '/api/journal-since') return res.end(JSON.stringify(apiJournalSince(url.searchParams)));

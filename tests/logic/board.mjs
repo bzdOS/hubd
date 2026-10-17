@@ -96,7 +96,8 @@ core.setHubBase(XS); core.ensureHubDirs();
     const els = {};
     const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
     const ctx = vm.createContext({
-      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [] },
+      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [], querySelector: () => mkEl() },
+      window: { addEventListener() {} },
       localStorage: { getItem: (k) => (k === 'hubd-mode' ? 'tracks' : null), setItem() {} },
       location: { search: '', hash: '' },
       fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),
@@ -109,6 +110,9 @@ core.setHubBase(XS); core.ensureHubDirs();
     ok(html.includes('ok&quot; autofocus onfocus=&quot;alert(1)') && !html.includes(evil),
       'serve: a heartbeat status with quotes stays inside its title attribute (it used to open an event handler in the owner\'s browser)');
     ok(!/<img src=x/.test(html) && html.includes('&lt;img src=x'), 'serve: a task title is text, never markup');
+    const att = vm.runInContext(`attEl({ id: 'x-1.1', outcome: 'lead', lens: '<img src=x onerror=alert(3)>', by: 'a"b', ts: 't', tried: '<b>t</b>', next: 'n', artifacts: ['javascript:alert(4)', 'https://e.org/r" onmouseover="alert(5) sha256:ab'] })`, ctx);
+    ok(!/<img src=x|<b>t<\/b>|href="javascript|" onmouseover=/.test(att) && att.includes('&lt;img src=x') && att.includes('href="https://e.org/r&quot;'),
+      'serve: an attempt is text, and an artifact links only as http(s), its quotes escaped (anyone writes to a commons)');
     ok(/alive<div class="meta">seen \d+m ago/.test(html), 'serve: a role alive without state fields says how long ago it was seen');
     const b = await (await fetch(`http://127.0.0.1:${port}/api/board?all=1`)).json();
     ok(b.all === true && b.journalDays >= 30, 'serve: the board takes all=1 (every project) and reads a journal window, not the whole journal');

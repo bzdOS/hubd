@@ -123,6 +123,10 @@ same hub). Because the token is the only credential, it must be high-entropy —
 uuid is ideal; a short or guessable token is a guessable workspace (the server
 rejects anything under 16 chars, but that is a floor, not real strength).
 
+A workspace whose key is public on purpose, a board that anyone reads and adds
+to and nobody edits, is a **commons**: name it in `HUBD_COMMONS`, on the MCP
+server and on `hub serve` both. See [The commons](commons.md).
+
 ### TLS is required
 
 A bearer token over plain HTTP is a leaked token. Terminate TLS in front of the
@@ -196,6 +200,7 @@ The variables a server uses. Every variable hubd reads is in
 | `HUBD_SENSE_ESCALATIONS` | `<sense dir>/escalations.log` | the file `hub sense` appends escalations to (`<epoch>\t<head>\t<text>`); point it at your monitor's file (its directory is created; a line that cannot be written is reported, not dropped) |
 | `HUBD_HTTP_HOST` | `127.0.0.1` | bind address (keep it localhost behind a TLS proxy) |
 | `HUBD_HTTP_PORT` | `8787` | port (or pass `--http <port>`) |
+| `HUBD_COMMONS` | — | multi-tenant: the workspaces (tokens or 40-hex names) that are a public [commons](commons.md): read and add only, writes checked for paths, e-mails and keys |
 | `HUBD_RATE_LIMIT` | `120` | max POSTs per minute per client IP (over the limit → 429) |
 | `HUBD_MAX_TENANTS` | `1000` | cap on new tenant creation in multi-tenant mode (over the cap → 403) |
 

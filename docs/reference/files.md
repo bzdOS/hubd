@@ -16,7 +16,7 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `journal.<node>.jsonl` | The journal: one JSON entry a line, appended by this node only. | every report, decision, closed task and card write | yes |
 | `journal.<node>-<YYYY-MM>.jsonl` | A month of the journal, moved aside when the live file passed 2 MB (`.<n>` before `.jsonl` for a second one). Still read. | the journal's own rotation | yes |
 | `journal.life.jsonl` | Private reports. Never leaves this node. | `hub report --private` | no |
-| `tasks.<node>.events.jsonl` | Task events: added, changed, closed. Appended by this node only; the tasks are what all nodes' events add up to. | `hub task`, `hub report` | yes |
+| `tasks.<node>.events.jsonl` | Task events: added, changed, closed, and the attempts on a task. Appended by this node only; the tasks are what all nodes' events add up to. | `hub task`, `hub report`, `hub attempt` | yes |
 | `tasks.json` | The tasks, folded from every node's events. A cache; rebuilt when missing. | any command that reads tasks | no |
 | `claims.json` | Claims (soft locks) and their expiry. | `hub claim`, `hub release` | no |
 | `usage.<node>.jsonl` | What work cost: seconds, tokens, money, per agent and task. | `hub usage add` | yes |

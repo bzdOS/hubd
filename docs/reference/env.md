@@ -48,6 +48,7 @@ Every variable hubd reads, from the code the package ships. Set them in the envi
 | `HUBD_HTTP_HOST` | `127.0.0.1` | The address `hubd --http` and `hub serve` bind. Keep it local behind a TLS proxy. |
 | `HUBD_TOKEN` | — | The bearer secret, 16 characters or more; required unless multi-tenant. |
 | `HUBD_MULTITENANT` | off | `1`: every token is a workspace of its own, at `tenants/<hash>/`; `hub serve` then takes `?t=<token>`. |
+| `HUBD_COMMONS` | — | Tokens, or their 40-hex workspace names, of the multi-tenant workspaces that are a commons: a public board anyone holding the key reads and adds to. There the MCP server offers only the tools that read and add, never one that changes or removes, refuses a write that carries a home path, an email or a key, and serves the commons run protocol; `hub serve` opens it on its problems. Comma- or space-separated ([The commons](../commons.md)). |
 | `HUBD_RATE_LIMIT` | `120` | POSTs a minute from one client address; over it, 429. |
 | `HUBD_MAX_TENANTS` | `1000` | Workspaces multi-tenant mode creates at most; over it, 403. |
 

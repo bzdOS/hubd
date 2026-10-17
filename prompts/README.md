@@ -19,6 +19,8 @@ the moment the product moves).
 **Harvest** is a first-class prompt now: pick `harvest` from your MCP client, or
 run `hub harvest` — no need to fetch a file. Server inventory →
 [inventory.md](inventory.md).
+The run protocol of a public commons, which `hub_onboarding` returns there →
+[commons.md](commons.md) ([the commons](../docs/commons.md)).
 
 ## Running a fleet, not a session
 

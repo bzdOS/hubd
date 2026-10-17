@@ -101,7 +101,8 @@ ok(noCard.waiting.length === 5 && !noCard.answered.length, 'escalations: with no
       const els = {};
       const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
       const ctx = vm.createContext({
-        document: { getElementById: (x) => els[x] || (els[x] = mkEl()), querySelectorAll: () => [] },
+        document: { getElementById: (x) => els[x] || (els[x] = mkEl()), querySelectorAll: () => [], querySelector: () => mkEl() },
+        window: { addEventListener() {} },
         localStorage: { getItem: (k) => (k === 'hubd-mode' ? mode : null), setItem() {} },
         location: { search: '', hash: '' },
         fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),

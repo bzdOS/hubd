@@ -99,7 +99,8 @@ put('snapshot.fir.json', { ...FIR, ts: new Date().toISOString() });
     const els = {};
     const mkEl = () => ({ innerHTML: '', textContent: '', value: '', style: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {}, querySelectorAll() { return []; } });
     const ctx = vm.createContext({
-      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [] },
+      document: { getElementById: (id) => els[id] || (els[id] = mkEl()), querySelectorAll: () => [], querySelector: () => mkEl() },
+      window: { addEventListener() {} },
       localStorage: { getItem: (k) => (k === 'hubd-mode' ? 'summary' : null), setItem() {} },
       location: { search: '', hash: '' },
       fetch: (u) => fetch(`http://127.0.0.1:${port}${u}`),

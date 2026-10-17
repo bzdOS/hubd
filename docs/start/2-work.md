@@ -73,7 +73,7 @@ hub plan shop
 ```
 
 ```text
-── TRAJECTORY · shop · 2026-10-07 12:55 ──  open 4 · ready 2 · blocked 2 · depth 2
+── TRAJECTORY · shop · 2026-10-17 23:23 ──  open 4 · held 0 · ready 2 · blocked 2 · depth 2
 
 READY NOW (2):
   #oak-1 [shop] choose the payment provider
@@ -97,16 +97,16 @@ hub agenda shop
 ```
 
 ```text
-── AGENDA · shop · 2026-10-07 12:55 ──  ready 2 · blocked 2
+── AGENDA · shop · 2026-10-17 23:23 ──  ready 2 · held 0 · blocked 2
 
 DUE SOON (1):
-  #oak-3 [shop] ⏰2026-10-10 fix the 30 s checkout timeout on big carts
+  #oak-3 [shop] ⏰2026-10-20 fix the 30 s checkout timeout on big carts
 
 OWNER BUTTONS (only a human can press) (1):
   #oak-1 [shop] @alice choose the payment provider
 
 AGENT WORK, READY NOW (1):
-  #oak-3 [shop] ⏰2026-10-10 fix the 30 s checkout timeout on big carts
+  #oak-3 [shop] ⏰2026-10-20 fix the 30 s checkout timeout on big carts
 
 BLOCKED (2):
   #oak-2 [shop] wire the hosted payment page into checkout  ← waits on #oak-1
@@ -199,7 +199,7 @@ hub agenda shop
 ```
 
 ```text
-── AGENDA · shop · 2026-10-07 12:56 ──  ready 2 · blocked 0
+── AGENDA · shop · 2026-10-17 23:23 ──  ready 2 · held 0 · blocked 0
 
 AGENT WORK, READY NOW (2):
   #oak-2 [shop] wire the hosted payment page into checkout

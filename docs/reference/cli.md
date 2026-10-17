@@ -25,7 +25,8 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the project's laws, one per line |
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
-| [`task`](#task) | a new task; close a task; tasks; one task, and where else its id appears; move categories off the fixed list into tags (dry run without --apply) |
+| [`task`](#task) | a new task; close a task; tasks; one task, where else its id appears, and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
+| [`attempt`](#attempt) | record what you tried on a task and what came of it |
 | [`card`](#card) | set a project card without a folder; fix lines of a card, leave the rest byte-for-byte; read a card back: whole, its sections as data, or one section's body (exit 1 when the card does not hold it); union the list hunks of a conflicted card, name the rest; on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time |
 | [`cards`](#cards) | move the overflow of over-long card sections into projects/history/ (dry run without --apply); merge two cards for the same project (dry run without --apply); fold a section a card holds twice (same heading, or two locales) into the live one |
 | [`section`](#section) | write one section of a card |
@@ -153,8 +154,12 @@ Also: `hub where`
 - `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
 - `hub task done <id> --by <you>` — close a task
 - `hub task list [-p proj] [--status open|done|all] [--json]` — tasks
-- `hub task get <id> [--json]` — one task, and where else its id appears
+- `hub task get <id> [--json]` — one task, where else its id appears, and its thread of attempts
 - `hub task retag [--apply --by <you>]` — move categories off the fixed list into tags (dry run without --apply)
+
+## attempt
+
+- `hub attempt <task> -o dead|lead|partial|claim|review --lens "<approach>" [--tried ..] [--result ..] [--why ..] [--next ..] [--covered ..] [--builds-on <id>] [--artifact <url>] [--commitment <sha256>] [--of <id> --check <c> --verdict pass|fail] --by <you> [--json]` — record what you tried on a task and what came of it
 
 ## card
 
@@ -329,13 +334,17 @@ The commands each flag appears with, in their usage lines.
 | `--append` | [rules](#rules) |
 | `--append-line` | [card](#card) |
 | `--apply` | [task](#task), [cards](#cards), [absorb](#absorb), [audit](#audit), [gc](#gc), [queue](#queue) |
+| `--artifact` | [attempt](#attempt) |
 | `--as` | [watch](#watch), [absorb](#absorb), [queue](#queue) |
 | `--assignee` | [now](#now), [task](#task) |
 | `--attr` | [resource](#resource) |
-| `--by` | [reflect](#reflect), [task](#task), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [price](#price), [rules](#rules), [audit](#audit), [gc](#gc) |
+| `--builds-on` | [attempt](#attempt) |
+| `--by` | [reflect](#reflect), [task](#task), [attempt](#attempt), [cards](#cards), [section](#section), [absorb](#absorb), [freeze](#freeze), [price](#price), [rules](#rules), [audit](#audit), [gc](#gc) |
 | `--cat` | [task](#task) |
-| `--check` | [setup](#setup), [prompts](#prompts), [stats](#stats) |
+| `--check` | [setup](#setup), [attempt](#attempt), [prompts](#prompts), [stats](#stats) |
+| `--commitment` | [attempt](#attempt) |
 | `--cost` | [usage](#usage) |
+| `--covered` | [attempt](#attempt) |
 | `--cwd` | [heartbeat](#heartbeat) |
 | `-d` | [task](#task) |
 | `--days` | [usage](#usage), [audit](#audit), [gc](#gc), [queue](#queue), [board](#board) |
@@ -352,8 +361,9 @@ The commands each flag appears with, in their usage lines.
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
-| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
+| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
 | `--laws` | [reflect](#reflect) |
+| `--lens` | [attempt](#attempt) |
 | `--level` | [reflect](#reflect) |
 | `--limit` | [recall](#recall), [board](#board) |
 | `--link` | [resource](#resource) |
@@ -362,8 +372,11 @@ The commands each flag appears with, in their usage lines.
 | `--model` | [usage](#usage) |
 | `-n` | [log](#log), [stats](#stats), [queue](#queue) |
 | `--needs` | [task](#task) |
+| `--next` | [attempt](#attempt) |
 | `--node` | [sessions](#sessions) |
 | `--note` | [claim](#claim) |
+| `-o` | [attempt](#attempt) |
+| `--of` | [attempt](#attempt) |
 | `--once` | [queue](#queue) |
 | `--opencode` | [sessions](#sessions) |
 | `--out` | [prompts](#prompts) |
@@ -379,6 +392,7 @@ The commands each flag appears with, in their usage lines.
 | `--remove` | [card](#card) |
 | `--replace` | [card](#card) |
 | `--resource` | [task](#task) |
+| `--result` | [attempt](#attempt) |
 | `--role` | [heartbeat](#heartbeat), [presence](#presence) |
 | `--rows` | [sessions](#sessions) |
 | `--scope` | [setup](#setup) |
@@ -397,10 +411,12 @@ The commands each flag appears with, in their usage lines.
 | `--to` | [log](#log) |
 | `--tokens-in` | [usage](#usage) |
 | `--tokens-out` | [usage](#usage) |
+| `--tried` | [attempt](#attempt) |
 | `--ttl` | [heartbeat](#heartbeat) |
 | `--type` | [resource](#resource), [graph](#graph) |
 | `--uninstall` | [setup](#setup) |
 | `--vars` | [prompts](#prompts) |
+| `--verdict` | [attempt](#attempt) |
 | `--verify` | [setup](#setup) |
-| `--why` | [decide](#decide) |
+| `--why` | [decide](#decide), [attempt](#attempt) |
 | `--with` | [card](#card) |

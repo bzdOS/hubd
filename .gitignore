@@ -15,3 +15,4 @@ node_modules/
 
 # experimental work that is never released: it lives on a local branch only
 /exp/
+*.tgz
