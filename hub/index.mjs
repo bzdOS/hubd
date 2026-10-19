@@ -3,6 +3,7 @@
  * hubd MCP server — stdio JSON-RPC 2.0, zero dependencies.
  * Architecture: dumb server, smart agents. All logic lives in lib/core.mjs.
  */
+import fs from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
 import {
@@ -615,6 +616,23 @@ function toolsFor(mode) {
   return TOOLS.filter(t => offered(t.name, mode));
 }
 
+// What a commons answers is the record, not the server's bookkeeping: where a task was first
+// added (_origin: its node is the host name unless HUBD_NODE says otherwise), and any file of the
+// server (a heartbeat's presence file, the hub a presence row lives in). Left out at any depth.
+function publicView(v, dirs = serverDirs()) {
+  if (Array.isArray(v)) return v.map(x => publicView(x, dirs));
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v))
+    if (k !== '_origin' && !(typeof x === 'string' && dirs.some(d => x.includes(d)))) out[k] = publicView(x, dirs);
+  return out;
+}
+function serverDirs() {
+  const dirs = new Set([HUB]);
+  try { dirs.add(fs.realpathSync(HUB)); } catch {}
+  return [...dirs];
+}
+
 // What a client is told at connect, one sentence per piece of advice. A sentence that names a tool
 // this server does not offer is left out: advice to call a tool the model cannot see is the one
 // kind it can only get wrong.
@@ -833,7 +851,7 @@ async function handleMessage(msg, mode = 'stdio') {
       if (missing) throw new Error(missing);
       if (mode === 'commons' && COMMONS_WRITES.has(name))
         for (const [k, v] of Object.entries(given)) for (const x of [].concat(v)) if (typeof x === 'string') assertNoLeak(x, k);
-      const r = await fn(argv);
+      const r = mode === 'commons' ? publicView(await fn(argv)) : await fn(argv);
       // A session that never heartbeats still says its node is up (refreshPresenceSnapshot).
       if (mode === 'stdio') refreshPresenceSnapshot();
       if (name === 'hub_onboarding') onboarded = true;
@@ -847,7 +865,8 @@ async function handleMessage(msg, mode = 'stdio') {
     } catch (e) {
       // A refusal the caller acts on by kind carries its code (queue-full), the way an exit code would.
       const code = e && typeof e.code === 'string' && /^[a-z]+(?:-[a-z]+)+$/.test(e.code) ? ' [' + e.code + ']' : '';
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error' + code + ': ' + e.message }], isError: true } };
+      const msg = mode === 'commons' ? serverDirs().reduce((m, d) => m.split(d).join('<hub>'), String(e.message)) : e.message;
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'Error' + code + ': ' + msg }], isError: true } };
     }
   }
   return { jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } };
@@ -982,5 +1001,13 @@ const httpPortArg = (() => {
 const SERVE_MODE = httpPortArg ? 'http' : 'stdio';
 setAuthorTransport(SERVE_MODE);
 
-try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
-if (httpPortArg) serveHttp(httpPortArg); else serveStdio();
+// `hubd commons`: not a server of this hub but a guarded way out of it, to the public commons
+// (lib/commons.mjs). It reads this hub and writes nothing to it, HUBD.md included.
+if (process.argv[2] === 'commons') {
+  const flag = (f) => { const i = process.argv.indexOf(f); return i > 2 ? process.argv[i + 1] : undefined; };
+  const { serveCommonsProxy } = await import('./lib/commons.mjs');
+  serveCommonsProxy({ ...(flag('--url') ? { url: flag('--url') } : {}), ...(flag('--key') ? { key: flag('--key') } : {}) });
+} else {
+  try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
+  if (httpPortArg) serveHttp(httpPortArg); else serveStdio();
+}

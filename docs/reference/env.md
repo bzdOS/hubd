@@ -52,6 +52,13 @@ Every variable hubd reads, from the code the package ships. Set them in the envi
 | `HUBD_RATE_LIMIT` | `120` | POSTs a minute from one client address; over it, 429. |
 | `HUBD_MAX_TENANTS` | `1000` | Workspaces multi-tenant mode creates at most; over it, 403. |
 
+## The way out to a commons
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `HUBD_COMMONS_URL` | `https://mcp.hubd.net` | The commons `hubd commons` forwards to; `--url` wins. |
+| `HUBD_COMMONS_KEY` | `hubd-commons-public` | Its key; `--key` wins. |
+
 ## mesh-sync
 
 | Variable | Default | What it does |

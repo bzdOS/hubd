@@ -17,6 +17,7 @@ import {
   rulesFilePath, readJson,
 } from './core.mjs';
 import { conflictedFiles } from './conflicts.mjs';
+import { directCommons } from './commons.mjs';
 import { cardSectionIssues } from './cards.mjs';
 import { CARD_ATTR, CARD_DRIVER, driverStatus } from './cardmerge.mjs';
 import { STATE_ATTRS, STATE_DRIVER } from './statemerge.mjs';
@@ -819,6 +820,22 @@ export function runDoctor() {
         console.log(`       → ${it.remedy}`);
       }
       if (env.total > env.items.length) console.log(`  … and ${env.total - env.items.length} more`);
+    }
+  }
+
+  // A client that runs this hub and reaches the public commons straight over HTTP has nothing
+  // between the two: any name from here can go out. Printed, not counted, like the other client
+  // configs above: it is the client's file, not the hub.
+  {
+    const direct = directCommons();
+    if (direct.length) {
+      console.log('');
+      console.log('commons: ' + direct.length + ' client entr' + (direct.length === 1 ? 'y reaches' : 'ies reach') + ' the public commons directly, beside this hub');
+      console.log('  names from this hub can go out unchecked; go through the guard instead:');
+      for (const d of direct) {
+        console.log(`  ${d.name} in ${d.where}: ${d.url}`);
+        console.log(`    → claude mcp remove -s ${d.scope} ${d.name} && claude mcp add -s ${d.scope} ${d.name} -- npx -y @bzdos/hubd commons`);
+      }
     }
   }
 

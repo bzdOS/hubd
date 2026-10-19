@@ -4,7 +4,7 @@
 
 What the MCP server, `hubd`, offers a client: 44 tools, 4 prompts, and the instructions it sends when a client connects. A tool's description is what the client's model reads, word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, and "yes" under Required means required whenever the object is given.
 
-Over HTTP (`hubd --http`, [Self-hosting](../self-hosting.md)) every tool is offered but the local-only ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)).
+Over HTTP (`hubd --http`, [Self-hosting](../self-hosting.md)) every tool is offered but the local-only ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)). `hubd commons` serves none of this: it passes a public commons' tools through a guard that keeps this hub's names out ([The commons](../commons.md#if-you-have-a-hub-of-your-own)).
 
 ## At connect
 

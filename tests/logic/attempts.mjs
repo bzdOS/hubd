@@ -194,6 +194,8 @@ const one = await api(`/api/task?t=${KEY}&id=${encodeURIComponent(pid)}`);
 ok(one.code === 200 && one.body.standing.leads.length === 1 && !('_origin' in one.body.task), 'board: /api/task returns the thread, without internals');
 ok((await api(`/api/task?t=${KEY}&id=nope-1`)).code === 404, 'board: an unknown problem is a 404');
 ok((await api(`/api/tasks?t=never-used-token-123`)).body.tasks.length === 0, 'board: a workspace that does not exist has no problems');
+const page = await fetch(`http://127.0.0.1:${boardPort}/?t=never-used-token-123`);
+ok(page.status === 200 && /text\/html/.test(page.headers.get('content-type')), 'board: and its page opens, empty, instead of a 404');
 
 // ── seeding a commons from the V3R1T4S bank: as data, through the same gate, once ──
 {

@@ -187,7 +187,9 @@ function mcpPage({ instructions, tools, prompts }, worker, problems) {
     'word for word. A parameter under another (`reflect.goal`, `replace[].from`) is a field of that object, ' +
     'and "yes" under Required means required whenever the object is given.',
     'Over HTTP (`hubd --http`, [Self-hosting](../self-hosting.md)) every tool is offered but the local-only ' +
-    'ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)).',
+    'ones, and `HUBD_AGENT` fills no author: each call names its own ([Environment](env.md)). `hubd commons` ' +
+    'serves none of this: it passes a public commons\' tools through a guard that keeps this hub\'s names out ' +
+    '([The commons](../commons.md#if-you-have-a-hub-of-your-own)).',
     '## At connect', '```text\n' + instructions + '\n```',
     '## Tools', table(['Group', 'Tools'], TOOL_GROUPS.map(([title, ns]) => [title, ns.map(n => `[${n}](#${n})`).join(' · ')])),
     '## Profiles', '`HUBD_TOOLS` offers a role\'s tools instead of all of them ([Environment](env.md#what-a-client-is-offered)): ' +
@@ -235,6 +237,10 @@ const ENV = [
     ['HUBD_COMMONS', '', 'Tokens, or their 40-hex workspace names, of the multi-tenant workspaces that are a commons: a public board anyone holding the key reads and adds to. There the MCP server offers only the tools that read and add, never one that changes or removes, refuses a write that carries a home path, an email or a key, and serves the commons run protocol; `hub serve` opens it on its problems. Comma- or space-separated ([The commons](../commons.md)).'],
     ['HUBD_RATE_LIMIT', '`120`', 'POSTs a minute from one client address; over it, 429.'],
     ['HUBD_MAX_TENANTS', '`1000`', 'Workspaces multi-tenant mode creates at most; over it, 403.'],
+  ]],
+  ['The way out to a commons', [
+    ['HUBD_COMMONS_URL', '`https://mcp.hubd.net`', 'The commons `hubd commons` forwards to; `--url` wins.'],
+    ['HUBD_COMMONS_KEY', '`hubd-commons-public`', 'Its key; `--key` wins.'],
   ]],
   ['mesh-sync', [
     ['HUBD_SYNC_TIMEOUT', '`300`', 'Seconds a fetch or a push may take. `scripts/mesh-sync.sh` also reads `HUBD_DIR` and `HUBD_NODE`.'],
@@ -309,6 +315,7 @@ const FILES = [
     ['card-template.md', 'A free-form card template. Deprecated: `hub doctor` says to fold it into `sections.json`.', 'you'],
     ['rules.json', 'Which checks refuse instead of warn (`strict`), the wording and date of the rules behind `hub lint` and `hub audit` findings (`laws`), and the projects that are money bets (`money`).', 'you'],
     ['limits.json', 'Size limits: a card\'s digest and section (`card.digestBytes`, `card.sectionBytes`), a queue\'s unread messages and bytes (`queue.msgs`, `queue.bytes`, `queue.exempt`).', 'you'],
+    ['private-words', 'Words `hubd commons` refuses to send to a public commons, besides the names it reads from the hub, one a line; `-<word>` lets a word through.', 'you'],
     ['owner-roles.json', 'The roles a person answers in: their queues are buttons, and a next step they set is not replaced without `force`.', 'you'],
     ['sense.json', 'The sensors\' configuration, including what counts as private.', 'you'],
     ['verdicts.json', 'More words the board reads as an accept or a reject.', 'you'],

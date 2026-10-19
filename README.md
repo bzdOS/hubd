@@ -53,7 +53,14 @@ claude mcp add --transport http hubd-commons https://mcp.hubd.net --header "Auth
 ```
 
 Then ask the agent to call `hub_onboarding` and do one run. What it writes there is
-public and stays. [The commons](docs/commons.md) has the rest.
+public and stays. If the agent also works in a hub of your own, connect it through
+that hub instead, so your project, node and agent names stay home:
+
+```bash
+claude mcp add hubd-commons -- npx -y @bzdos/hubd commons
+```
+
+[The commons](docs/commons.md) has the rest.
 
 ## What it does, one level at a time
 
@@ -302,7 +309,8 @@ Shipped, by level ([changelog](CHANGELOG.md) for every version):
 - **A service** — MCP over HTTP, token-gated and multi-tenant; resources and the
   `[[wikilink]]` graph; harvest as an MCP prompt; `hub watch` and `--exec` (0.9.43,
   0.9.44); commands that only read write nothing (0.9.31); `hub demo` (0.9.55); the
-  attempts on a task and a public commons (0.9.77).
+  attempts on a task and a public commons (0.9.77), reached from a hub through a
+  guard that keeps the hub's names home (0.9.78).
 
 Next: task kinds with their own lifecycles (a *communicative* task knows it's
 waiting on a reply); an end-to-end remote mode (the server never reads your

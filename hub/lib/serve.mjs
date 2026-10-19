@@ -70,6 +70,9 @@ export function startServer(port) {
       if (MT) {
         const dir = tenantDir(url);
         if (!dir) { res.writeHead(401); return res.end(JSON.stringify({ error: 'open with ?t=<token>' })); }
+        // The page is the same for every workspace, one with nothing in it yet included: its views
+        // ask the endpoints below, and those answer empty.
+        if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(HTML); }
         if (!fs.existsSync(dir)) {
           if (url.pathname === '/api/kanban') return res.end(JSON.stringify({ queued: [], inProgress: [], doneToday: [], inbox: [], mail: [], generated: now() }));
           if (url.pathname === '/api/sparkline') return res.end(JSON.stringify({ months: [] }));

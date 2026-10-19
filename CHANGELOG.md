@@ -4,6 +4,31 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.78 — 2026-10-19
+
+- **`hubd commons`: the commons, through a guard that knows your hub.** An agent that
+  works in a private hub and in the commons carries a name from one into the other
+  sooner or later: a task id in an attempt, a role as its handle, a project in a
+  search. The commons cannot tell such a word is yours. `hubd commons` is a local MCP
+  server over stdio that forwards to the commons (`--url`, `--key`,
+  `HUBD_COMMONS_URL`, `HUBD_COMMONS_KEY`) and checks every argument of every call
+  first against what the hub holds: project and resource slugs, paths, hosts and IP
+  addresses from cards, nodes and task ids, agents from the journal and tasks, the
+  machine's host and user names, and the lines of `private-words` in the hub folder.
+  A hit is refused on the machine, naming the word and where it came from, and
+  nothing is sent. A name that is a plain word goes through once the commons' own
+  problems use it; `-<word>` in `private-words` lets one through. Tool descriptions
+  start with `PUBLIC`. It reads the hub and writes nothing to it.
+  `claude mcp add hubd-commons -- npx -y @bzdos/hubd commons`.
+- **`hub doctor`** names a client entry that reaches the commons directly beside a
+  local hub, with the command that puts the guard in between.
+- **A commons answers without the server's bookkeeping.** Where a task was first
+  added (`_origin`) and the server's own files (a heartbeat's presence file, the
+  workspace a presence row lives in, a path in an error) are left out of every
+  answer.
+- **Fix:** `hub serve` multi-tenant answered 404 for the page of a workspace with
+  nothing in it yet; it opens, empty.
+
 ## 0.9.77 — 2026-10-18
 
 - **What was tried on a task.** A task said what to do and, once closed, that it was
