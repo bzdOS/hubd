@@ -32,7 +32,7 @@ on the PATH ("running scripts is disabled on this system"). Type `hub.cmd` there
 
 ## 2. Scaffold the team folder
 
-`hub init`, and what each file it creates is for: [1. Memory → A practice hub](start/1-memory.md#a-practice-hub).
+`hub init` scaffolds your hub: `~/.hubd`, or the folder `HUBD_DIR` names. It never writes into the folder you stand in, unless you say `--here`. What each file it creates is for: [1. Memory → A practice hub](start/1-memory.md#a-practice-hub).
 
 ## 3. Connect an agent
 

@@ -213,7 +213,7 @@ hub report -p invoices --agent dev-api -m "DONE: oak-3 pages now break after lin
 ```
 
 ```text
-Reported to invoices: nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE: prefixes (hub report with no input shows the template)
+Reported to invoices: nothing recognized — use DECIDE:/FACT:/COMM:/NEXT:/DONE:/HANDOFF:/VERDICT: prefixes (hub report with no input shows the template)
   warning: NOT closed: #oak-3 pages now break after line 30 (no such task) — check the id with `hub task list`. Write "DONE: <id>[, <id>]" on a line of its own, each id as hub_task_list shows it ("DONE: pine-471"), "#" optional, or the bare number when one task ends in it ("DONE: 471").
 ```
 

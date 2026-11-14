@@ -430,34 +430,30 @@ command('upgrade', () => {
 
 command('init', () => {
   const pathArg = args.filter(a => !a.startsWith('-'))[1] ?? null;
-  const targetDir = pathArg ? path.resolve(pathArg) : process.cwd();
+  const here = args.includes('--here');
+
+  /* `init` scaffolds a TEAM folder, and the folder it means with no argument is your hub, not the
+   * directory you happen to stand in. It used to take the cwd, which scattered AGENTS.md, INBOX.md,
+   * queues/, specs/ and .gitignore into ~ for a newcomer who ran it from their home, and into
+   * somebody's source checkout for a developer who ran it from a repo (this project's own
+   * .gitignore carries /queues/ and /INBOX.md entries: the scar of that misroute, papered over, and
+   * it happened again while healthchecking 0.9.0). A guard that refused only inside a checkout
+   * left every other directory open, so the default moved instead: HUB is where `hub doctor`,
+   * `hub serve` and every other command look. A folder you name, or --here for this one, is
+   * still scaffolded wherever it is. */
+  const targetDir = pathArg ? path.resolve(pathArg) : here ? process.cwd() : HUB;
 
   if (pathArg && !fs.existsSync(targetDir)) {
     die('Folder not found: ' + targetDir);
   }
-
-  /* `init` scaffolds a TEAM folder into a directory, and with no argument that directory is the
-   * cwd — which is right when you deliberately cd into a fresh folder, and wrong in the one case
-   * it actually happens: standing in a source checkout. Then AGENTS.md, INBOX.md, queues/ and
-   * specs/ appear in somebody's repo, ready to be committed by accident. This project's own
-   * .gitignore carries /queues/ and /INBOX.md entries — that is the scar of this exact misroute,
-   * papered over instead of fixed, and it happened again while healthchecking 0.9.0.
-   *
-   * Same shape of guard as resolveQueueRootInfo's misroute warning: a checkout is a repo with a
-   * .git and no hub DATA in it. Refuse, name both the safe alternatives, and let --here override —
-   * a deliberate "yes, scaffold my repo root" stays one flag away. */
-  const looksLikeCheckout = !pathArg && !args.includes('--here') &&
-    fs.existsSync(path.join(targetDir, '.git')) &&
-    !['sections.json', 'tasks.json', 'claims.json', 'HUBD.md'].some(f => fs.existsSync(path.join(targetDir, f))) &&
-    !fs.readdirSync(targetDir).some(f => /^journal.*\.jsonl$/.test(f));
-  if (looksLikeCheckout) {
-    die('refusing to scaffold a team into ' + targetDir + ' — it looks like a source checkout ' +
-      '(.git present, no hub data). A team folder is not a code repo.\n' +
-      '  hub init <folder>   scaffold there\n' +
-      '  hub init ' + HUB + '   scaffold your hub base\n' +
-      '  hub init --here     do it here anyway');
-  }
-  console.log('scaffolding a team folder in ' + targetDir);
+  if (!pathArg && !here) fs.mkdirSync(targetDir, { recursive: true });
+  console.log('scaffolding a team folder in ' + targetDir + (pathArg || here ? '' : '  (your hub base)'));
+  // The team root is the one folder the queues and AGENTS.md are read from, and it is the hub base
+  // unless HUBD_TEAM_DIR names another. Said here, because `hub doctor` would otherwise report
+  // them missing from a folder this run never touched.
+  const teamEnv = process.env.HUBD_TEAM_DIR || process.env.HUBD_QUEUE_DIR;
+  if (!pathArg && !here && teamEnv && path.resolve(teamEnv) !== path.resolve(HUB))
+    console.log('  note: your team root is ' + teamEnv + ', not the hub base; queues and AGENTS.md are read from there (hub init ' + teamEnv + ')');
 
   function ensureFile(relName, content) {
     const full = path.join(targetDir, relName);
@@ -2365,7 +2361,7 @@ command('serve', () => {
  * One line per command: its usage, then what it is for. `hub <cmd> --help` prints the lines of
  * that command. */
 const HELP = [
-  ['init [path]', 'scaffold a team folder (AGENTS.md, INBOX.md, queues/)'],
+  ['init [path] [--here]', 'scaffold a team folder (AGENTS.md, INBOX.md, queues/) in the folder you name, in this one with --here, else in your hub base'],
   ['setup --harness claude|gemini|opencode|omp|dsh --agent <name> [--scope user|project] [--hub <dir>] [--print | --prompt | --verify | --check | --uninstall]',
     'put hubd into a harness\'s MCP config, after trying the server; --check reads the config back and tries what it holds'],
   ['version | --version | -v', 'installed hubd version, and which copy is answering'],

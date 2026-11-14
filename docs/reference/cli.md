@@ -6,7 +6,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 
 | Command | What it does |
 | --- | --- |
-| [`init`](#init) | scaffold a team folder (AGENTS.md, INBOX.md, queues/) |
+| [`init`](#init) | scaffold a team folder (AGENTS.md, INBOX.md, queues/) in the folder you name, in this one with --here, else in your hub base |
 | [`setup`](#setup) | put hubd into a harness's MCP config, after trying the server; --check reads the config back and tries what it holds |
 | [`version`](#version) | installed hubd version, and which copy is answering |
 | [`doctor`](#doctor) | check hub base, team root, locks, queues and writer versions |
@@ -62,7 +62,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 
 ## init
 
-- `hub init [path]` — scaffold a team folder (AGENTS.md, INBOX.md, queues/)
+- `hub init [path] [--here]` — scaffold a team folder (AGENTS.md, INBOX.md, queues/) in the folder you name, in this one with --here, else in your hub base
 
 ## setup
 
@@ -357,6 +357,7 @@ The commands each flag appears with, in their usage lines.
 | `--group` | [stats](#stats) |
 | `-h` | [brief](#brief) |
 | `--harness` | [setup](#setup) |
+| `--here` | [init](#init) |
 | `--hours` | [inbox](#inbox) |
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |

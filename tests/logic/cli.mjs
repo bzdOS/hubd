@@ -4,32 +4,59 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { REPO, CLI, ok, mktmp, run, cli, done } from './_h.mjs';
 
-// ── init does not scaffold a team into somebody's source checkout ──
+// ── a bare init scaffolds your hub, not the directory you stand in ──
 // Found by healthchecking 0.9.0: `hub init` with no argument took the cwd, and run from a code
 // repo it dropped AGENTS.md / INBOX.md / queues/ / specs/ in there, ready to be committed by
-// accident. This repo's own .gitignore carries /queues/ and /INBOX.md — the scar of the same
-// misroute, papered over rather than fixed.
+// accident. A guard for checkouts left the same trap open in every other folder, and a newcomer
+// who ran it from ~ got the files in their home directory (found 2026-11-14 on 0.9.78). So the
+// default is the hub base: a bare init, a folder named, and --here are three different things.
 const IN = mktmp();
 execSync('git init -q .', { cwd: IN });
 // cwd matters here and run() inherits the test process's own — which IS a checkout, so using it
 // would have re-run the very misroute this test is about, in this repo.
-const inCwd = (a) => {
-  try { return { code: 0, out: execSync(`${CLI} ${a}`, { cwd: IN, env: { ...process.env, HUBD_DIR: path.join(IN, 'hubbase') }, encoding: 'utf8' }) }; }
-  catch (e) { return { code: e.status ?? 1, out: (e.stdout || '') + (e.stderr || '') }; }
-};
-const initRepo = inCwd('init');
-ok(initRepo.code === 1 && /source checkout/.test(initRepo.out),
-  `init: refuses a bare init inside a checkout (code ${initRepo.code})`);
-ok(!fs.existsSync(path.join(IN, 'AGENTS.md')) && !fs.existsSync(path.join(IN, 'specs')),
-  'init: and writes nothing at all when it refuses');
+const hubbase = path.join(IN, 'hubbase');
+const inCwd = (argv, env = { HUBD_DIR: hubbase }) => cli(argv, { cwd: IN, env });
+const bare = inCwd(['init']);
+ok(bare.code === 0 && fs.existsSync(path.join(hubbase, 'AGENTS.md')) && fs.existsSync(path.join(hubbase, 'queues', 'README.md')) &&
+    fs.existsSync(path.join(hubbase, '.gitignore')),
+  `init: a bare init scaffolds the hub base, a folder that did not exist yet (code ${bare.code})`);
+ok(/scaffolding a team folder in .*hubbase {2}\(your hub base\)/.test(bare.out), 'init: and says it is the hub base');
+ok(!fs.existsSync(path.join(IN, 'AGENTS.md')) && !fs.existsSync(path.join(IN, 'INBOX.md')) &&
+    !fs.existsSync(path.join(IN, 'specs')) && !fs.existsSync(path.join(IN, 'queues')),
+  'init: and writes nothing into the checkout it was run from');
 const initTarget = path.join(IN, 'team');
 fs.mkdirSync(initTarget);
-inCwd(`init ${initTarget}`);
+inCwd(['init', initTarget]);
 ok(fs.existsSync(path.join(initTarget, 'AGENTS.md')) && fs.existsSync(path.join(initTarget, 'queues', 'README.md')),
   'init: an explicit folder still scaffolds');
-inCwd('init --here');
+ok(!/your hub base/.test(inCwd(['init', initTarget]).out), 'init: a folder that is named is not called the hub base');
+const missing = inCwd(['init', path.join(IN, 'nope')]);
+ok(missing.code === 1 && /Folder not found/.test(missing.out) && !fs.existsSync(path.join(IN, 'nope')),
+  'init: a named folder that is not there is refused, not made');
+ok(!fs.existsSync(path.join(IN, 'AGENTS.md')), 'init: a named folder leaves the cwd alone too');
+inCwd(['init', '--here']);
 ok(fs.existsSync(path.join(IN, 'AGENTS.md')),
-  'init: --here overrides the guard, so a deliberate scaffold-in-place is one flag away');
+  'init: --here scaffolds the cwd, so a deliberate scaffold-in-place is one flag away');
+
+// the newcomer: HOME is the cwd, no hub variable is set, and ~/.hubd is not there yet
+{
+  const H = mktmp();
+  const unset = { HUBD_DIR: undefined, PROJECT_HUB_DIR: undefined, HUBD_TEAM_DIR: undefined, HUBD_QUEUE_DIR: undefined, HOME: H };
+  const r = cli(['init'], { cwd: H, env: unset });
+  ok(r.code === 0 && fs.existsSync(path.join(H, '.hubd', 'AGENTS.md')) && fs.existsSync(path.join(H, '.hubd', 'queues', 'README.md')),
+    `init: from the home directory a bare init makes ~/.hubd (code ${r.code})`);
+  ok(fs.readdirSync(H).join() === '.hubd', `init: and nothing else lands in the home directory (${fs.readdirSync(H).join(' ')})`);
+  ok(!/note: your team root/.test(r.out), 'init: with one folder for everything, there is no team-root note');
+  // the queues and AGENTS.md are read from the team root: when that is another folder, say so
+  const D = mktmp(), team = path.join(D, 'team'); fs.mkdirSync(team);
+  const split = cli(['init'], { cwd: H, env: { ...unset, HUBD_DIR: path.join(D, 'base'), HUBD_TEAM_DIR: team } });
+  ok(split.code === 0 && fs.existsSync(path.join(D, 'base', 'AGENTS.md')) && fs.readdirSync(team).length === 0,
+    'init: with a hub base and a team root apart, a bare init scaffolds the base');
+  ok(new RegExp('note: your team root is ' + team.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ', not the hub base').test(split.out) &&
+      cli(['init', team], { cwd: H, env: { ...unset, HUBD_DIR: path.join(D, 'base'), HUBD_TEAM_DIR: team } }).code === 0 &&
+      fs.existsSync(path.join(team, 'AGENTS.md')),
+    'init: and says the team root is elsewhere, where hub init <that folder> scaffolds it');
+}
 fs.rmSync(IN, { recursive: true, force: true });
 
 // ── machine-readable output survives a pipe ──

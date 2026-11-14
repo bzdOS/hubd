@@ -4,6 +4,21 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.79 — 2026-11-14
+
+- **`hub init` scaffolds your hub, not the folder you stand in.** With no path it took the
+  current directory and refused only inside a git checkout, so a newcomer who ran it from
+  their home directory got `AGENTS.md`, `INBOX.md`, `queues/`, `specs/` and `.gitignore`
+  in `~`. With no path it now scaffolds the hub base (`~/.hubd`, or what `HUBD_DIR`
+  names), making the folder if it is not there, which is the folder `hub doctor`,
+  `hub serve` and the hints those print already mean by `hub init`. `hub init <folder>`
+  is as it was, and so is `--here`, which now stands for "this directory" and nothing
+  else. The checkout refusal is gone with the default that needed it: a bare init in a
+  repo writes nothing there. If `HUBD_TEAM_DIR` names a team root apart from the hub
+  base, a bare init says so and gives the command for the other folder. **Changed:**
+  `cd folder && hub init` now scaffolds the hub base; use `hub init .` or
+  `hub init --here`.
+
 ## 0.9.78 — 2026-10-19
 
 - **`hubd commons`: the commons, through a guard that knows your hub.** An agent that

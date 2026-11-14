@@ -85,7 +85,7 @@ The words in this table — card, track, head, law — are defined in
 
 ```bash
 npm i -g @bzdos/hubd   # installs both binaries: hubd (MCP server) + hub (CLI)
-hub init             # scaffold a team folder: AGENTS.md, INBOX.md, queues/
+hub init             # scaffold your hub, ~/.hubd: AGENTS.md, INBOX.md, queues/
 hub version          # which hubd, and which copy of it is answering
 hub doctor           # hub base, team root, locks, queues, writer versions, the mesh
 hub status           # every project at a glance (⚠ marks a card behind its journal)
