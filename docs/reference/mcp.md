@@ -334,7 +334,7 @@ The day split by WHO CAN ACT: agent work ready now, the owner's buttons (owner_k
 
 ### hub_trajectory
 
-Deterministic dependency-graph plan over tasks' depends_on — the probable trajectory as a critical PATH, not an ML forecast. Returns: ready (doable now, no open deps), blocked (with waitingOn ids), layers (Kahn topo-order — what unlocks when), criticalPath (longest dependency chain = ordering bound), cycles (dependency loops to fix). Use to see "given deps, what is the actual order / what is the critical path to a milestone". Weight is task-count now; weighted by real durations once logd records them.
+Deterministic dependency-graph plan over tasks' depends_on — the probable trajectory as a critical PATH, not an ML forecast. Returns: ready (doable now, no open deps), blocked (with waitingOn ids), layers (Kahn topo-order — what unlocks when), criticalPath (longest dependency chain = ordering bound), cycles (dependency loops to fix). A task only the owner may move (owner_kind "human", or assigned to a declared owner role) is not agent work: it is counted as ownerOnly and leaves the graph, so a task behind it is unblocked, not cyclic. Use to see "given deps, what is the actual order / what is the critical path to a milestone". Weight is task-count now; weighted by real durations once logd records them.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

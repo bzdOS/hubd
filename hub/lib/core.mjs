@@ -4633,8 +4633,23 @@ export function runTrajectory(a = {}) {
   const open = all.filter(t => t.status === 'open' && (!proj || t.project === proj));
   const openIds = new Set(open.map(t => String(t.id)));
   const short = (t) => ({ id: t.id, project: t.project, importance: t.importance, text: (t.text || '').slice(0, 80) });
+
+  /* A task the OWNER alone may move is not ready work. It says so (owner_kind "human"), or it is
+   * assigned to a role this instance declared a human owner (HUB/owner-roles.json). An agent that
+   * reads "ready" as "I can start this" is then promised work nobody but the owner may touch —
+   * the same promise the agenda already refuses to make: there those tasks are owner buttons.
+   *
+   * Such a task leaves the graph, and the edges that pointed at it leave with it: a task behind
+   * it waits on nothing that is in the graph, so it is unblocked — and it is certainly not a
+   * cycle. Counting a dependency that is not there as a cycle is how four healthy tasks on the
+   * live hub came to be marked "cyclic" while their own dependency graph was a plain DAG. */
+  const owners = new Set(ownerRoles());
+  const isOwnerOnly = isOwnerTask(owners);
+  const ownerOnly = open.filter(isOwnerOnly);
+  const ownerOnlyIds = new Set(ownerOnly.map(t => String(t.id)));
   // deps that are THEMSELVES still open (i.e. actually blocking); a done/absent dep is satisfied.
-  const openDeps = (t) => (Array.isArray(t.depends_on) ? t.depends_on.map(String) : []).filter(d => openIds.has(d));
+  const openDeps = (t) => (Array.isArray(t.depends_on) ? t.depends_on.map(String) : [])
+    .filter(d => openIds.has(d) && !ownerOnlyIds.has(d));
 
   // A task under the owner's hold is NOT ready: a formal ready count otherwise
   // reads as available work while the tasks are frozen by the owner's decision.
@@ -4643,7 +4658,7 @@ export function runTrajectory(a = {}) {
   const isHeld = (t) => (Array.isArray(t.tags) ? t.tags : []).some(x => HOLD_TAGS.has(String(x).toLowerCase()));
   const heldIds = new Set(open.filter(isHeld).map(t => String(t.id)));
   const held = open.filter(isHeld);
-  const graphable = open.filter(t => !isHeld(t));
+  const graphable = open.filter(t => !isHeld(t) && !isOwnerOnly(t));
   const ready = graphable.filter(t => openDeps(t).length === 0);
   const blocked = graphable.filter(t => openDeps(t).length > 0)
     .map(t => ({ ...short(t), waitingOn: openDeps(t) }));
@@ -4704,10 +4719,12 @@ export function runTrajectory(a = {}) {
 
   return {
     project: proj,
-    counts: { open: open.length, ready: ready.length, held: held.length, blocked: blocked.length, cyclic: cyclic.length, depth: layers.length,
+    counts: { open: open.length, ready: ready.length, held: held.length, blocked: blocked.length,
+              ownerOnly: ownerOnly.length, cyclic: cyclic.length, depth: layers.length,
               criticalMinutes: Math.round(max) },
     ready: ready.map(short),
     held: held.map(short),
+    ownerOnly: ownerOnly.map(short),
     blocked,
     layers,
     criticalPath,

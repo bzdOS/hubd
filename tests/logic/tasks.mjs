@@ -376,6 +376,32 @@ ok(tj.held.some(t => String(t.id) === String(nxHeld.id)) && !tj.ready.some(t => 
   && !tj.cycles.includes(String(nxAfterHeld.id)) && Number.isFinite(tj.counts.criticalMinutes),
   'trajectory: a held task is listed as held, and the task behind it is not taken for a cycle');
 
+/* A task the OWNER alone may move is not agent work: it says so (owner_kind "human"), or it is
+ * assigned to a role the instance declared a human owner. Counting it as ready promises an agent
+ * work nobody but the owner may touch. And because such a task leaves the graph, the edges that
+ * pointed at it leave with it — a task behind it waits on nothing that is in the graph, so it is
+ * unblocked, and it is not a cycle. On the live hub this was wrong twice over: a ready list that
+ * carried the owner's own decisions, and four plain-DAG tasks marked "cyclic" only because the
+ * task they descended from was the owner's. */
+const OH = mktmp();
+core.setHubBase(OH); core.ensureHubDirs();
+fs.writeFileSync(path.join(OH, 'owner-roles.json'), '["alice"]');
+fs.writeFileSync(path.join(OH, 'tasks.owner.events.jsonl'), JSON.stringify({ ts: '2026-11-15 09:00', node: 'owner', ev: 'add', id: 901,
+  t: { id: 901, project: 'p', text: 'the owner decides', status: 'open', owner_kind: 'human' } }) + '\n');
+const ohHuman = core.loadTasks().tasks.find(t => t.owner_kind === 'human');
+const ohAlice = core.runTaskAdd({ project: 'p', text: 'the owner also decides', assignee: 'alice', by: 'dev-t' }).task;
+const ohBehind = core.runTaskAdd({ project: 'p', text: 'waits on the owner', depends_on: [ohHuman.id], by: 'dev-t' }).task;
+const tjOH = core.runTrajectory({});
+ok(ohHuman && tjOH.counts.ownerOnly === 2
+  && tjOH.ownerOnly.some(t => String(t.id) === String(ohHuman.id))
+  && tjOH.ownerOnly.some(t => String(t.id) === String(ohAlice.id))
+  && !tjOH.ready.some(t => String(t.id) === String(ohHuman.id))
+  && !tjOH.ready.some(t => String(t.id) === String(ohAlice.id)),
+  'trajectory: a task only the owner may move is not ready work — it is counted apart as ownerOnly');
+ok(tjOH.ready.some(t => String(t.id) === String(ohBehind.id))
+  && tjOH.counts.cyclic === 0 && !tjOH.cycles.includes(String(ohBehind.id)),
+  'trajectory: a task behind an owner task is unblocked, not a cycle — the edge leaves the graph with the node');
+
 // ── a replayed add for a key that was ALREADY remapped must not mint a new task ──
 // The guard compared the remap against the RAW id, so once a key had been remapped (its id was
 // taken by someone else), every later add for that same key mismatched again and minted another
