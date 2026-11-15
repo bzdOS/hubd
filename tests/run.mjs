@@ -14,6 +14,11 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const TESTS = path.dirname(fileURLToPath(import.meta.url));
+// The suites read the child's output, and node prints an experimental-agent
+// warning when proxy variables are set, which lands last and breaks every
+// assertion on the last line. The banner is this harness's noise, not the
+// answer of the command under test, so it is off for everything the suites start.
+process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, '--no-warnings'].filter(Boolean).join(' ');
 const shell = (f) => (/bash/.test(fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n')[0]) ? 'bash' : 'sh');
 // the longest first: the wall time is the slowest suite, as long as it starts at once
 const suites = [
