@@ -162,6 +162,16 @@ ok(Array.isArray(ctxFull.journalTail) && ctxFull.journalTail.length >= 1 && ctxF
   const oldTs = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 16).replace('T', ' ');
   fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/- set: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, `- set: ${oldTs}`));
   core.runReport({ project: 'proj5', by: 'test', text: 'NOTE: work moved on' });
+  // A session stuck in a loop files the same note every few seconds: the second
+  // identical note within a minute is refused and records nothing, a different
+  // text files. The prefix form and the bare prose form throttle the same way.
+  const flood1 = core.runReport({ project: 'proj5', by: 'flood-t', text: 'NOTE: same flood line' });
+  ok(flood1.note === true, 'report: a first note files');
+  let floodErr = null;
+  try { core.runReport({ project: 'proj5', by: 'flood-t', text: 'NOTE: same flood line' }); } catch (e) { floodErr = e.message; }
+  ok(/Nothing was recorded/.test(floodErr || ''), `report: the same note within a minute is refused, recording nothing (got ${floodErr})`);
+  const flood2 = core.runReport({ project: 'proj5', by: 'flood-t', text: 'NOTE: another line entirely' });
+  ok(flood2.note === true, 'report: a different note from the same agent files');
   const aged = core.runContext({ cwd: ctxFullDir });
   ok(aged.digestAgeDays >= 39 && aged.digestStale && aged.digestStale.daysBehind >= 39,
     `runContext: a digest 40 days behind its journal is flagged digestStale (age ${aged.digestAgeDays}, behind ${aged.digestStale && aged.digestStale.daysBehind})`);

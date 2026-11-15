@@ -100,6 +100,26 @@ export function setReadOnly(on) { READ_ONLY = !!on; }
 export const isReadOnly = () => READ_ONLY;
 
 export const now = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
+// A note that carries no new information still costs a journal write and, on a
+// metered model, real money. One flood wrote 22 identical notes in 7 minutes —
+// the journal, and everyone reading it, paid for all of them. So a repeat note
+// from the same agent with the same text is refused within NOTE_FLOOD_MS of the
+// last one it actually filed: the refusal names what was refused, so the caller
+// knows nothing was recorded. Different text always files: the throttle keys on
+// the exact note text, never on the report.
+export const NOTE_FLOOD_MS = 60000;
+export function assertNotNoteFlood({ project, agent, noteText, nowMs = Date.now() }) {
+  const text = String(noteText ?? '').trim();
+  if (!text) return;
+  const set = projectSlugSet(project);
+  for (const e of journalEntries(nowMs - NOTE_FLOOD_MS)) {
+    if (set.has(e.project) && e.agent === agent && String(e.text ?? '').trim() === text &&
+      nowMs - parseTs(e.ts).getTime() < NOTE_FLOOD_MS) {
+      throw new Error(`note: refused — the same note by ${agent} was filed ${e.ts}, less than a minute ago. ` +
+        'Nothing was recorded; wait a minute or write what changed.');
+    }
+  }
+}
 // Parse a stored "YYYY-MM-DD HH:MM" timestamp as UTC (the format now() writes).
 // Without the trailing 'Z', JS Date() treats the string as local time — wrong.
 export const parseTs = (s) => {
@@ -3137,6 +3157,15 @@ export function runReport(a) {
   if (a.private && (b.decide.length || b.fact.length || b.hypo.length || b.comm.length || b.next.length || b.done.length || b.task.length || b.handoff.length || b.verdict.length)) {
     throw new Error('private: only prose lines can be private. DECIDE:/FACT:/HYPO:/COMM:/NEXT:/HANDOFF: write into the project card and VERDICT: into the shared journal, and both are mesh-synced — ' +
       'that would publish what you asked to keep local. Send the private part as its own report, and the shareable part as a normal one.');
+  }
+  /* A session stuck in a loop can file the same note every few seconds — 22 copies in
+   * 7 minutes, each billed on a metered model, each burying the journal. Refused before
+   * anything is written, like every other refusal here: nothing half-written. Only the
+   * note-only shape is throttled (structure means the caller said something new). */
+  if (!a.private && !rf && !b.decide.length && !b.fact.length && !b.hypo.length && !b.comm.length &&
+    !b.next.length && !b.done.length && !b.task.length && !b.handoff.length && !b.verdict.length &&
+    b.to.length === 0 && b.note.length === 1) {
+    assertNotNoteFlood({ project: slug, agent: by, noteText: b.note[0] });
   }
   /* HANDOFF: replaces the author's own "## Handoff <agent>" section, so the whole of it must fit
    * the section cap: rotation would move the first lines of the handoff it is writing into history.
