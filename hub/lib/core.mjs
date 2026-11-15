@@ -2255,14 +2255,52 @@ export function clearEnvObservation(kind, value) {
  * the first call after an upgrade — idempotent, every later call is a pure read.
  * Capped, because a list nobody finishes reading is a list nobody reads: three items,
  * and the count tells the rest.
+ *
+ * transport 'cli' is `hub doctor` in a shell. A shell is not where an agent's name
+ * lives: `hub setup` puts it in the client's config, as the server's env. So there an
+ * unset HUBD_AGENT is a finding only when no harness config carries a name either;
+ * `harnessAgents` is that list (setup.mjs configuredAgents, passed in since setup.mjs
+ * imports this file). The names found come back as `info`: said, not counted.
  */
-export function envChecks({ session, transport } = {}) {
+export function envChecks({ session, transport, harnessAgents = [] } = {}) {
   const out = [];
+  const info = [];
   // The floor checks describe THIS process's env — which is the caller's environment
   // only on a local transport. Over HTTP one server serves many agents (or tenants):
   // HUBD_AGENT there could not be any caller's identity, so its absence is not a
   // finding, and the remedy ("edit the client config") points at the wrong machine.
-  if (transport !== 'http') {
+  if (transport === 'cli') {
+    const floor = (process.env.HUBD_AGENT || '').trim();
+    const usable = (a) => { try { requireAuthor(a); return true; } catch { return false; } };
+    const where = (h) => `${h.harness}, ${h.scope} scope, ${h.file}` + (h.name !== 'hubd' ? `, entry "${h.name}"` : '');
+    // An entry with no hub of its own connects to the default one; a shell whose hub came
+    // from an env variable may be looking at another.
+    const forHub = (h) => h.hub ? (path.resolve(h.hub) === path.resolve(HUB) ? '' : `, for hub ${h.hub}`)
+      : (/^env /.test(HUB_VIA) ? ', for the default hub' : '');
+    const named = harnessAgents.filter(h => h.agent);
+    const good = named.filter(h => usable(h.agent)), bad = named.filter(h => !usable(h.agent));
+    if (floor && !usable(floor)) out.push({
+      id: 'author-floor-refused', severity: 'high', actor: 'agent+restart',
+      what: `HUBD_AGENT in this shell is "${floor}", which names a model, a client or a placeholder, so CLI writes without --by fail.`,
+      remedy: 'Export the function being performed instead ("dev-hubd", "reviewer-bsdos"), or pass --by on each write.',
+    });
+    for (const h of bad) out.push({
+      id: 'author-floor-refused', severity: 'high', actor: 'agent+restart',
+      what: `The hubd entry in ${where(h)} sets HUBD_AGENT to "${h.agent}", which names a model, a client or a placeholder, so that agent's writes without an author fail.`,
+      remedy: `Run hub setup --harness ${h.id || '<id>'} --agent <name> again with the function being performed ("dev-hubd", "reviewer-bsdos"), or edit HUBD_AGENT in ${h.file}. Takes effect in the client's next session.`,
+    });
+    if (!floor && !good.length && !bad.length) {
+      const bare = harnessAgents.filter(h => !h.agent);
+      out.push({
+        id: 'author-floor', severity: 'high', actor: 'agent+restart',
+        what: 'No agent name is configured: HUBD_AGENT is not set in this shell, and no hubd entry in a harness config carries one' +
+          (bare.length ? ` (${bare.map(where).join('; ')} has none)` : '') + ', so an agent\'s writes that omit an author fail instead of falling back to a name.',
+        remedy: 'Run hub setup --harness <id> --agent <name> (claude, gemini, opencode, omp, dsh), naming the function the agent performs (dev-<project>), not the model. For writes from this shell, export HUBD_AGENT or pass --by.',
+      });
+    }
+    for (const h of good) info.push(`agent: ${h.agent} (${where(h)}${forHub(h)})`);
+    if (good.length && !floor) info.push('  the name is in the client config, where the agent reads it; this shell has none, so CLI writes here need --by or HUBD_AGENT');
+  } else if (transport !== 'http') {
     const floor = (process.env.HUBD_AGENT || '').trim();
     if (!floor) {
       out.push({
@@ -2332,7 +2370,7 @@ export function envChecks({ session, transport } = {}) {
 
   const rank = { high: 0, med: 1, low: 2 };
   out.sort((a, b) => rank[a.severity] - rank[b.severity]);
-  return { items: out.slice(0, 3), total: out.length };
+  return { items: out.slice(0, 3), total: out.length, ...(transport === 'cli' ? { info } : {}) };
 }
 
 /** Remember that this session was told about the protocol change, so it is told once. */

@@ -340,4 +340,61 @@ for (const [a, why] of [['dev-<project>', /placeholder/], ['claude', /names a mo
     S.serverEnv({ agent: 'a', hub: '/h2', env: { HUBD_DIR: '/x' } }).HUBD_DIR === '/h2', 'env: the hub this shell set goes along; --hub wins over it');
 }
 
+// -- doctor in a shell: the agent's name is in the client config, not in the shell --
+// The quick start is init, doctor, setup, doctor. The second doctor used to say HIGH "HUBD_AGENT is
+// not set on this server" right after setup wrote it into the client config.
+{
+  const H3 = mktmp(), W3 = mktmp();
+  const env3 = { ...ENV, HOME: H3 };
+  const doctor = () => cli(['doctor'], { env: env3, cwd: W3 }).stdout;
+  ok(cli(['init', path.join(H3, '.hubd')], { env: env3, cwd: W3 }).code === 0, 'doctor flow: hub init in a fresh HOME');
+  const before = doctor();
+  ok(/HIGH .*No agent name is configured: HUBD_AGENT is not set in this shell, and no hubd entry in a harness config carries one/.test(before) &&
+    !/on this server/.test(before), 'doctor flow: before setup, HIGH, worded for a shell, not "this server"');
+  ok(/hub setup --harness <id> --agent <name>/.test(before), 'doctor flow: and the remedy is hub setup');
+  const s = cli(['setup', '--harness', 'claude', '--agent', 'dev-shop'], { env: env3, cwd: W3 });
+  ok(s.code === 0, `doctor flow: hub setup succeeds (exit ${s.code})`);
+  const after = doctor();
+  ok(!/author-floor|No agent name is configured|HUBD_AGENT is not set/.test(after), 'doctor flow: after setup, no HIGH about the agent name');
+  ok(after.includes(`agent: dev-shop (Claude Code, user scope, ${path.join(H3, '.claude.json')})`), 'doctor flow: the configured agent is named, with where it is set');
+  ok(/CLI writes here need --by or HUBD_AGENT/.test(after) && /doctor: ok/.test(after), 'doctor flow: said, not counted: doctor stays ok');
+  // a name every write refuses is still a finding, naming the file
+  const cj = path.join(H3, '.claude.json');
+  const c = json(cj); c.mcpServers.hubd.env.HUBD_AGENT = 'claude'; fs.writeFileSync(cj, JSON.stringify(c));
+  ok(/HIGH .*\.claude\.json sets HUBD_AGENT to "claude"/.test(doctor()) && /hub setup --harness claude --agent <name>/.test(doctor()),
+    'doctor flow: a refused name in the client config is HIGH, with the harness to run setup for');
+}
+
+// -- configuredAgents: every harness and scope, Claude's local scope, hubd by name or by command --
+{
+  const H4 = mktmp(), W4 = mktmp(), was = process.env.HOME;
+  const saved = Object.fromEntries(['DSH_HOME', 'XDG_CONFIG_HOME', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR'].map(k => [k, process.env[k]]));
+  for (const k of Object.keys(saved)) delete process.env[k];
+  process.env.HOME = H4;
+  try {
+    ok(S.configuredAgents({ cwd: W4 }).length === 0, 'configuredAgents: nothing configured, nothing found');
+    fs.writeFileSync(path.join(H4, '.claude.json'), JSON.stringify({
+      mcpServers: { hubd: { command: 'npx', args: ['-y', '@bzdos/hubd'], env: { HUBD_AGENT: 'dev-a' } },
+        pub: { command: 'npx', args: ['-y', '@bzdos/hubd', 'commons'], env: { HUBD_AGENT: 'dev-x' } },
+        other: { command: 'x', args: [], env: { HUBD_AGENT: 'dev-y' } } },
+      projects: { [W4]: { mcpServers: { team: { command: 'node', args: ['/opt/h/hub/index.mjs'], env: { HUBD_AGENT: 'dev-b', HUBD_DIR: '/srv/h' } } } } },
+    }));
+    fs.mkdirSync(path.join(W4, '.gemini'), { recursive: true });
+    fs.writeFileSync(path.join(W4, '.gemini', 'settings.json'), JSON.stringify({ mcpServers: { hubd: { command: 'node', args: ['x'], env: {} } } }));
+    fs.mkdirSync(path.join(H4, '.config', 'opencode'), { recursive: true });
+    fs.writeFileSync(path.join(H4, '.config', 'opencode', 'opencode.json'), '{ not json');
+    const got = S.configuredAgents({ cwd: W4 });
+    const by = (a) => got.find(g => g.agent === a);
+    ok(by('dev-a') && by('dev-a').id === 'claude' && by('dev-a').scope === 'user' && by('dev-a').hub === null, 'configuredAgents: the user-scope entry, with its harness');
+    ok(by('dev-b') && by('dev-b').scope === `local to ${W4}` && by('dev-b').name === 'team' && by('dev-b').hub === '/srv/h',
+      'configuredAgents: Claude\'s local scope, an entry found by its command, and the hub it points at');
+    ok(!by('dev-x') && !by('dev-y'), 'configuredAgents: the commons client and other servers are not hubd');
+    ok(got.some(g => g.id === 'gemini' && g.scope === 'project' && g.agent === ''), 'configuredAgents: an entry without a name is listed, with none');
+    ok(got.length === 3, `configuredAgents: a config that does not parse is passed over, not thrown (got ${got.length})`);
+  } finally {
+    process.env.HOME = was;
+    for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
+  }
+}
+
 done();

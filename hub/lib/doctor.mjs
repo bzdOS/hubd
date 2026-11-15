@@ -18,6 +18,7 @@ import {
 } from './core.mjs';
 import { conflictedFiles } from './conflicts.mjs';
 import { directCommons } from './commons.mjs';
+import { configuredAgents } from './setup.mjs';
 import { cardSectionIssues } from './cards.mjs';
 import { CARD_ATTR, CARD_DRIVER, driverStatus } from './cardmerge.mjs';
 import { STATE_ATTRS, STATE_DRIVER } from './statemerge.mjs';
@@ -803,8 +804,16 @@ export function runDoctor() {
   // environment: what an upgrade needs that is NOT in the code — a variable in a
   // client config, a role declared in the hub, a protocol section worth re-reading.
   // Same list the agents get from hub_whatsnew; doctor is where a human sees it.
+  // Asked as a shell, not as the server: the agent's name is in its client's config, so
+  // the harness configs hub setup writes are read for it (see envChecks, transport 'cli').
   {
-    const env = envChecks();
+    let harnessAgents = [];
+    try { harnessAgents = configuredAgents(); } catch {}
+    const env = envChecks({ transport: 'cli', harnessAgents });
+    if (env.info.length) {
+      console.log('');
+      for (const l of env.info) console.log(l);
+    }
     if (env.total) {
       console.log('');
       console.log('environment: ' + env.total + ' item(s)');

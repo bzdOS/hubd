@@ -56,6 +56,12 @@ Name the function in `HUBD_AGENT` (`dev-shop`, `reviewer-api`), not the model: a
 model's name is refused as an author ([why](start/1-memory.md#what-hubd-refuses-here-and-why)).
 Other clients: [1. Memory → Connect the agent](start/1-memory.md#connect-the-agent).
 
+The name lives in the client's config, not in your shell, so `hub doctor` reads it from
+there: after setup it prints `agent: dev-myproject (Claude Code, user scope, ...)`. Before
+any agent is connected, doctor lists "No agent name is configured" as a HIGH environment
+item. That item is about the agent, not the hub, and doctor still ends `ok`; `hub setup`
+clears it. CLI writes from your shell take `--by`, or `HUBD_AGENT` exported there.
+
 A model with a small window that reads its prompt slowly, a local one, is better served
 with less: `--env HUBD_TOOLS=worker` offers the 15 tools a worker uses instead of all 42,
 about 4k tokens of schemas at every session start instead of 11k, and
@@ -112,7 +118,8 @@ The next `hub` run refreshes `HUBD.md` to match. When an upgrade needs
 something outside the code — a config variable, a role declaration, a protocol
 section worth re-reading — hubd tells the agents itself: `hub_whatsnew` returns
 an `environment` list with what is wrong, the remedy, and who can fix it.
-`hub doctor` shows you the same list. Nothing blocks, nothing needs
+`hub doctor` shows you the same list, judged from a shell: for the agent's name it reads
+the harness configs `hub setup` writes, since that is where an agent finds it. Nothing blocks, nothing needs
 acknowledging: an item disappears when its condition does.
 
 ## Where to go next

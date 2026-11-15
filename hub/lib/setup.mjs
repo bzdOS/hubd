@@ -166,6 +166,54 @@ function readEntry(h, scope, cwd) {
   return { file, conf, entry: e || null, spec: e ? h.spec(e) : null };
 }
 
+/* Which agent names the harness configs on this machine give hubd: what `hub doctor` reads when it
+ * runs in a shell. The name an agent writes under lives in its client's config, not in the shell
+ * doctor runs in, so a shell without HUBD_AGENT says nothing about whether an agent has one.
+ * Every harness and scope hub setup knows, and Claude Code's local scope as well, which a bare
+ * `claude mcp add` writes to. An entry counts when it is named hubd or runs hubd (not the commons
+ * client). A file that does not read is passed over: it is the client's file, and doctor must not
+ * fail on it. `hub` is the hub the entry's env points at, null for the default one. */
+const RUNS_HUBD = /hubd|hub[\\/]index\.mjs/;
+export function configuredAgents({ cwd = process.cwd() } = {}) {
+  const out = [];
+  const hubOf = (env) => env.HUBD_DIR || env.PROJECT_HUB_DIR || env.HUBD_TEAM_DIR || env.HUBD_QUEUE_DIR || null;
+  const add = (id, h, scope, file, name, spec) => {
+    if (!spec) return;
+    const env = spec.env || {};
+    out.push({ id, harness: h.label, scope, file, name, agent: String(env.HUBD_AGENT || '').trim(), hub: hubOf(env) });
+  };
+  const fromServers = (id, h, scope, file, servers) => {
+    for (const [name, e] of Object.entries(servers || {})) {
+      if (!e || typeof e !== 'object') continue;
+      let spec;
+      try { spec = h.spec(e); } catch { continue; }
+      const cmd = [spec.command, ...(spec.args || [])].map(String).join(' ');
+      if (name === NAME || (RUNS_HUBD.test(cmd) && !/\bcommons\b/.test(cmd))) add(id, h, scope, file, name, spec);
+    }
+  };
+  const seen = new Set();
+  for (const [id, h] of Object.entries(HARNESSES)) {
+    for (const scope of h.scopes) {
+      let file;
+      try { file = h.file(scope, cwd); } catch { continue; }
+      if (seen.has(file) || !fs.existsSync(file)) continue;
+      seen.add(file);
+      if (h.read) {
+        try { add(id, h, scope, file, NAME, h.read(file).spec); } catch {}
+        continue;
+      }
+      let conf;
+      try { conf = readConfig(file); } catch { continue; }
+      if (!conf || typeof conf !== 'object') continue;
+      fromServers(id, h, scope, file, conf[h.servers]);
+      if (id === 'claude' && scope === 'user')
+        for (const [dir, p] of Object.entries(conf.projects || {}))
+          if (p && p.mcpServers) fromServers(id, h, `local to ${dir}`, file, p.mcpServers);
+    }
+  }
+  return out;
+}
+
 // A copy of the file as it was before hub setup first changed it; a later run keeps that one.
 function backup(file) {
   const b = file + '.hubd-backup';

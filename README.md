@@ -116,7 +116,10 @@ in it stays unattributable forever. When a caller does not say who it is, the wr
 goes to this name plus a short per-session suffix. Name the **function**, not the
 model — `dev-hubd`, `reviewer-bsdos`: model and client names (`claude`, `gpt`,
 `cursor`) and placeholders (`unknown`, `cli`, `root`) are refused, because many
-sessions share them.
+sessions share them. The name sits in the client's config, not in your shell:
+`hub doctor` reads it from there and prints `agent: <name>`, and until an agent is
+connected it lists "No agent name is configured" as an environment item, without
+failing.
 
 - **No MCP?** Every model that can read and write files can join: paste the
   matching block from [`prompts/`](prompts/) (Claude Code, Cursor, Codex/AGENTS.md,

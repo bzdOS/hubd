@@ -422,6 +422,42 @@ ok(core.envChecks().items.length <= 3, 'envChecks: capped — a list nobody fini
 ok(!has(core.envChecks({ transport: 'http' }), 'author-floor'),
   'envChecks: the floor is not a finding over HTTP — the server env is not the caller\'s');
 
+// `hub doctor` in a shell (transport 'cli'): the agent's name lives in the client config.
+{
+  const hA = (agent, extra = {}) => ({ id: 'claude', harness: 'Claude Code', scope: 'user', file: '/c/.claude.json', name: 'hubd', agent, hub: null, ...extra });
+  const item = (r, id) => r.items.find(i => i.id === id);
+  delete process.env.HUBD_AGENT;
+  const none = core.envChecks({ transport: 'cli', harnessAgents: [] });
+  ok(item(none, 'author-floor') && /not set in this shell/.test(item(none, 'author-floor').what) && !/this server/.test(item(none, 'author-floor').what),
+    'envChecks cli: nothing configured anywhere is HIGH, worded for a shell');
+  ok(/hub setup --harness/.test(item(none, 'author-floor').remedy), 'envChecks cli: and the remedy is hub setup');
+  ok(/\/c\/\.claude\.json has none/.test(item(core.envChecks({ transport: 'cli', harnessAgents: [hA('')] }), 'author-floor').what),
+    'envChecks cli: a hubd entry without a name is named in the finding');
+  const set = core.envChecks({ transport: 'cli', harnessAgents: [hA('dev-shop')] });
+  ok(!item(set, 'author-floor') && set.info.some(l => l.startsWith('agent: dev-shop (Claude Code, user scope, /c/.claude.json')),
+    'envChecks cli: a name in a harness config is an info line, not a finding');
+  ok(/for the default hub/.test(set.info[0]), 'envChecks cli: an entry with no hub of its own, seen from a shell whose hub is set by env, says so');
+  ok(!/for hub/.test(core.envChecks({ transport: 'cli', harnessAgents: [hA('dev-shop', { hub: core.HUB })] }).info[0]) &&
+    /for hub \/elsewhere/.test(core.envChecks({ transport: 'cli', harnessAgents: [hA('dev-shop', { hub: '/elsewhere' })] }).info[0]),
+    'envChecks cli: an entry for this hub is plain; one for another hub is labelled');
+  const bad = core.envChecks({ transport: 'cli', harnessAgents: [hA('claude')] });
+  ok(item(bad, 'author-floor-refused') && /\/c\/\.claude\.json/.test(item(bad, 'author-floor-refused').what) && !item(bad, 'author-floor'),
+    'envChecks cli: a refused name in a harness config is HIGH, naming the file');
+  ok(/--harness claude/.test(item(bad, 'author-floor-refused').remedy), 'envChecks cli: with the harness to run setup for');
+  ok(!('info' in core.envChecks()) && !('info' in core.envChecks({ transport: 'stdio' })), 'envChecks: only the cli shape carries info');
+  // the server keeps what it had: its own env is the one that counts, whatever a config file says
+  ok(has(core.envChecks({ transport: 'stdio', harnessAgents: [hA('dev-shop')] }), 'author-floor') &&
+    /on this server/.test(core.envChecks({ transport: 'stdio' }).items.find(i => i.id === 'author-floor').what),
+    'envChecks stdio: unchanged, an unset HUBD_AGENT on the server is still HIGH');
+  process.env.HUBD_AGENT = 'dev-test';
+  const sh = core.envChecks({ transport: 'cli', harnessAgents: [] });
+  ok(!item(sh, 'author-floor') && !item(sh, 'author-floor-refused'), 'envChecks cli: a usable HUBD_AGENT in the shell is enough');
+  process.env.HUBD_AGENT = 'gpt';
+  ok(/in this shell is "gpt"/.test((item(core.envChecks({ transport: 'cli' }), 'author-floor-refused') || {}).what || ''),
+    'envChecks cli: a refused HUBD_AGENT in the shell is still reported');
+  delete process.env.HUBD_AGENT;
+}
+
 // The queue conflict: stderr is invisible to an MCP client, so the warning used to be
 // unread. It is recorded, surfaces as a check, and clears itself once the role is
 // declared. Driven for real — a live competing waiter is this process's parent.
