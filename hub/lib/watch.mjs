@@ -33,7 +33,7 @@ import {
 export const WINDOW_DAYS = 7;
 /* A new cursor starts this far back: journal times are whole minutes, so an entry written in the
  * minute the cursor was placed reads as older than it, and a node's clock can run a little behind. */
-const START_MARGIN_MS = 10 * 60000;
+const CURSOR_BACKFILL_MS = 10 * 60000;
 const HOUR = 3600000;
 
 const cleanName = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -51,7 +51,7 @@ function open({ key, file, project, since, includePrivate, nowMs, memo }) {
       `Delete ${path.relative(HUB, file)} to start it again, or read the past with hub log.`);
   }
   const created = !cur;
-  const fromMs = cur ? parseTs(cur.from).getTime() : since != null ? sinceToMs(since, nowMs) : nowMs - START_MARGIN_MS;
+  const fromMs = cur ? parseTs(cur.from).getTime() : since != null ? sinceToMs(since, nowMs) : nowMs - CURSOR_BACKFILL_MS;
   const floor = Math.max(fromMs, nowMs - WINDOW_DAYS * 86400000);
   const buckets = new Map();
   let dirty = created;
