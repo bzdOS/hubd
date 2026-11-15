@@ -230,6 +230,11 @@ const ruleWords = (s) => new Set(ruleKey(s).split(' ')
 const shared = (a, b) => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / ((a.size + b.size - n) || 1); };
 /** How much of two wordings is the same rule, 0 to 1; SAME_RULE and above is one rule. */
 export const ruleSimilarity = (a, b) => shared(ruleWords(a), ruleWords(b));
+/** Two texts are the same rule: the same words, or wordings close enough to be one (SAME_RULE).
+ *  The hub's own test for "this rule is a law already, in whatever words" — the one
+ *  promoteCandidates uses to keep a law off the candidates list — so a law written by the head's
+ *  own hand is compared with the card's laws the same way a candidate is. */
+export const sameRule = (a, b) => ruleKey(a) === ruleKey(b) || ruleSimilarity(a, b) >= SAME_RULE;
 /** A rule's id, as hub reflect --promote lists a candidate: its wording as ruleKey compares it, hashed. */
 export const ruleId = (s) => createHash('sha1').update(ruleKey(s)).digest('hex').slice(0, 6);
 

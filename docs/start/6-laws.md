@@ -126,6 +126,28 @@ A rejected candidate (`--reject <id> --reason "<why>"`) leaves the list, and com
 only if the turns keep saying it. Laws are never rotated into history with a section's
 older lines: a law moved out of the card would be a law nobody reads.
 
+## A law the head dictates
+
+A candidate has to have been said three times, or by two roles. A head whose team has
+not said anything yet has no candidate to accept — and a rule the head wants from the
+first day is written with the head's own words:
+
+```bash
+hub reflect --law "the load test runs against the cart size the bug was reported at" --project shop --by head-shop
+hub reflect --laws --project shop
+```
+
+```text
+law of shop, in its card's Laws section: the load test runs against the cart size the bug was reported at
+- load-test with the cart size the bug was reported at, not the tool's default
+- the load test runs against the cart size the bug was reported at
+```
+
+The right is the same as for a candidate — the project's head, or a fleet role's — and
+the line in the card is the same. The journal says where the rule came from: the law
+was dictated, not grown out of a reflection. Saying it again is refused with the law
+the card already holds, so the card keeps one line per rule.
+
 ## Heads and the orchestrator reflect too
 
 A head ends its review of its workers with `HEAD-REFLECT`, the orchestrator its review

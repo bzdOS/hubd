@@ -4,6 +4,21 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.80 — 2026-11-15
+
+- **A head can dictate a law, not only accept a grown one.** A candidate for a
+  project's laws has to have been said three times, or by two roles, before the head
+  can accept it; a project whose roles never reflected had no candidate to accept at
+  all, which is why a head's own word had to come in through the back door of
+  `hub section add`, which wrote a line no law reader could take. `hub reflect
+  --law "<the rule>" --project <proj> --by <head>` now writes the rule the head
+  dictates as a law of the project: the same line in the card's Laws section, the same
+  right (the project's head, or a fleet role's), and a journal decision that says it was
+  dictated, not grown. Said again it is refused with the law the card already holds, so the
+  card keeps one line per rule; a worker of the project may not dictate, a head may.
+  `hub section add` with the laws section writes a law through the same door, with the
+  head's name, and refuses `--set`, which would have dropped the others.
+
 ## 0.9.79 — 2026-11-14
 
 - **`hub init` scaffolds your hub, not the folder you stand in.** With no path it took the

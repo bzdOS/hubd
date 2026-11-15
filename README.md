@@ -75,7 +75,7 @@ of every command.
 | [**3. Addressable agents**](docs/start/3-queues.md) | A queue per role: send it work, and an agent waiting on it wakes when something arrives, with no polling. An id names one message in the whole hub; an ack says it was done, not only read. In work mode a role's open tasks are its queue. | `hub queue send`, `hub queue wait`, `hub_queue_ack` |
 | [**4. Several machines**](docs/start/4-second-machine.md) | One hub in a git repository that every machine syncs. Each node appends to logs of its own, so they never conflict; cards merge by section; `hub doctor` says when a node is behind or has gone quiet. | `scripts/mesh-sync.sh`, `hub card merge-driver`, `hub doctor` |
 | [**5. A team with roles**](docs/start/5-roles.md) | Roles are cards with a rank: workers, a head for each project, a fleet role above the heads. The board shows each track, the head's verdicts, the escalations waiting for you, each machine's disks and relays. Each kind of role runs by one template of rules. | `hub resource set`, `hub board`, `hub serve`, `hub prompts render` |
-| [**6. A team that learns**](docs/start/6-laws.md) | Each turn ends with a reflection: what it tried, what stood in the way, what rule would have helped. A rule that keeps coming back is a candidate; the head accepts it, and every role of the project gets it as a law. | `hub reflect`, `hub reflect --promote` |
+| [**6. A team that learns**](docs/start/6-laws.md) | Each turn ends with a reflection: what it tried, what stood in the way, what rule would have helped. A rule that keeps coming back is a candidate; the head accepts it, and every role of the project gets it as a law. Or the head dictates it outright, and every role of the project gets it as a law. | `hub reflect`, `hub reflect --promote` |
 | [**7. A service**](docs/start/7-server.md) | The same hub over MCP on HTTP, token-gated and multi-tenant, for agents anywhere; each journal entry to a chat, a mail or a script as it lands. | `hubd --http`, `hub watch --exec` |
 
 The words in this table — card, track, head, law — are defined in
@@ -308,7 +308,7 @@ Shipped, by level ([changelog](CHANGELOG.md) for every version):
   MCP (0.9.41); the Summary with goals and verdicts (0.9.45), escalations (0.9.46)
   and the mail row (0.9.48).
 - **A team that learns** — reflections (0.9.42), `hub_reflect` (0.9.44), laws
-  (0.9.54).
+  (0.9.54); a head can dictate one (0.9.80).
 - **A service** — MCP over HTTP, token-gated and multi-tenant; resources and the
   `[[wikilink]]` graph; harvest as an MCP prompt; `hub watch` and `--exec` (0.9.43,
   0.9.44); commands that only read write nothing (0.9.31); `hub demo` (0.9.55); the

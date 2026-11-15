@@ -188,7 +188,10 @@ flowchart LR
   `hub reflect --promote` lists them by id, and the head accepts or rejects each with
   `hub reflect --accept|--reject <id>`. An accepted one is a line in the card's Laws
   section, never rotated out, and `hub_context` returns the laws to every role of the
-  project; a rejected one stays off the list until it is said again.
+  project; a rejected one stays off the list until it is said again. A head can also
+  dictate a law, with no reflection behind it: `hub reflect --law "<the rule>"
+  --project <proj> --by <head>` writes the same line under the same right, and a law
+  said twice is refused with the one the card already holds.
 - **Resources & relationships** — infra is a card too: hosts, vms, services,
   endpoints, providers under `resources/`, with structured frontmatter (type, address,
   os, provider, status) and **typed `[[wikilink]]` edges** (`runs_on`, `depends_on`,

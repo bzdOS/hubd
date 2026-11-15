@@ -218,15 +218,16 @@ const TOOLS = [
     }, required: ['project'] } },
 
   { name: 'hub_law',
-    description: 'A head\'s verdict on a candidate for its project\'s laws (hub_reflect with promote lists them, each with an id). accept: the rule becomes a law, a line in the card\'s Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head\'s to rule on, or a fleet role\'s. Either verdict is a journal line.',
+    description: 'A head\'s verdict on a candidate for its project\'s laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card\'s Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head\'s to rule on, or a fleet role\'s. Either verdict is a journal line; a law said again is refused with the one the card already holds.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' },
       id: { type: 'string', description: 'the candidate\'s id, as hub_reflect with promote lists it' },
+      rule: { type: 'string', description: 'the rule\'s own text, when the head dictates a law instead of accepting a candidate — one of id or rule' },
       verdict: { type: 'string', enum: ['accept', 'reject'] },
       by: { type: 'string', description: 'the head ruling on it' },
       reason: { type: 'string', description: 'why, for a reject above all' },
       since: { type: 'string', description: 'the window the candidate was listed over; default 7d' },
-    }, required: ['project', 'id', 'verdict', 'by'] } },
+    }, required: ['project', 'verdict', 'by'] } },
 
   { name: 'hub_usage_add',
     description: 'Record what only YOU can see about a piece of work: seconds, tokens, cost, model. The hub cannot observe any of these, so they arrive here explicitly and are reported back as SUPPLIED, never mixed with what the hub measured itself. At least one number is required — an empty entry would record a $0 session.',

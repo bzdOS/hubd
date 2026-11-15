@@ -22,7 +22,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`watch`](#watch) | new journal entries, each shown once to the cursor &lt;name> |
 | [`recall`](#recall) | ranked, dated hits across cards, tasks and the journal |
 | [`report`](#report) | structured report → card sections (no input prints the template) |
-| [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the project's laws, one per line |
+| [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
 | [`task`](#task) | a new task; close a task; tasks; one task, where else its id appears, and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
@@ -139,6 +139,7 @@ Also: `hub where`
 - `hub reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]` — the reflection digest: results and obstacles per role, the latest facts, repeated rules
 - `hub reflect --promote --project <proj> [--since 7d]` — candidates for the project's laws: a rule said 3 times by one role, or by 2 roles
 - `hub reflect --accept|--reject <id> --project <proj> --by <head>` — the head's verdict on a candidate; an accepted one is a law, in hub_context
+- `hub reflect --law "<the rule>" --project <proj> --by <head>` — the head dictates a law: no reflection has to have grown it first
 - `hub reflect --laws --project <proj>` — the project's laws, one per line
 
 ## decide
@@ -363,6 +364,7 @@ The commands each flag appears with, in their usage lines.
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
 | `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
+| `--law` | [reflect](#reflect) |
 | `--laws` | [reflect](#reflect) |
 | `--lens` | [attempt](#attempt) |
 | `--level` | [reflect](#reflect) |

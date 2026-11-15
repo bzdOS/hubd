@@ -406,6 +406,73 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
     'CLI: hub reflect --laws lists the laws, --json with who and when');
 }
 
+// ── a law the head dictates: nothing has to have grown it first ──
+{
+  const D = 'rflaw-dictated';
+  const RULE = 'the build log stays beside the package';
+  // a project with no reflection in it at all: the head's own word is the only way to write a law
+  const d = core.runLaw({ project: D, rule: RULE, verdict: 'accept', by: 'dev-h' });
+  const card = fs.readFileSync(core.cardPath(D), 'utf8');
+  ok(d.ok && d.verdict === 'accepted' && d.rule === RULE && d.dictated === true && d.section === 'Laws' &&
+    new RegExp(`## Laws\\n\\n- \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d \\(dev-h\\): ${RULE}\\n`).test(card),
+    `law: a dictated law is a line of the card's Laws section, with its head (${d.section})`);
+  const dl = core.projectLaws(D);
+  ok(dl.length === 1 && dl[0].rule === RULE && dl[0].by === 'dev-h' && /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(dl[0].since),
+    'law: projectLaws reads it back — the rule, who and when');
+  const de = core.journalTail(D, 1)[0];
+  ok(de && de.kind === 'decision' && de.agent === 'dev-h' && de.law.verdict === 'accepted' && de.law.rule === RULE && de.law.dictated === true,
+    `law: the journal says the law was dictated, not grown (${JSON.stringify(de && de.law)})`);
+  const ctxDir = mktmp(); fs.writeFileSync(path.join(ctxDir, '.hubd'), D + '\n');
+  ok(JSON.stringify(core.runContext({ cwd: ctxDir }).laws) === JSON.stringify([RULE]),
+    'context: hub_context gives the rule alone — no date, no name');
+  ok(core.runPromote({ project: D }).candidates.length === 0, 'law: a dictated law is no candidate');
+  ok(core.runLaw({ project: D, rule: 'the report names the file it changed', verdict: 'accept', by: 'dev-h' }).verdict === 'accepted' &&
+    core.projectLaws(D).length === 2, 'law: another law of the head\'s own is taken');
+
+  // said again: refused with the law that is already there, and the card keeps one line
+  ok(throws(() => core.runLaw({ project: D, rule: RULE, verdict: 'accept', by: 'dev-h' }), new RegExp(`a law of ${D} already says: ${RULE}`)) &&
+    throws(() => core.runLaw({ project: D, rule: 'the build log stays beside the package!', verdict: 'accept', by: 'dev-h' }), /already says/),
+    'law: a law said again is refused, in whatever words');
+  const card2 = fs.readFileSync(core.cardPath(D), 'utf8');
+  ok(core.projectLaws(D).length === 2 && (card2.match(/build log stays beside the package/g) || []).length === 1,
+    'law: and the card holds one line for it');
+
+  // the right is the head's, exactly as for a candidate
+  const H2 = 'rflaw-dict-head';
+  core.runResourceSet({ slug: 'rfd-head', type: 'role', attrs: { rank: 'head', project: H2 }, by: 'dev-t' });
+  core.runResourceSet({ slug: 'rfd-dev', type: 'role', attrs: { rank: 'worker', project: H2 }, by: 'dev-t' });
+  ok(throws(() => core.runLaw({ project: H2, rule: 'a worker does not dictate', verdict: 'accept', by: 'rfd-dev' }),
+      /a law of rflaw-dict-head is its head's to rule on \(rfd-head\) or a fleet role's; rfd-dev is of rank worker/),
+    'law: a worker of the project may not dictate a law, the same refusal as for a candidate');
+  ok(core.runLaw({ project: H2, rule: 'the head dictates this one', verdict: 'accept', by: 'rfd-head' }).verdict === 'accepted',
+    'law: its head may');
+  for (const m of ['rfd-head', 'rfd-dev']) fs.rmSync(path.join(T0, 'resources', m + '.md'), { force: true });
+
+  // `hub section add` into the laws section writes a law, not a bare dated line
+  const S = 'rflaw-section';
+  const sa = core.runSectionAdd({ project: S, section: 'laws', text: 'the log stays in the repo', by: 'dev-h' });
+  const sl = core.projectLaws(S);
+  const sc = fs.readFileSync(core.cardPath(S), 'utf8');
+  ok(sa.ok && sl.length === 1 && sl[0].rule === 'the log stays in the repo' && sl[0].by === 'dev-h' &&
+    /- \d{4}-\d\d-\d\d \d\d:\d\d \(dev-h\): the log stays in the repo/.test(sc),
+    'section add: a line in the laws section is a law — the rule alone, with its head');
+  ok(throws(() => core.runSectionAdd({ project: S, section: 'laws', text: 'the log stays in the repo', by: 'dev-h' }), /already says/),
+    'section add: and a law said twice is refused there too');
+  ok(throws(() => core.runSectionAdd({ project: S, section: 'laws', text: 'another', mode: 'set', by: 'dev-h' }), /--set would drop the others/),
+    'section add: --set on the laws section is refused — it would drop the other laws');
+
+  // the CLI
+  const C = 'rflaw-dict-cli';
+  const made = cli(['reflect', '--law', 'the cli dictates this one', '--project', C, '--by', 'dev-h']);
+  ok(made.code === 0 && made.stdout.startsWith(`law of ${C}, in its card's Laws section: the cli dictates this one`),
+    `CLI: hub reflect --law makes a law of the head's own words (${made.stdout.trim()})`);
+  const list = cli(['reflect', '--laws', '--project', C]);
+  ok(list.code === 0 && list.stdout === '- the cli dictates this one\n',
+    `CLI: hub reflect --laws lists the rule alone (${JSON.stringify(list.stdout)})`);
+  const again = cli(['reflect', '--law', 'the cli dictates this one', '--project', C, '--by', 'dev-h']);
+  ok(again.code !== 0 && /already says/.test(again.stderr), 'CLI: a law said again exits non-zero and says which one is there');
+}
+
 // ── over MCP ──
 const MCP_RULE = 'quote the error line in the report';
 for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, project: 'rflaw-mcp', agent: 'dev-m', kind: 'done', text: 'turn', reflect: R.checkReflect({ ...GOOD, rule: MCP_RULE }) });
@@ -420,6 +487,7 @@ for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, pro
     { id: 7, method: 'tools/call', params: { name: 'hub_reflect', arguments: { project: 'rflaw', since: '2026-10-01', promote: true } } },
     { id: 8, method: 'tools/call', params: { name: 'hub_law', arguments: { project: 'rflaw-mcp', id: R.ruleId(MCP_RULE), verdict: 'accept', by: 'dev-h', since: '2026-10-01' } } },
     { id: 9, method: 'tools/call', params: { name: 'hub_law', arguments: { project: 'rflaw-mcp', id: 'abcdef', verdict: 'reject', by: 'dev-h' } } },
+    { id: 10, method: 'tools/call', params: { name: 'hub_law', arguments: { project: 'rflaw-dict-mcp', rule: 'the mcp dictates this one', verdict: 'accept', by: 'dev-h' } } },
   ].map(r => JSON.stringify({ jsonrpc: '2.0', ...r })).join('\n') + '\n';
   let out = '';
   try { out = execSync(`node ${REPO}/hub/index.mjs`, { input: reqs, encoding: 'utf8', env: { ...process.env }, timeout: 15000 }); } catch (e) { out = e.stdout || ''; }
@@ -441,10 +509,15 @@ for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, pro
   const pv = res[7]?.result && !res[7].result.isError ? JSON.parse(res[7].result.content[0].text) : null;
   ok(pv && JSON.stringify(pv) === JSON.stringify(core.runPromote({ project: 'rflaw', since: '2026-10-01' })), 'MCP: hub_reflect with promote answers what hub reflect --promote --json does');
   const lt = (res[1]?.result?.tools || []).find(t => t.name === 'hub_law');
-  ok(lt && lt.inputSchema.required.join() === 'project,id,verdict,by' && lt.inputSchema.properties.verdict.enum.join() === 'accept,reject', 'MCP: hub_law is listed, the verdicts as its enum');
+  ok(lt && lt.inputSchema.required.join() === 'project,verdict,by' && lt.inputSchema.properties.verdict.enum.join() === 'accept,reject' &&
+    !!lt.inputSchema.properties.rule, 'MCP: hub_law is listed, the verdicts as its enum, the rule it can be given');
   ok(res[8]?.result && !res[8].result.isError && JSON.parse(res[8].result.content[0].text).verdict === 'accepted' && core.projectLaws('rflaw-mcp')[0]?.rule === MCP_RULE,
     'MCP: hub_law accepts a candidate into the project\'s laws');
   ok(res[9]?.result?.isError && /no candidate abcdef/.test(res[9].result.content[0].text), 'MCP: and refuses an id that is no candidate');
+  const dict = res[10]?.result && !res[10].result.isError ? JSON.parse(res[10].result.content[0].text) : null;
+  ok(dict && dict.dictated === true && dict.rule === 'the mcp dictates this one' &&
+    core.projectLaws('rflaw-dict-mcp')[0]?.rule === 'the mcp dictates this one',
+    'MCP: hub_law takes the rule itself — a law the head dictates, with no reflection behind it');
 }
 
 done();

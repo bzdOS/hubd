@@ -177,12 +177,13 @@ The reflection digest of one project, what a head reads instead of its workers' 
 
 ### hub_law
 
-A head's verdict on a candidate for its project's laws (hub_reflect with promote lists them, each with an id). accept: the rule becomes a law, a line in the card's Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head's to rule on, or a fleet role's. Either verdict is a journal line.
+A head's verdict on a candidate for its project's laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card's Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head's to rule on, or a fleet role's. Either verdict is a journal line; a law said again is refused with the one the card already holds.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `project` | string | yes |  |
-| `id` | string | yes | the candidate's id, as hub_reflect with promote lists it |
+| `id` | string |  | the candidate's id, as hub_reflect with promote lists it |
+| `rule` | string |  | the rule's own text, when the head dictates a law instead of accepting a candidate — one of id or rule |
 | `verdict` | one of `accept`, `reject` | yes |  |
 | `by` | string | yes | the head ruling on it |
 | `reason` | string |  | why, for a reject above all |

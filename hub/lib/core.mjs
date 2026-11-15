@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
 import { LEVELS, checkReflect, entryReflect, isExampleRule, isNoRule, isWaitingTurn, promoteCandidates, readReflect, reflectDigest,
-  renderReflect, ruleId, splitReflect } from './reflect.mjs';
+  renderReflect, ruleId, sameRule, splitReflect } from './reflect.mjs';
 import { deliveries, DELIVERY, MAIL_LIMIT } from './mail.mjs';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
@@ -3341,7 +3341,12 @@ export function projectLaws(project) {
     const item = /^\s*[-*+]\s+(.+?)\s*$/.exec(l);
     if (!item || l.startsWith(MOVED_MARK)) continue;
     const m = /^(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?) \(([^)]+)\): (.+)$/.exec(item[1]);
-    laws.push(m ? { rule: m[3], since: m[1], by: m[2] } : { rule: item[1] });
+    if (m) { laws.push({ rule: m[3], since: m[1], by: m[2] }); continue; }
+    // A line an older `hub section add laws` wrote carries a date and no head: the date is not part
+    // of the rule, and hub_context handed it back as one — the rule every role reads said
+    // "2026-11-15 06:11: keep the build log beside the package".
+    const d = /^(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?): (.+)$/.exec(item[1]);
+    laws.push(d ? { rule: d[2], since: d[1] } : { rule: item[1] });
   }
   return laws;
 }
@@ -3370,22 +3375,54 @@ export function runPromote(a = {}) {
 
 /** The head's verdict on one candidate, by its id: `accept` makes it a law of the project, `reject`
  *  takes it off the list. A project whose head is a role card is the head's to rule on (or a fleet
- *  role's, above the heads); with no head on record, whoever signs. */
+ *  role's, above the heads); with no head on record, whoever signs.
+ *
+ *  A head can also DICTATE a law: `rule` is the text itself, and nothing has to have grown it
+ *  first. A candidate is a rule a role said three times (or two roles said once each), so a project
+ *  whose roles never reflected had no law to accept at all — and the head's own word was the only
+ *  way to write one. The right is the same (the head's, or a fleet role's), the line in the card is
+ *  the same, and the journal says the law was dictated, not grown. Saying it again is refused with
+ *  the law that is already there, so the card holds one line per rule. */
 export function runLaw(a = {}) {
   if (!['accept', 'reject'].includes(a.verdict)) throw new Error(`verdict "${a.verdict}" is not one of accept | reject`);
   const by = requireAuthor(a.by, 'by');
   const id = String(a.id ?? '').trim().toLowerCase();
-  if (!id) throw new Error('id required: the candidate\'s id, as hub reflect --promote lists it');
-  const p = runPromote({ project: a.project, since: a.since });
+  const dictated = String(a.rule ?? '').replace(/\s+/g, ' ').trim();
+  if (!id && !dictated) throw new Error('id required: the candidate\'s id, as hub reflect --promote lists it — or rule, the text of a law the head dictates');
+  if (id && dictated) throw new Error('id or rule, not both: a candidate is ruled on by its id, a law the head dictates by its own text');
+  const project = canonProject(a.project);
   const set = projectSlugSet(a.project);
   const reg = roleRegistry();
   const heads = [...reg.values()].filter(r => r.rank === 'head' && set.has(r.project)).map(r => r.role);
   const me = reg.get(slugify(by));
   if (heads.length && !heads.includes(me?.role) && me?.rank !== 'fleet')
-    throw new Error(`a law of ${p.project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);
+    throw new Error(`a law of ${project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);
+  const reason = String(a.reason ?? '').replace(/\s+/g, ' ').trim();
+
+  // The law the head dictates: the same line in the card, the same right, and a journal entry that
+  // says where the rule came from — dictated, not grown out of a reflection.
+  if (dictated) {
+    if (a.verdict !== 'accept') throw new Error(`a law the head dictates is accepted, not rejected: ${dictated.slice(0, 120)}`);
+    const already = projectLaws(project).find(l => sameRule(l.rule, dictated));
+    if (already) throw new Error(`a law of ${project} already says: ${already.rule}`);
+    const prevCard = readCard(project);
+    const before = prevCard || cardBaseFor(project);
+    const section = liveHeading(before, 'laws');
+    fs.mkdirSync(PROJ, { recursive: true });
+    const rot = rotateCardOverflow(editSection(before, section, `- ${now()} (${by}): ${dictated}`, 'append'), project, by);
+    atomicWrite(cardPath(project), rot.text);
+    const trace = cardTrace(prevCard, rot.text, [section], 'law', rot.moved);
+    const src = String(a.provenance ?? '').trim();
+    journalAppend({ ts: now(), project, agent: by, kind: 'decision',
+      law: { verdict: 'accepted', rule: dictated, dictated: true },
+      text: `law accepted (dictated): ${dictated.slice(0, 160)}${reason ? ' (' + reason + ')' : ''}${src ? ' · src: ' + src : ''}`,
+      ...(trace ? { card: trace } : {}) });
+    return { ok: true, project, verdict: 'accepted', rule: dictated, dictated: true, section, card: cardPath(project) };
+  }
+
+  const p = runPromote({ project: a.project, since: a.since });
   const c = p.candidates.find(x => x.id === id || x.variants.some(v => ruleId(v.rule) === id));
   if (!c) throw new Error(`no candidate ${id} for ${p.project} since ${p.since}; hub reflect --promote --project ${p.project} lists them`);
-  const reason = String(a.reason ?? '').replace(/\s+/g, ' ').trim();
   const law = { verdict: a.verdict === 'accept' ? 'accepted' : 'rejected', id: c.id, rule: c.rule, count: c.count, roles: c.by, ...(reason ? { reason } : {}) };
   let section = null, trace = null;
   if (law.verdict === 'accepted') {
@@ -3454,6 +3491,21 @@ export function runSectionAdd(a = {}) {
     || cfg.find(s => sectionHeadings(s.key).some(h => h.toLowerCase() === literal.toLowerCase())) || {}).key;
 
   const slug = slugify(project);
+
+  /* The laws section is not a free-text section: a line in it IS a law, and a law has a head and a
+   * date in the hub's own format. So it goes through the same door as `hub reflect --law` — the
+   * head's right, one line per rule, a decision in the journal — instead of a bare dated line that
+   * projectLaws could not read, and that hub_context handed back to every role with the date
+   * inside the rule. */
+  if (key === 'laws') {
+    if (a.mode === 'set') throw new Error(`the laws section holds laws; --set would drop the others — one at a time: hub reflect --law "<text>" --project ${project} --by <head>`);
+    const before = readCard(project) || cardBaseFor(project);
+    const heading = liveHeading(before, 'laws');
+    const created = !hasHeading(before, heading);
+    const law = runLaw({ project, rule: raw, verdict: 'accept', by, provenance: a.provenance });
+    return { ok: true, project: law.project, section: law.section || heading, created, card: law.card, law: law.rule };
+  }
+
   const prevCard = readCard(project);
   const before = prevCard || cardBaseFor(project);
   const heading = key ? liveHeading(before, key) : literal;

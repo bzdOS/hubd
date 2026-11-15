@@ -122,7 +122,7 @@ declareFlags(
   '--model', '--task', '--timeout', '-k', '-q', '-t', '--link', '--cost',
   '--src', '--stale-days', '--addr', '--append', '--append-line',
   '--attr', '--state', '--turn', '--turn-started', '--empty', '--silent', '--exit-reason', '--tasks',
-  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--follow', '--interval', '--exec',
+  '--vars', '--out', '--check', '--remove', '--reflect', '--since', '--level', '--promote', '--laws', '--law', '--follow', '--interval', '--exec',
   '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
   '--opencode', '--rows', '--node', '--db', '--dry', '--group', '--pending',
   '-o', '--lens', '--tried', '--result', '--next', '--covered', '--builds-on', '--artifact', '--of', '--verdict', '--commitment',
@@ -1584,12 +1584,22 @@ command('reflect', () => {
   const usage = 'Usage: hub reflect --project <project> [--since 7d|12h|<time>] [--level turn|head|fleet] [--json]\n' +
     '       hub reflect --promote --project <project> [--since 7d] [--json]\n' +
     '       hub reflect --accept <id> | --reject <id> [--reason "<why>"] --project <project> --by <head> [--since 7d]\n' +
+    '       hub reflect --law "<the rule>" --project <project> --by <head>\n' +
     '       hub reflect --laws --project <project> [--json]';
   const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
   const project = flag('--project') ?? flag('-p');
   if (!project) die(usage);
   const since = flag('--since') ?? undefined;
   const accept = flag('--accept'), reject = flag('--reject');
+  const law = flag('--law');
+  if (law != null) {
+    if (accept != null || reject != null) die(`--law with --accept or --reject, not both\n${usage}`);
+    let v;
+    try { v = runLaw({ project, rule: law, verdict: 'accept', by: authorOrDie('--by'), reason: flag('--reason') ?? undefined }); }
+    catch (e) { die(e.message); }
+    console.log(`law of ${v.project}, in its card's ${v.section} section: ${v.rule}`);
+    done(0);
+  }
   if (accept != null || reject != null) {
     if (accept != null && reject != null) die(`--accept or --reject, not both\n${usage}`);
     let v;
@@ -2383,6 +2393,7 @@ const HELP = [
   ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
   ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said 3 times by one role, or by 2 roles"],
   ['reflect --accept|--reject <id> --project <proj> --by <head>', "the head's verdict on a candidate; an accepted one is a law, in hub_context"],
+  ['reflect --law "<the rule>" --project <proj> --by <head>', "the head dictates a law: no reflection has to have grown it first"],
   ['reflect --laws --project <proj>', "the project's laws, one per line"],
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
