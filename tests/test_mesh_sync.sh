@@ -376,7 +376,7 @@ n=\$(cat "$TMP/races" 2>/dev/null || echo 0)
 echo \$((n + 1)) > "$TMP/races"
 printf '{"ts":"2026-09-01 14:00","kind":"note","text":"other %s"}\n' "\$n" >> "$TMP/other/journal.other.jsonl"
 git -C "$TMP/other" add -A && git -C "$TMP/other" -c user.name=o -c user.email=o@o commit -q -m "other \$n" &&
-  git -C "$TMP/other" pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
+  git -C "$TMP/other" -c user.name=o -c user.email=o@o pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
 EOF
 chmod +x "$TMP/race.sh"
 racer() {   # racer <node> <hook> — a clone of the mirror whose <hook> pushes another node's commit
@@ -386,7 +386,7 @@ racer() {   # racer <node> <hook> — a clone of the mirror whose <hook> pushes 
   # post-merge runs only after a merge: the mirror moves once before the run, so there is one
   printf '{"ts":"2026-09-01 14:02","kind":"note","text":"before %s"}\n' "$1" >> "$TMP/other/journal.before.jsonl"
   git -C "$TMP/other" add -A && git -C "$TMP/other" -c user.name=o -c user.email=o@o commit -q -m "before $1" &&
-    git -C "$TMP/other" pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
+    git -C "$TMP/other" -c user.name=o -c user.email=o@o pull -q --no-rebase --no-edit origin main && git -C "$TMP/other" push -q origin main
 }
 landed() {   # landed <node> -> 1 when the mirror is the node's HEAD and holds its line and the other node's
   git -C "$TMP/origin6" show main:"journal.$1.jsonl" 2>/dev/null | grep -q "from $1" &&
@@ -439,7 +439,7 @@ elm_writes() {   # elm_writes <n> — elm appends to its files, rewrites the not
   printf '\n## 2026-10-05 17:0%s · from elm · id %s\nwork %s\n' "$1" "$1" "$1" >> "$TMP/elm/queues/w.elm.queue.md"
   printf '{"id":%s,"status":"delivered"}\n' "$1" >> "$TMP/elm/queues/w.elm.acks"
   printf 'note %s\n' "$1" > "$TMP/elm/notes.md"
-  cm "$TMP/elm" "elm $1" && git -C "$TMP/elm" pull -q --no-rebase --no-edit origin main && git -C "$TMP/elm" push -q origin main
+  cm "$TMP/elm" "elm $1" && git -C "$TMP/elm" -c user.name=t -c user.email=t@t pull -q --no-rebase --no-edit origin main && git -C "$TMP/elm" push -q origin main
 }
 mkhub "$TMP/origin7"; git -C "$TMP/origin7" config receive.denyCurrentBranch ignore
 git clone -q "$TMP/origin7" "$TMP/elm"; mkdir -p "$TMP/elm/queues"
