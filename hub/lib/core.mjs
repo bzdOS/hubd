@@ -4490,6 +4490,19 @@ export function runTaskUpdate(a) {
     const db = loadTasks();
     const t = db.tasks.find(x => String(x.id) === String(a.id));
     if (!t) throw new Error('no task #' + a.id);
+    // Guard against silent truncation: `hub task update --text` replaces the whole text.
+    // Refuse a new text shorter than half of the old one unless the caller explicitly
+    // forces it (--force) or appends (--append). Hint points at the safe way.
+    if (a.text != null && !a.append && !a.force) {
+      const oldLen = String(t.text || '').length;
+      const newLen = String(a.text).length;
+      if (oldLen > 0 && newLen < oldLen / 2) {
+        throw new Error('text would shrink from ' + oldLen + ' to ' + newLen + ' chars (less than half): refusing to replace. To append, use --append (old + new). To replace anyway, pass --force. Hint: append = old text + new text.');
+      }
+    }
+    if (a.text != null && a.append) {
+      a.text = String(t.text || '') + '\n' + String(a.text);
+    }
     const patch = {};
     // `importance` belongs here too: hub_task_add accepts it, so a task could be
     // given a priority at creation and never change it again, while `deadline` right

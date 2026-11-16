@@ -172,6 +172,8 @@ const TOOLS = [
       assignee: { type: 'string' }, by: { type: 'string' },
       depends_on: { type: 'array', items: { type: ['integer', 'string'] }, description: 'task ids this task waits on' },
       resources: { type: 'array', items: { type: 'string' }, description: 'resource slugs this task touches' },
+      append: { type: 'boolean', description: 'append text to the existing task text instead of replacing' },
+      force: { type: 'boolean', description: 'force a shrinking text replacement' },
     }, required: ['id', 'by'] } },
 
   { name: 'hub_audit',

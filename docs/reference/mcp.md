@@ -313,6 +313,8 @@ Update a task: close it (status=done), reassign, reprioritise, edit text/deadlin
 | `by` | string | yes |  |
 | `depends_on` | (integer or string)[] |  | task ids this task waits on |
 | `resources` | string[] |  | resource slugs this task touches |
+| `append` | boolean |  | append text to the existing task text instead of replacing |
+| `force` | boolean |  | force a shrinking text replacement |
 
 ### hub_next
 
