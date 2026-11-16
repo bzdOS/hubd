@@ -37,7 +37,7 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `report-sections.json` | The old name of `sections.json`. Deprecated. | you | yes |
 | `card-template.md` | A free-form card template. Deprecated: `hub doctor` says to fold it into `sections.json`. | you | yes |
 | `rules.json` | Which checks refuse instead of warn (`strict`), the wording and date of the rules behind `hub lint` and `hub audit` findings (`laws`), and the projects that are money bets (`money`). | you | yes |
-| `limits.json` | Size limits: a card's digest and section (`card.digestBytes`, `card.sectionBytes`), a queue's unread messages and bytes (`queue.msgs`, `queue.bytes`, `queue.exempt`). | you | yes |
+| `limits.json` | Size limits: a card's digest and section (`card.digestBytes`, `card.sectionBytes`), a queue's unread messages and bytes (`queue.msgs`, `queue.bytes`, `queue.exempt`), and the metric-only lanes that sum several role queues for one number (`queue.groups`, `{"<lane>": ["<role>", ...]}`; it changes no addressing). | you | yes |
 | `private-words` | Words `hubd commons` refuses to send to a public commons, besides the names it reads from the hub, one a line; `-<word>` lets a word through. | you | yes |
 | `owner-roles.json` | The roles a person answers in: their queues are buttons, and a next step they set is not replaced without `force`. | you | yes |
 | `sense.json` | The sensors' configuration, including what counts as private. | you | yes |

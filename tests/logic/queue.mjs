@@ -1246,4 +1246,43 @@ const AK = mktmp();
     'queue list: no role, or a count of 0, is refused');
 }
 
+// ── queue lanes: several role queues summed for one metric, never merged as addresses ──
+{
+  const G = mktmp();
+  const send = (role, text) => queueLib.queueSend(role, text, { from: 'head-g', root: G });
+  send('track', 'one'); send('track-dev', 'two'); send('track-dev', 'three'); send('other', 'four');
+  const plain = queueLib.queueSummaryForBrief({ root: G });
+  ok(plain.length === 3 && plain.every(r => r.lane === null) && queueLib.queueGroupRollup(plain).length === 0,
+    'queue lanes: no limits.json -> no lane on a row and an empty rollup');
+  fs.writeFileSync(path.join(G, 'limits.json'), JSON.stringify({ queue: { groups: {
+    track: ['track', 'track-dev', 'track-not-yet'], 'not-a-list': 'track', empty: [] } } }));
+  ok(JSON.stringify(queueLib.queueGroups(G)) === JSON.stringify({ track: ['track', 'track-dev', 'track-not-yet'] }),
+    `queue lanes: queue.groups read, a non-list and an empty lane dropped (got ${JSON.stringify(queueLib.queueGroups(G))})`);
+  const rows = queueLib.queueSummaryForBrief({ root: G });
+  const byRole = Object.fromEntries(rows.map(r => [r.role, r]));
+  ok(byRole.track.lane === 'track' && byRole['track-dev'].lane === 'track' && byRole.other.lane === null,
+    'queue lanes: each row names its lane, a role outside a lane names none');
+  const lanes = queueLib.queueGroupRollup(rows, { groups: queueLib.queueGroups(G) });
+  ok(lanes.length === 1 && lanes[0].lane === 'track' && lanes[0].pending === 3 && lanes[0].ageDays !== null &&
+    lanes[0].roles.join() === 'track,track-dev,track-not-yet' && lanes[0].present.join() === 'track,track-dev',
+    `queue lanes: the rollup sums pending and keeps the declared membership (got ${JSON.stringify(lanes)})`);
+  // Addresses are untouched: each role still has its own queue file, cursor and depth.
+  ok(fs.existsSync(path.join(G, 'queues', 'track.cedar.queue.md')) && fs.existsSync(path.join(G, 'queues', 'track-dev.cedar.queue.md')) &&
+    byRole.track.pending === 1 && byRole['track-dev'].pending === 2,
+    'queue lanes: the roles keep their own queues and depths — a lane is a metric, not a merge');
+  // A lane holding a broadcast member has no single depth, exactly like the broadcast role.
+  fs.writeFileSync(path.join(G, 'subscriber-roles.json'), '["news"]');
+  send('news', 'bulletin');
+  fs.writeFileSync(path.join(G, 'limits.json'), JSON.stringify({ queue: { groups: { mixed: ['track', 'news'] } } }));
+  const mixed = queueLib.queueGroupRollup(queueLib.queueSummaryForBrief({ root: G }),
+    { groups: queueLib.queueGroups(G), fanout: new Set(['news']) });
+  ok(mixed.length === 1 && mixed[0].lane === 'mixed' && mixed[0].pending === null && mixed[0].fanout === true && mixed[0].ageDays === null,
+    `queue lanes: a lane with a broadcast member reports no single depth (got ${JSON.stringify(mixed)})`);
+  // The CLI brief carries the lane line and the MCP brief the queueLanes array.
+  const env = { HUBD_DIR: G, HUBD_TEAM_DIR: G };
+  const br = cli(['brief'], { env, cwd: G });
+  ok(br.code === 0 && /lane mixed: no single depth \(broadcast member\) across 2 role\(s\)/.test(br.stdout),
+    `queue lanes: hub brief prints the lane line (${br.stdout.split('\n').filter(l => /lane /.test(l)).join(' | ')})`);
+}
+
 done();

@@ -428,7 +428,7 @@ const TOOLS = [
 const OUTPUT_PLANS = {
   // buttonItems last on purpose: the plan cuts in the order listed, and a pending owner decision
   // is the least compressible thing in this answer (same reasoning as tasksOpen, one step further).
-  hub_brief:      [['journalRecent', 30], ['queues', 40], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40], ['buttonItems', 20]],
+  hub_brief:      [['journalRecent', 30], ['queues', 40], ['queueLanes', 20], ['staleCards', 20], ['staleDigests', 20], ['activeClaims', 20], ['tasksOpen', 40], ['buttonItems', 20]],
   hub_status:     [['recentJournal', 10], ['projects', 60]],
   // `card` is a STRING, cut by characters (capOutput handles both). Listed FIRST because an
   // over-long card is exactly what makes this answer unreadable, and the journal and claims beside

@@ -260,6 +260,12 @@ function formatBrief(data, hours) {
     }
     const ghosts = data.queues.filter(q => q.neverRead && q.pending > 0).length;
     if (ghosts) lines.push(`  (${ghosts} never-consumed role(s) — hub queue gc to see/archive them)`);
+    // A lane sums the depths of roles that serve one track (limits.json queue.groups): the number
+    // the per-role rows above split by tree. It changes no addressing — the rows stay per role.
+    for (const g of (data.queueLanes || [])) {
+      const depth = g.pending == null ? 'no single depth (broadcast member)' : `${g.pending} queued`;
+      lines.push(`  lane ${g.lane}: ${depth} across ${g.roles.length} role(s)${g.oldestWaiting ? ` (oldest ${g.oldestWaiting})` : ''}`);
+    }
   }
   if (data.buttons && data.buttons.count > 0) {
     lines.push(`BUTTONS: ${data.buttons.count} waiting (oldest ${data.buttons.oldestDays}d) — ${data.buttons.items.map(b => b.role).join(', ')}`);

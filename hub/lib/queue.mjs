@@ -213,6 +213,42 @@ export function subscriberRoles(root) {
   } catch { return []; }
 }
 
+/* ── One lane, several role queues: a metric rollup, never a merge ──
+ *
+ * A track that runs more than one tree names a role for each (the track, its dev tree, its ux
+ * tree, ...), so a per-role queue depth reads as five shallow queues where the reader wants one
+ * lane's backlog. Merging the ROLES is not the answer: a queue is an address, and a dispatch
+ * merged into one lane would land in another tree. The grouping is therefore a metric only,
+ * declared in <queue-root>/limits.json:
+ *
+ *   {"queue": {"groups": {"<lane>": ["<role>", ...]}}}
+ *
+ * Each member keeps its own queue file, cursor and dispatch. queueSummaryForBrief names the lane
+ * on the row, and queueGroupRollup() sums the rows for whoever reads the brief.
+ * NOT subscriber-roles.json: that file makes a role a BROADCAST, one cursor per reader, and a
+ * broadcast role's depth is reported as null — a role put there to be "consolidated" would lose
+ * the very number it was meant to consolidate. */
+export function queueGroups(root) {
+  let q = {};
+  try { q = JSON.parse(fs.readFileSync(path.join(root ?? HUB, 'limits.json'), 'utf8')).queue || {}; } catch {}
+  const g = q && q.groups && typeof q.groups === 'object' && !Array.isArray(q.groups) ? q.groups : {};
+  const out = {};
+  for (const [lane, members] of Object.entries(g)) {
+    if (!Array.isArray(members)) continue;
+    const clean = members.filter(m => typeof m === 'string' && m);
+    if (clean.length) out[lane] = clean;
+  }
+  return out;
+}
+
+/** role → lane, the first lane that names a role wins. */
+export function laneByRole(root) {
+  const out = new Map();
+  for (const [lane, members] of Object.entries(queueGroups(root)))
+    for (const m of members) if (!out.has(m)) out.set(m, lane);
+  return out;
+}
+
 /* ONE node identity for the whole hub. This used to read the hostname directly while the journal
  * and the task log went through JOURNAL_NODE (which honours HUBD_NODE) — so on a host whose
  * identity had to be normalised by that variable, journal.<node>.jsonl said one thing and
@@ -1437,6 +1473,7 @@ export function queueSummaryForBrief({ root } = {}) {
   try { presence = loadPresence(); } catch {}
   const owners = new Set(ownerRoles());
   const fanoutRoles = new Set(subscriberRoles(r));
+  const laneOf = laneByRole(r);
 
   // Which roles were ever consumed at all — the difference between "N waiting for someone who
   // is away" and "N waiting for someone who has never existed". Both used to print identically.
@@ -1451,9 +1488,41 @@ export function queueSummaryForBrief({ root } = {}) {
     const { pending, oldestWaiting } = fanout ? { pending: null, oldestWaiting: null } : peekQueueDepth(role, { root: r });
     const forRole = presence.filter(p => p.role === role).sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
     const ageDays = oldestWaiting ? Math.floor((Date.now() - parseTs(oldestWaiting).getTime()) / 86400000) : null;
-    return { role, fanout, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null,
+    return { role, lane: laneOf.get(role) ?? null, fanout, pending, oldestWaiting, lastSeen: forRole[0] ? forRole[0].last_seen : null,
       isButton: owners.has(role), ageDays, neverRead: !everRead.has(role) && !owners.has(role) };
   }).filter(s => s.pending > 0 || s.lastSeen);
+}
+
+/**
+ * Sum the per-role rows of queueSummaryForBrief by lane (limits.json queue.groups). A lane is a
+ * metric, not an address: the rows keep their roles and this only adds the number a reader of one
+ * track wants. A lane that holds a broadcast member has no single depth (pending null), for the
+ * same reason a broadcast role has none — a sum of per-reader cursors would be a phantom backlog.
+ * `roles` is the declared membership when `groups` is given, so a member with no queue yet is
+ * still named; `present` is the members that actually have a queue row. `fanout` names the
+ * broadcast roles (subscriberRoles): a lane that declares one has no single depth even when that
+ * role's own row was dropped for having no presence.
+ */
+export function queueGroupRollup(rows, { groups = null, fanout = null } = {}) {
+  const by = new Map();
+  for (const r of rows || []) {
+    if (!r || !r.lane) continue;
+    let g = by.get(r.lane);
+    if (!g) by.set(r.lane, g = { lane: r.lane, roles: [], present: [], pending: 0, fanout: false, oldestWaiting: null,
+      lastSeen: null, ageDays: null, neverRead: true });
+    g.present.push(r.role);
+    if (r.fanout || r.pending == null) g.fanout = true; else g.pending += r.pending;
+    if (r.oldestWaiting && (!g.oldestWaiting || r.oldestWaiting < g.oldestWaiting)) g.oldestWaiting = r.oldestWaiting;
+    if (r.lastSeen && (!g.lastSeen || r.lastSeen > g.lastSeen)) g.lastSeen = r.lastSeen;
+    if (r.neverRead === false) g.neverRead = false;
+  }
+  for (const g of by.values()) {
+    g.roles = (groups && Array.isArray(groups[g.lane])) ? groups[g.lane].slice() : g.present.slice();
+    if (fanout && g.roles.some(x => fanout.has(x))) g.fanout = true;
+    if (g.fanout) { g.pending = null; g.oldestWaiting = null; g.ageDays = null; }
+    else g.ageDays = g.oldestWaiting ? Math.floor((Date.now() - parseTs(g.oldestWaiting).getTime()) / 86400000) : null;
+  }
+  return [...by.values()].sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : 0));
 }
 
 /* ── Queue lifecycle ──
@@ -2186,7 +2255,7 @@ export function briefWithQueues({ root, ...a } = {}) {
   // stale-button check needs the rows.
   const b = runBrief({ ...a, queues });
   return {
-    ...b, queues, buttons: buttonsSummary(queues),
+    ...b, queues, queueLanes: queueGroupRollup(queues, { groups: queueGroups(r), fanout: new Set(subscriberRoles(r)) }), buttons: buttonsSummary(queues),
     // Queue DEPTH says how much is pending; it cannot say whether replication is converging, and a
     // quiet queue reads exactly like a stopped transport. Both transports leave an observable
     // artefact, so both ages are reported — see transportHealth() and docs/interop.md -> Transport.
