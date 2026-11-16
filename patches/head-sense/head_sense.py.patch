@@ -1,18 +1,23 @@
 --- a/head_sense.py
 +++ b/head_sense.py
-@@ -578,6 +578,9 @@
-             sh(["git", "fetch", "-q", _r,
-                 f"+refs/heads/{branch}:refs/wrk/{branch}"], cwd=rv, timeout=300)
+@@ -578,5 +578,5 @@
+-            sh(["git", "fetch", "-q", _r,
++            frc = sh(["git", "fetch", "-q", _r,
+-                f"+refs/heads/{branch}:refs/wrk/{branch}"], cwd=rv, timeout=300)
++                f"+refs/heads/{branch}:refs/wrk/{branch}"], cwd=rv, timeout=300)[0]
              rc, sha, _ = sh(["git", "rev-parse", "--verify", "-q", f"refs/wrk/{branch}"], cwd=rv)
-+            if rc != 0:
-+                # branch deleted in worker repo - do not judge stale ref
-+                return False, f"branch {branch} deleted in worker repo (refs/wrk stale)"
-             if rc == 0:
+-            if rc == 0:
++            if frc == 0 and rc == 0:
                  b = f"refs/wrk/{branch}"
-                 # BASE OF THE SAME REPO, NOT THE HEAD'S. Otherwise a WLTunnel branch
-@@ -1107,6 +1110,15 @@
-     ok, txt = check(conf, branch)
-     rv = conf["review"]
+@@ -589,2 +589,7 @@
+                 break
++        if b == f"origin/{branch}":
++            _rc_w, _sha_w, _ = sh(["git", "rev-parse", "--verify", "-q", f"refs/wrk/{branch}"], cwd=rv)
++            if _rc_w == 0:
++                sh(["git", "update-ref", "-d", f"refs/wrk/{branch}"], cwd=rv)
++                return False, f"branch {branch} deleted in worker repo (stale refs/wrk -> {_sha_w.strip()[:10]}) - stale tip not judged"
+     if rc != 0:
+@@ -1109,4 +1109,16 @@
      rc, sha, _ = sh(["git", "rev-parse", "--verify", "-q", f"origin/{branch}"], cwd=rv or ".")
 +    if rc != 0:
 +        for _r in (conf.get("repos") or []):
@@ -25,4 +30,7 @@
 +                break
      sha = sha.strip()
      if not sha:
++        _sv = load_state(head)
++        _sv.setdefault("verdicts", {})[branch] = {"v": v, "error": txt[:200], "ts": int(time.time())}
++        save_state(head, _sv)
          print(txt); return 1
