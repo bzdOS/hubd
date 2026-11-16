@@ -1,0 +1,28 @@
+--- a/head_sense.py
++++ b/head_sense.py
+@@ -578,6 +578,9 @@
+             sh(["git", "fetch", "-q", _r,
+                 f"+refs/heads/{branch}:refs/wrk/{branch}"], cwd=rv, timeout=300)
+             rc, sha, _ = sh(["git", "rev-parse", "--verify", "-q", f"refs/wrk/{branch}"], cwd=rv)
++            if rc != 0:
++                # branch deleted in worker repo - do not judge stale ref
++                return False, f"branch {branch} deleted in worker repo (refs/wrk stale)"
+             if rc == 0:
+                 b = f"refs/wrk/{branch}"
+                 # BASE OF THE SAME REPO, NOT THE HEAD'S. Otherwise a WLTunnel branch
+@@ -1107,6 +1110,15 @@
+     ok, txt = check(conf, branch)
+     rv = conf["review"]
+     rc, sha, _ = sh(["git", "rev-parse", "--verify", "-q", f"origin/{branch}"], cwd=rv or ".")
++    if rc != 0:
++        for _r in (conf.get("repos") or []):
++            if not _r or _r == conf.get("repo"):
++                continue
++            sh(["git", "fetch", "-q", _r,
++                f"+refs/heads/{branch}:refs/wrk/{branch}"], cwd=rv, timeout=300)
++            rc, sha, _ = sh(["git", "rev-parse", "--verify", "-q", f"refs/wrk/{branch}"], cwd=rv)
++            if rc == 0:
++                break
+     sha = sha.strip()
+     if not sha:
+         print(txt); return 1
