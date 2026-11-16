@@ -307,6 +307,8 @@ Update a task: close it (status=done), reassign, reprioritise, edit text/deadlin
 | `importance` | one of `high`, `med`, `normal` |  |  |
 | `text` | string |  |  |
 | `deadline` | string |  | YYYY-MM-DD, or +Nd for N days from today (UTC) |
+| `created` | string |  | YYYY-MM-DD HH:MM (UTC) stamp for the task creation time |
+| `project` | string |  | move the task to another project (canonical slug) |
 | `cat` | string |  | technical \| communicative \| decision \| chore — anything else is kept as a tag instead |
 | `tags` | string[] |  | free-form labels; replaces the task's tag list |
 | `assignee` | string |  |  |

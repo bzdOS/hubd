@@ -167,6 +167,8 @@ const TOOLS = [
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' }, status: { type: 'string', enum: ['open', 'done'] },
       importance: { type: 'string', enum: ['high', 'med', 'normal'] },
       text: { type: 'string' }, deadline: { type: 'string', description: 'YYYY-MM-DD, or +Nd for N days from today (UTC)' },
+      created: { type: 'string', description: 'YYYY-MM-DD HH:MM (UTC) stamp for the task creation time' },
+      project: { type: 'string', description: 'move the task to another project (canonical slug)' },
       cat: { type: 'string', description: 'technical | communicative | decision | chore — anything else is kept as a tag instead' },
       tags: { type: 'array', items: { type: 'string' }, description: 'free-form labels; replaces the task\'s tag list' },
       assignee: { type: 'string' }, by: { type: 'string' },

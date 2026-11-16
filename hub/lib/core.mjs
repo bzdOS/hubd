@@ -4507,7 +4507,8 @@ export function runTaskUpdate(a) {
     // `importance` belongs here too: hub_task_add accepts it, so a task could be
     // given a priority at creation and never change it again, while `deadline` right
     // next to it was editable. Passing it to update returned ok and silently did nothing.
-    for (const k of ['status', 'importance', 'text', 'deadline', 'assignee']) if (a[k] != null) patch[k] = a[k];
+    for (const k of ['status', 'importance', 'text', 'deadline', 'assignee', 'created']) if (a[k] != null) patch[k] = a[k];
+    if (a.project != null) patch.project = canonProject(a.project);
     if (patch.deadline) patch.deadline = resolveDeadline(patch.deadline);
     // cat and tags move together: an off-enum cat becomes a tag (see normalizeCat), so
     // editing either one has to recompute both from the task's current pair.
