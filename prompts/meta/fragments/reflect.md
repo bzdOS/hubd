@@ -7,10 +7,13 @@ After the report's own lines, one line that is exactly the word `REFLECT`, then 
 ```
 REFLECT
 goal: <what the turn was meant to deliver>
+task: <task id you worked on, when reporting a lesson for it>
 result: done|partial|no
 obstacle: <class> — <fact with a measurement>
 instead: <what you would do differently>
 rule: <one rule for the prompt, or "none">
+learned: <one line: what this turn taught about the task, when task is set>
+result_ref: <artifact name and check command, or "not measured", when task is set>
 ```
 
 - `obstacle`: the class strictly from the list `permissions | path | unclear-dispatch | environment | model | none`,
@@ -29,6 +32,7 @@ rule: <one rule for the prompt, or "none">
 - A rule said 3 times by one role, or by 2 roles, within 7 days is a candidate for the project's laws, and the
   head accepts or rejects it. The laws accepted are `hub reflect --laws --project {{project}}` (hub_context returns
   them as `laws`): work by them as by the rules here. A law is not a turn's rule; the rule is what the laws lack.
+- When the turn worked on a task, add `task:` and `learned:` (one line, what you learned about the task, not the process). Add `result_ref:` with the artifact name and the command that checks it, or "not measured".
 - The values are in the language of the dispatch; the keys, the result and the class stay as written above. The head
   matches rules by their words, and one rule in two languages counts as two.
 <!-- wish: the values in the dispatch's language; no check -->

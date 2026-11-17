@@ -23,8 +23,8 @@ export const VERDICTS = ['accepted', 'rejected', 'needs-owner'];
  * apart from the rules. */
 export const EXAMPLE_RULE = "keep build recipes only inside the role's allowed paths";
 const MARK = { turn: 'REFLECT', head: 'HEAD-REFLECT', fleet: 'FLEET-REFLECT' };
-const FIELDS = ['level', 'goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule', 'decisions'];
-const TEXT_KEYS = new Set(['goal', 'result', 'obstacle', 'instead', 'rule', 'decision']);
+const FIELDS = ['level', 'goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule', 'decisions', 'task', 'learned', 'result_ref'];
+const TEXT_KEYS = new Set(['goal', 'result', 'obstacle', 'instead', 'rule', 'decision', 'task', 'learned', 'result_ref']);
 
 /* A role's reflection ends its turn's one report (prompts/meta/fragments/reflect.md): a line that
  * is exactly REFLECT, then five `key: value` lines; the journal joins a report's lines with " · ".
@@ -96,10 +96,12 @@ export function checkReflect(r) {
   if (unknown.length) throw new Error(`reflect: unknown field ${unknown.join(', ')}; the fields are ${FIELDS.join(', ')}`);
   const level = oneOf('level', r.level ?? 'turn', LEVELS);
   const out = { level };
-  for (const k of ['goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule']) out[k] = str(r, k);
+  for (const k of ['goal', 'result', 'obstacle', 'obstacle_fact', 'instead', 'rule', 'task', 'learned', 'result_ref']) out[k] = str(r, k);
   for (const k of ['goal', 'instead', 'rule'])
     if (!out[k]) throw new Error(`reflect: ${k} is required${k === 'rule' ? ' ("none" when the turn taught none)' : ''}`);
   if (isExampleRule(out.rule)) throw new Error(`reflect: rule holds the example's rule ("${EXAMPLE_RULE}"), not this turn's; write what this turn taught, or "none"`);
+  if (out.learned && out.learned.length > 600) throw new Error(`reflect: learned is ${out.learned.length} chars, 600 at most`);
+  if (out.result_ref && out.result_ref.length > 200) throw new Error(`reflect: result_ref is ${out.result_ref.length} chars, 200 at most`);
   oneOf('result', out.result || null, RESULTS);
   oneOf('obstacle', out.obstacle || null, OBSTACLES);
   if (out.obstacle === 'none' && out.obstacle_fact) throw new Error('reflect: obstacle "none" takes no obstacle_fact');
@@ -108,6 +110,7 @@ export function checkReflect(r) {
   const shape = shapeProblems(out);
   if (shape.length) throw new Error('reflect: ' + shape[0]);
   if (!out.obstacle_fact) delete out.obstacle_fact;
+  for (const k of ['task','learned','result_ref']) if (!out[k]) delete out[k];
   if (r.decisions != null) {
     if (level === 'turn') throw new Error('reflect: decisions belong to a head or fleet reflection (level "head" or "fleet"), not to a turn');
     if (!Array.isArray(r.decisions)) throw new Error('reflect: decisions is a list of {rule, verdict, reason}');
@@ -129,10 +132,13 @@ export function renderReflect(r) {
   return [
     MARK[r.level || 'turn'],
     `goal: ${r.goal}`,
+    ...(r.task ? [`task: ${r.task}`] : []),
     `result: ${r.result}`,
     `obstacle: ${r.obstacle}${r.obstacle_fact ? ' — ' + r.obstacle_fact : ''}`,
     `instead: ${r.instead}`,
     `rule: ${r.rule}`,
+    ...(r.learned ? [`learned: ${r.learned}`] : []),
+    ...(r.result_ref ? [`result_ref: ${r.result_ref}`] : []),
     ...(r.decisions || []).map(d => `decision: ${d.verdict}${d.reason ? ' (' + d.reason + ')' : ''} — ${d.rule}`),
   ].join('\n');
 }
@@ -181,8 +187,8 @@ export function readReflect(text) {
     problems.push(`obstacle class ${JSON.stringify(cls || ob.slice(0, 40))} is not one of ${OBSTACLES.join(' | ')}`);
   }
   // The field's own order (checkReflect), so the two forms of one reflection compare equal.
-  const r = { level, goal: raw.goal || '', result: RESULTS.includes(res) ? res : null, obstacle: OBSTACLES.includes(cls) ? cls : null,
-    ...(fact ? { obstacle_fact: fact } : {}), instead: raw.instead || '', rule: raw.rule || '' };
+  const r = { level, goal: raw.goal || '', ...(raw.task ? {task: raw.task} : {}), result: RESULTS.includes(res) ? res : null, obstacle: OBSTACLES.includes(cls) ? cls : null,
+    ...(fact ? { obstacle_fact: fact } : {}), instead: raw.instead || '', rule: raw.rule || '', ...(raw.learned ? {learned: raw.learned} : {}), ...(raw.result_ref ? {result_ref: raw.result_ref} : {}) };
   problems.push(...shapeProblems(r));
   if (isWaitingTurn(body)) problems.push('a turn that only waits for a dispatch takes no reflection; the waiting line alone is its report');
   if (said.length) {

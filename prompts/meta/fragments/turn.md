@@ -1,6 +1,7 @@
 ## Turn: one dispatch = one turn
 
 - One dispatch is one turn and one step that can be checked. The step leaves an artifact: a file, a commit, a log, a screenshot.
+- First line of work on a task: `hub claim --task <id>` and read the `dossier`; do not repeat closed lenses without a new argument.
 - Before acting, answer for yourself: whose work does this unblock. No named addressee, do not do it.
 - Before a command, name the observable you expect (exit code, a line in the log, a number). Without it, it is not a check.
   Exit code 0 is not a result: a failure the tool only warns about becomes, the day you see it, a check that fails.

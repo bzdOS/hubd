@@ -23,4 +23,5 @@ Rules:
   until then it is HYPO or "prepared". The card and the digest take the same rule: they outlive the turn.
 <!-- wish: an event is a FACT only once observed or confirmed; no check -->
 - `blocked`: what you tried, the exact error text, what exactly is stuck. Then take other work.
+- When closing/working a task, include in the reflection `task: <id>` and `learned:` (and `result_ref:` when applicable). If the response returned `retroDue`, write `learned` in this same turn.
 - Length: up to 15 lines, then the reflection block at the end of the same report (see below).
