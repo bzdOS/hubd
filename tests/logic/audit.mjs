@@ -33,7 +33,8 @@ fs.appendFileSync(path.join(RL, `tasks.${core.JOURNAL_NODE}.events.jsonl`),
 const lintBtn = core.runLint({}).findings.filter(f => f.id === 'button-without-prep');
 ok(lintBtn.length === 1 && String(lintBtn[0].task) === String(humanTask.id),
   `lint: a human-owned communicative task with no prep is flagged (got ${lintBtn.length})`);
-core.runTaskUpdate({ id: humanTask.id, depends_on: [1], by: 'dev-t' });
+const prepTask = core.runTaskAdd({ project: 'shop', text: 'prep: agent packages it', by: 'dev-t' }).task;
+core.runTaskUpdate({ id: humanTask.id, depends_on: [prepTask.id], by: 'dev-t' });
 ok(!core.runLint({}).findings.some(f => f.id === 'button-without-prep'),
   'lint: giving it a prep it depends on clears the finding');
 

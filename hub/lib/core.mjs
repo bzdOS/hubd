@@ -3977,27 +3977,80 @@ export function resolveDeadline(v, nowMs = Date.now()) {
   return m ? new Date(nowMs + Number(m[1]) * 86400000).toISOString().slice(0, 10) : v;
 }
 
+
+
+function dependsOnGuard(db, taskId, deps) {
+  const list = Array.isArray(deps) ? deps.map(x => String(x)) : [];
+  if (!list.length) return { warnings: [] };
+  const byId = new Map(db.tasks.map(t => [String(t.id), t]));
+  const warnings = [];
+  const strictCfg = (rulesConfig().strict && rulesConfig().strict.taskGraphGuards);
+  const warnOnly = strictCfg === false; // explicit strict:false -> warning instead of refusal
+  const fail = (msg) => {
+    if (warnOnly) { warnings.push(msg); return; }
+    throw new Error(msg);
+  };
+  for (const d of list) {
+    if (!byId.has(String(d))) {
+      fail(`depends_on: unknown task "${d}" (task ${taskId || '(new)'} cannot depend on a task that does not exist)`);
+    }
+  }
+  if (warnings.length) return { warnings };
+
+  const graph = new Map();
+  for (const t of db.tasks) {
+    const ds = Array.isArray(t.depends_on) ? t.depends_on.map(x => String(x)) : [];
+    if (String(t.id) === String(taskId)) graph.set(String(t.id), list.slice());
+    else graph.set(String(t.id), ds);
+  }
+  if (!graph.has(String(taskId))) graph.set(String(taskId), list.slice());
+
+  const seen = new Set(), stack = new Set(), pathArr = [];
+  function dfs(n) {
+    if (stack.has(n)) return pathArr.slice(pathArr.indexOf(n)).concat(n);
+    if (seen.has(n)) return null;
+    seen.add(n); stack.add(n); pathArr.push(n);
+    for (const nxt of (graph.get(n) || [])) {
+      const c = dfs(String(nxt));
+      if (c) return c;
+    }
+    stack.delete(n); pathArr.pop();
+    return null;
+  }
+  for (const n of graph.keys()) {
+    const c = dfs(n);
+    if (c && c.map(String).includes(String(taskId))) { fail(`depends_on: cycle ${c.join(' -> ')}`); break; }
+  }
+  return { warnings };
+}
+
+
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
   requireTaskText(a.text);
   assertProse(a.text, 'task text');
   return withLock(TASK_EVENTS, () => {
+    const db = loadTasks();
     const id = `${TASK_ID_PREFIX}-${nextLocalSeq()}`;
     const norm = normalizeCat(a.cat, a.tags);
+    const deps = Array.isArray(a.depends_on) ? a.depends_on : [];
+    const guard = dependsOnGuard(db, id, deps);
     const t = {
       // New work lands on the canonical slug, so an alias never grows a fresh backlog of its own.
       id, project: canonProject(a.project), text: a.text,
       importance: a.importance || 'normal', deadline: resolveDeadline(a.deadline),
       cat: norm.cat, tags: norm.tags, assignee: a.assignee || null, status: 'open',
       created: now(), by: author,
-      depends_on: Array.isArray(a.depends_on) ? a.depends_on : [],
+      depends_on: deps,
       resources: Array.isArray(a.resources) ? a.resources.map(slugify) : [],
     };
     fs.appendFileSync(TASK_EVENTS, JSON.stringify({ ts: now(), node: JOURNAL_NODE, ev: 'add', id, t }) + '\n');
     shareMode(TASK_EVENTS);
     rebuildTaskCache();
     journalAppend({ ts: now(), project: t.project, agent: t.by, kind: 'task', text: '+ task #' + id + ': ' + t.text });
-    return { ok: true, task: t };
+    const out = { ok: true, task: t };
+    if (guard && guard.warnings && guard.warnings.length) out.warnings = guard.warnings;
+    return out;
   });
 }
 
@@ -4271,6 +4324,8 @@ export function runTaskUpdate(a) {
     }
     if (Array.isArray(a.depends_on)) patch.depends_on = a.depends_on;
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
+    let depGuard = { warnings: [] };
+    if (Array.isArray(a.depends_on)) depGuard = dependsOnGuard(db, t.id, a.depends_on);
     /* Closing a closed task is a no-op, not a second closing. `DONE:` in a report closes
      * ids without asking, and two agents finishing the same handoff both report it (task
      * #189 was closed twice, 34 minutes apart, by two sessions) — which used to append a
@@ -4283,7 +4338,7 @@ export function runTaskUpdate(a) {
     if (reclose && !Object.keys(patch).length) {
       journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
         text: '= task #' + t.id + ' already closed' + (t.done ? ' ' + t.done : '') + ' — no-op' });
-      return { ok: true, noop: 'already-done', closedAt: t.done || null, task: t };
+      return { ok: true, noop: 'already-done', closedAt: t.done || null, task: t, ...(depGuard.warnings && depGuard.warnings.length ? { warnings: depGuard.warnings } : {}) };
     }
     // Key the set to the task's ORIGIN (node,id) — NOT this writer's node + finalId — so the
     // unchanged reducer resolves it to the canonical task even when THIS node historically
@@ -4349,7 +4404,7 @@ export function runTaskUpdate(a) {
     const resourceHint = a.status === 'done' ? staleResourceHint(t) : null;
     const task = { ...t, ...patch };
     if (patch.status && patch.status !== 'done') delete task.done;   // as the fold does
-    return { ok: true, task, ...(resourceHint ? { resourceHint } : {}) };
+    return { ok: true, task, ...(resourceHint ? { resourceHint } : {}), ...(depGuard.warnings && depGuard.warnings.length ? { warnings: depGuard.warnings } : {}) };
   });
   /* A closed task holds nothing. `hub claim --task` marks a task started, and closing it used to
    * leave that mark live until its TTL ran out: the role's work queue still showed the task as
