@@ -126,6 +126,7 @@ declareFlags(
   '--harness', '--scope', '--hub', '--print', '--prompt', '--verify', '--uninstall',
   '--opencode', '--rows', '--node', '--db', '--dry', '--group', '--pending',
   '-o', '--lens', '--tried', '--result', '--next', '--covered', '--builds-on', '--artifact', '--of', '--verdict', '--commitment',
+  '--for', '--only-tags', '--skip-tags', '--exclusive',
 );
 
 function getFlag(name) {
@@ -954,17 +955,19 @@ command('claim', () => args[1] === 'check', () => {
 command('claim', () => args.includes('--task'), () => {
   // Starting a task from a role's work queue: the claim is on task:<id>, the project is the task's.
   const task = getFlag('--task');
-  if (typeof task !== 'string') die('Usage: hub claim --task <id> [-t min] [--note "<why>"] --agent <you>');
+  if (typeof task !== 'string') die('Usage: hub claim --task <id> [-t min] [--note "<why>"] [--exclusive] --agent <you>');
   const ttl = parseInt(getFlag('-t') || '240');
   const note = getFlag('--note');
-  const res = runClaim({ task, agent: authorOrDie('--agent'), ttlMin: ttl, note: typeof note === 'string' ? note : undefined });
+  const res = runClaim({ task, agent: authorOrDie('--agent'), ttlMin: ttl, note: typeof note === 'string' ? note : undefined,
+    exclusive: args.includes('--exclusive') });
+  if (res.refused) die(res.error);
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Started #${task}: ${res.claim.id} (until ${new Date(parseTs(res.claim.since).getTime() + ttl * 60000).toISOString().slice(0, 16).replace('T', ' ')})`);
   done(0);
 });
 
 command('claim', () => {
-  const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>   |   hub claim --task <id> --agent <you>   |   hub claim check <path> [-p <proj>]';
+  const CU = 'Usage: hub claim <proj> <area> [-t min] [--note "<why>"] [--exclusive] --agent <you>   |   hub claim --task <id> [--exclusive] --agent <you>   |   hub claim check <path> [-p <proj>]';
   let pos;
   try { pos = positionals(1, { values: ['-t', '--agent', '--note'] }); } catch (e) { die(e.message + '\n' + CU); }
   const [proj, area] = pos;
@@ -973,7 +976,9 @@ command('claim', () => {
   const ttl = parseInt(getFlag('-t') || '240');
   const agent = authorOrDie('--agent');
   const note = getFlag('--note');
-  const res = runClaim({ project: proj, area, agent, ttlMin: ttl, note: typeof note === 'string' ? note : undefined });
+  const res = runClaim({ project: proj, area, agent, ttlMin: ttl, note: typeof note === 'string' ? note : undefined,
+    exclusive: args.includes('--exclusive') });
+  if (res.refused) die(res.error);
   if (res.warning) console.warn('⚠  ' + res.warning);
   console.log(`Lock: ${res.claim.id}` + (res.matchable ? '' : '  (prose area — `hub claim check` cannot match files against it; a glob would)'));
   done(0);
@@ -1455,14 +1460,28 @@ command('section', () => {
 });
 
 command(['now', 'whatnext'], () => {
+  const NU = 'Usage: hub now [project] [--assignee <who>]   |   hub now [project] --for <role> [--only-tags a,b] [--skip-tags a,b] [--json]';
   const proj = args[1] && !args[1].startsWith('-') ? args[1] : (getFlag('-p') || null);
-  const r = runNext({ project: proj || undefined, assignee: getFlag('--assignee') || undefined });
+  const role = getFlag('--for'), assignee = getFlag('--assignee');
+  const onlyTags = getFlags('--only-tags'), skipTags = getFlags('--skip-tags');
+  if (role === true || assignee === true) die(NU);
+  if (!role && (onlyTags.length || skipTags.length)) die('--only-tags and --skip-tags filter what a role is handed: pass --for <role>\n' + NU);
+  if (role && assignee) die('--for <role> already takes the role\'s own tasks first; pass one of --for and --assignee\n' + NU);
+  let r;
+  try { r = runNext({ project: proj || undefined, assignee: assignee || undefined, ...(role ? { for: role, onlyTags, skipTags } : {}) }); }
+  catch (e) { die(e.message); }
+  if (args.includes('--json')) { console.log(JSON.stringify(r, null, 2)); done(0); }
   if (!r.task) { console.log('nothing to do: ' + r.why); done(0); }
   const t = r.task;
   console.log(`#${t.id} [${t.project}]${t.deadline ? ' \u23f0' + t.deadline : ''}${t.assignee ? ' @' + t.assignee : ''}`);
   console.log(t.text);
   console.log(`\nwhy: ${r.why}`);
-  console.log(`(${r.eligible} ready, ${r.blockedCount} blocked` + (r.runnerUp ? `; next after it: #${r.runnerUp.id}` : '') + ')');
+  if (role) {
+    const k = r.skipped, passed = [[k.assigned, 'assigned to others'], [k.claimed, 'claimed by others'], [k.tags, 'off the tags'], [k.owner, "the owner's"]]
+      .filter(([n]) => n).map(([n, w]) => `${n} ${w}`);
+    console.log(`(${r.eligible} of ${r.ready} ready for ${role}, ${r.blockedCount} blocked` + (passed.length ? `; passed over: ${passed.join(', ')}` : '') +
+      (r.runnerUp ? `; next after it: #${r.runnerUp.id}` : '') + ')');
+  } else console.log(`(${r.eligible} ready, ${r.blockedCount} blocked` + (r.runnerUp ? `; next after it: #${r.runnerUp.id}` : '') + ')');
   done(0);
 });
 
@@ -2382,6 +2401,7 @@ const HELP = [
   ['brief [-h <hours>]', 'morning brief'],
   ['inbox [--hours <N>]', 'what needs a decision now (blocked/overdue/unassigned/stale locks)'],
   ['now [project] [--assignee <who>]', 'the one next thing to do'],
+  ['now [project] --for <role> [--only-tags a,b] [--skip-tags a,b] [--json]', 'the first ready task this role may take: its own, else an unassigned one no one has started'],
   ['agenda [project]', 'the day, split by who can act'],
   ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
@@ -2424,7 +2444,7 @@ const HELP = [
   ['harvest', 'print the Harvest Protocol prompt (also served as an MCP prompt)'],
   ['prompts render <template> [--vars <json|file>] [--out <file> | --check <file>]', "a role's rules from prompts/meta; --check: exit 1 if the file differs"],
   ['claim <proj> <area> [-t min] [--note "<why>"] --agent <you>', 'soft lock'],
-  ['claim --task <id> [-t min] --agent <you>', 'start a task: a claim on it while you work'],
+  ['claim --task <id> [-t min] [--exclusive] --agent <you>', 'start a task: a claim on it while you work; --exclusive refuses (exit 1) if another agent holds it'],
   ['claim check <path> [-p <proj>] [--agent <you>]', 'who holds a claim over this path'],
   ['release <id> | release --task <id> --agent <you>', 'release a lock'],
   ['heartbeat <agent> [--role r] [--status s] [--task id] [--cwd path] [--ttl min]', 'record liveness'],

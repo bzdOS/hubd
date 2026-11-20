@@ -4,6 +4,39 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.81 — 2026-11-20
+
+- **`hub now --for <role>`: the first ready task this role may take.** A worker with
+  nothing of its own asked `hub now <project>`, looked at the one top task and gave up when
+  it was assigned to someone else, while unassigned work sat further down the same list:
+  three workers on one project said "no ready task" over and over, with a third of the ready
+  tasks assigned to nobody. With `--for` the command walks the same urgency order and hands
+  out the role's own task first, else a task with no assignee that no other agent has started
+  (a live claim on `task:<id>`). The owner's tasks and tasks assigned to another role are
+  never handed out. `--only-tags a,b` takes only free work carrying one of the tags; a task
+  assigned to the role is not narrowed by it. `--skip-tags a,b` is a ban: a task carrying any
+  of the tags is never handed out, the role's own included, so an epic or a held task that
+  landed on a worker is not picked up, and `why` names it (`assigned to dev-api; skipped own:
+  oak-9 (epic)`) so the mistake is seen. `why` says why the task was picked, or where the ready
+  tasks went when none was; `--json` prints `{task, why, eligible, ready, skipped: {assigned,
+  claimed, tags, owner}, skippedOwn}`.
+  Without `--for` the answer is the one it was. Over MCP: `hub_next` with `for`,
+  `onlyTags`, `skipTags`. The choice itself is a pure function (`pickForRole`: ready tasks,
+  live claims, owner roles and dates in, the task out), checked against a table of cases.
+- **`hub claim --task <id> --exclusive` refuses a task another agent holds.** Without it a
+  second claim on the same task is written with a warning, so two workers that picked the same
+  task both started it. With it the claim is checked under the claims lock: if another agent
+  holds a live claim on the area, the command exits 1 and nothing is written. Two workers that
+  ask `hub now --for` at the same moment get the same task, one of them holds it, and the
+  other gets the next one on its next round. Works for an area claim too, and over MCP
+  (`hub_claim` with `exclusive`: `{ok: false, refused: true, holder}`).
+- **The board says it is loading.** The page stayed blank until the first answer came, which
+  on a large hub is a second or two and reads as an empty board. Every view now shows
+  "loading..." until its data arrives, and a failed task list shows the error instead.
+- **Tutorials match what the code prints again.** `hub plan` in tutorial 2 still showed the
+  owner's decision as ready work, and the law dictated in tutorial 6 was close enough to the
+  law already accepted that it was refused as the same rule.
+
 ## 0.9.80 — 2026-11-15
 
 - **A head can dictate a law, not only accept a grown one.** A candidate for a

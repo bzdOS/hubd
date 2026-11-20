@@ -532,4 +532,172 @@ fs.utimesSync(fvEvents, past, past);
 ok(core.loadTasks().tasks.length === 1 && JSON.parse(fs.readFileSync(path.join(FV, 'tasks.json'), 'utf8')).foldVersion === core.VERSION,
   'loadTasks: a cache stamped with the running version is served as-is');
 
+
+// ── next for a role: the first ready task this role may take ──
+{
+  const NF = mktmp();
+  core.setHubBase(NF); core.ensureHubDirs();
+  fs.writeFileSync(path.join(NF, 'owner-roles.json'), '["olga"]');
+  const env = { HUBD_DIR: NF, HUBD_TEAM_DIR: NF, HUBD_NODE: 'cedar' };
+  const add = (text, extra = {}) => core.runTaskAdd({ project: 'shop', text, by: 'dev-t', ...extra }).task;
+  // urgency order, top to bottom: the owner's, someone else's epic, a free one, ...
+  const tOwner = add('owner signs the contract', { assignee: 'olga', importance: 'high', deadline: '2020-01-01' });
+  const tEpic = add('the big epic', { assignee: 'role-z', importance: 'high', tags: ['epic'] });
+  const tFree = add('a free one', { importance: 'med' });
+  const tMine = add('worker-a has this one', { assignee: 'worker-a', tags: ['desktop'] });
+  const tMobile = add('mobile screen', { tags: ['Mobile'] });
+  const tLast = add('the last free one');
+  const ids = (r) => r.task ? String(r.task.id) : null;
+  const sum = (r) => r.eligible + r.skipped.assigned + r.skipped.claimed + r.skipped.tags + r.skipped.owner;
+
+  // without for: the old answer, the top of the list whoever holds it
+  const plain = core.runNext({ project: 'shop' });
+  ok(ids(plain) === String(tOwner.id) && plain.skipped === undefined && plain.eligible === 6,
+    `next without for: the old answer, the top task whoever it belongs to (${ids(plain)})`);
+  const cPlain = cli(['now', 'shop'], { env });
+  ok(cPlain.code === 0 && cPlain.stdout.split('\n')[0] === `#${tOwner.id} [shop] ⏰2020-01-01 @olga`
+    && cPlain.stdout.includes(`(6 ready, 0 blocked; next after it: #${tEpic.id})`),
+    'hub now without --for prints what it printed before');
+
+  // the role's own task wins over a free one, even a more important one
+  const own = core.runNext({ project: 'shop', for: 'worker-a' });
+  ok(ids(own) === String(tMine.id) && /^assigned to worker-a/.test(own.why),
+    `next for: the role's own task comes before free work above it (${ids(own)}: ${own.why})`);
+  // someone else's task on top, a free one below: the free one
+  const fr = core.runNext({ project: 'shop', for: 'worker-b' });
+  ok(ids(fr) === String(tFree.id) && /^unassigned/.test(fr.why) && fr.skipped.assigned === 2 && fr.skipped.owner === 1,
+    `next for: a task assigned to another role is passed over for the free one below it (${ids(fr)}, ${JSON.stringify(fr.skipped)})`);
+  ok(fr.ready === 6 && sum(fr) === fr.ready, `next for: every ready task is counted once, taken or passed over (${sum(fr)} of ${fr.ready})`);
+  ok(fr.runnerUp && String(fr.runnerUp.id) === String(tMobile.id), 'next for: the runner-up is the next task the role may take');
+  // the owner's task never, not even to the owner's role
+  const forOwner = core.runNext({ project: 'shop', for: 'olga' });
+  ok(ids(forOwner) !== String(tOwner.id) && forOwner.skipped.owner === 1, "next for: the owner's task is never handed out, even to the owner's role");
+  const tHuman = add('a call only a human makes', { importance: 'high' });
+  fs.appendFileSync(path.join(NF, `tasks.${core.JOURNAL_NODE}.events.jsonl`),
+    JSON.stringify({ ts: core.now(), node: core.JOURNAL_NODE, ev: 'set', id: tHuman.id, patch: { owner_kind: 'human' } }) + '\n');
+  ok(ids(core.runNext({ project: 'shop', for: 'worker-b' })) === String(tFree.id), 'next for: an unassigned task marked owner_kind human is not handed out either');
+
+  // --only-tags narrows free work only; --skip-tags bans a task, the role's own included
+  const mob = core.runNext({ project: 'shop', for: 'worker-b', onlyTags: ['mobile'] });
+  ok(ids(mob) === String(tMobile.id) && mob.why === 'unassigned, tag mobile' && mob.skipped.tags === 2,
+    `next for --only-tags: only free work carrying one of the tags, matched without case (${ids(mob)}: ${mob.why})`);
+  const noMob = core.runNext({ project: 'shop', for: 'worker-b', skipTags: 'mobile,#epic' });
+  ok(ids(noMob) === String(tFree.id) && noMob.runnerUp && String(noMob.runnerUp.id) === String(tLast.id),
+    'next for --skip-tags: free work carrying any of the tags is passed over');
+  const ownOnly = core.runNext({ project: 'shop', for: 'worker-a', onlyTags: ['mobile'] });
+  ok(ids(ownOnly) === String(tMine.id) && ownOnly.skippedOwn.length === 0, 'next for: --only-tags does not narrow the role\'s own task');
+  const ownBanned = core.runNext({ project: 'shop', for: 'worker-a', skipTags: ['desktop'] });
+  ok(ids(ownBanned) === String(tFree.id) && ownBanned.why === `unassigned; skipped own: ${tMine.id} (desktop)`
+    && ownBanned.skippedOwn.map(x => String(x.id)).join() === String(tMine.id),
+    `next for --skip-tags: the role's own task carrying the tag is not handed out, and why names it (${ownBanned.why})`);
+
+  // a task another agent has started is passed over; the role's own claim does not hide it
+  core.runClaim({ task: tFree.id, agent: 'worker-c' });
+  const cl = core.runNext({ project: 'shop', for: 'worker-b' });
+  ok(ids(cl) === String(tMobile.id) && cl.skipped.claimed === 1,
+    `next for: a free task claimed by another agent is passed over (${ids(cl)}, claimed ${cl.skipped.claimed})`);
+  ok(ids(core.runNext({ project: 'shop', for: 'worker-c' })) === String(tFree.id), 'next for: the agent holding the claim still gets it');
+
+  // two workers asking at once get the same task; the exclusive claim lets one hold it
+  const w1 = core.runNext({ project: 'shop', for: 'worker-d' }), w2 = core.runNext({ project: 'shop', for: 'worker-e' });
+  ok(ids(w1) === ids(w2) && ids(w1) === String(tMobile.id), 'next for: the choice is deterministic, two workers asking at once get the same task');
+  const c1 = cli(['claim', '--task', String(tMobile.id), '--exclusive', '--agent', 'worker-d'], { env });
+  const c2 = cli(['claim', '--task', String(tMobile.id), '--exclusive', '--agent', 'worker-e'], { env });
+  const holders = core.loadClaims().claims.filter(c => c.area === core.taskClaimArea(tMobile.id)).map(c => c.agent);
+  ok(c1.code === 0 && c2.code !== 0 && /held by worker-d/.test(c2.stderr) && holders.join() === 'worker-d',
+    `claim --exclusive: on a live claim of another agent it exits non-zero and writes nothing (codes ${c1.code}/${c2.code}, holders ${holders})`);
+  ok(ids(core.runNext({ project: 'shop', for: 'worker-e' })) === String(tLast.id), 'next for: the worker who lost the race gets the next task on the next round');
+  const c3 = cli(['claim', '--task', String(tMobile.id), '--agent', 'worker-e'], { env });
+  ok(c3.code === 0 && /already claimed by worker-d/.test(c3.stderr), 'claim without --exclusive: still a warning, and the claim is written');
+  const ex = core.runClaim({ project: 'shop', area: 'src/**', agent: 'worker-d', exclusive: true });
+  const ex2 = core.runClaim({ project: 'shop', area: 'src/**', agent: 'worker-e', exclusive: true });
+  ok(ex.ok && ex2.ok === false && ex2.refused && ex2.holder.agent === 'worker-d', 'claim exclusive: an area claim is refused the same way');
+
+  // nothing to take: the reason is the counts
+  const none = core.runNext({ project: 'shop', for: 'worker-f', onlyTags: ['tv'] });
+  ok(none.task === null && sum(none) === none.ready && /^nothing for worker-f: 7 ready, 2 assigned to others, 2 claimed by others, 1 off the tags, 2 the owner's$/.test(none.why),
+    `next for: with nothing to take, why says where the ready tasks went (${none.why})`);
+
+  // the CLI: --json carries the fields a loop reads; flags that make no sense together are refused
+  const cj = cli(['now', 'shop', '--for', 'worker-a', '--skip-tags', 'epic,hold', '--json'], { env });
+  let j = null; try { j = JSON.parse(cj.stdout); } catch {}
+  ok(cj.code === 0 && j && String(j.task.id) === String(tMine.id) && typeof j.why === 'string' && j.eligible >= 1
+    && ['assigned', 'claimed', 'tags', 'owner'].every(k => typeof j.skipped[k] === 'number') && Array.isArray(j.skippedOwn),
+    'hub now --for --json: {task, why, eligible, skipped, skippedOwn}');
+  const ct = cli(['now', 'shop', '--for', 'worker-b'], { env });
+  ok(ct.code === 0 && ct.stdout.startsWith(`#${tLast.id} [shop]`) && /ready for worker-b/.test(ct.stdout), 'hub now --for: the text form names the task and the counts');
+  ok(cli(['now', 'shop', '--only-tags', 'mobile'], { env }).code !== 0, 'hub now: --only-tags without --for is refused');
+  ok(cli(['now', 'shop', '--for', 'worker-b', '--assignee', 'worker-b'], { env }).code !== 0, 'hub now: --for together with --assignee is refused');
+}
+
+
+// ── the role's pick, as a table of cases: one row per case, and one per incident taken apart ──
+{
+  const D = { today: '2026-03-10', today3: '2026-03-13' };
+  let n = 0;
+  const T = (id, extra = {}) => ({ id, project: 'p', status: 'open', text: 'task ' + id, created: `2026-03-01 10:${String(++n).padStart(2, '0')}`, ...extra });
+  const CASES = [
+    { name: 'incident: the top task belongs to a role that is not running; free work below it is handed out, not "nothing ready"',
+      ready: [T('e', { assignee: 'role-z', importance: 'high', tags: ['epic'] }), T('a'), T('b')], role: 'w', want: 'a', skipped: { assigned: 1 }, why: /^unassigned$/ },
+    { name: 'the role\'s own task comes before free work that is more urgent',
+      ready: [T('f', { importance: 'high' }), T('m', { assignee: 'w' })], role: 'w', want: 'm', why: /^assigned to w$/ },
+    { name: 'a task another agent has started is passed over, even the role\'s own',
+      ready: [T('m', { assignee: 'w' }), T('f')], claims: [{ area: 'task:m', agent: 'x' }], role: 'w', want: 'f', skipped: { claimed: 1 } },
+    { name: 'the role\'s own claim does not hide a task from it',
+      ready: [T('f')], claims: [{ area: 'task:f', agent: 'w' }], role: 'w', want: 'f' },
+    { name: 'a claim on a file area is not a claim on a task',
+      ready: [T('f')], claims: [{ area: 'src/**', agent: 'x' }], role: 'w', want: 'f' },
+    { name: 'a task assigned to a declared owner role is never handed out',
+      ready: [T('o', { assignee: 'boss', importance: 'high' }), T('f')], owners: ['boss'], role: 'w', want: 'f', skipped: { owner: 1 } },
+    { name: 'a task marked owner_kind human is never handed out',
+      ready: [T('h', { owner_kind: 'human', importance: 'high' }), T('f')], role: 'w', want: 'f', skipped: { owner: 1 } },
+    { name: 'not even to the owner\'s own role',
+      ready: [T('o', { assignee: 'boss' })], owners: ['boss'], role: 'boss', want: null, skipped: { owner: 1 } },
+    { name: '--only-tags: free work must carry one of the tags, matched without case or #',
+      ready: [T('a', { tags: ['desktop'] }), T('b', { tags: ['#Mobile'] })], only: 'mobile,tv', role: 'w', want: 'b', skipped: { tags: 1 }, why: /^unassigned, tag mobile$/ },
+    { name: '--only-tags: an untagged task is off the tags',
+      ready: [T('a')], only: ['mobile'], role: 'w', want: null, skipped: { tags: 1 },
+      why: /^nothing for w: 1 ready, 0 assigned to others, 0 claimed by others, 1 off the tags, 0 the owner's$/ },
+    { name: '--skip-tags: free work carrying any of the tags is passed over',
+      ready: [T('a', { tags: ['epic'] }), T('b')], skip: 'epic,hold', role: 'w', want: 'b', skipped: { tags: 1 } },
+    { name: '--only-tags does not narrow the role\'s own task: it was assigned on purpose',
+      ready: [T('m', { assignee: 'w', tags: ['desktop'] })], only: ['mobile'], role: 'w', want: 'm', why: /^assigned to w$/ },
+    { name: '--skip-tags is a ban on the role\'s own task too, and why names the task it kept back',
+      ready: [T('m', { assignee: 'w', tags: ['desktop'] })], skip: ['desktop'], role: 'w', want: null, skipped: { tags: 1 }, own: 'm',
+      why: /^nothing for w: 1 ready, 0 assigned to others, 0 claimed by others, 1 off the tags, 0 the owner's; skipped own: m \(desktop\)$/ },
+    { name: 'incident: an epic reassigned to a worker sat above its own tasks; --skip-tags keeps it back, '
+        + 'the next own task is handed out before free work, and why names the epic',
+      ready: [T('e', { assignee: 'w', importance: 'high', tags: ['epic'] }), T('f', { importance: 'high' }), T('m', { assignee: 'w' })],
+      skip: 'epic,hold', role: 'w', want: 'm', skipped: { tags: 1 }, own: 'e', why: /^assigned to w; skipped own: e \(epic\)$/ },
+    { name: 'the role\'s own tasks all carry a skipped tag: unassigned work with a matching tag is handed out, and why still names them',
+      ready: [T('e', { assignee: 'w', tags: ['epic'] }), T('h', { assignee: 'w', tags: ['Hold'] }), T('x', { tags: ['desktop'] }), T('y', { tags: ['mobile'] })],
+      only: 'mobile', skip: 'epic,hold', role: 'w', want: 'y', skipped: { tags: 3 }, own: 'e,h',
+      why: /^unassigned, tag mobile; skipped own: e \(epic\), h \(hold\)$/ },
+    { name: 'an own task kept back by a tag is named even when another agent has claimed it',
+      ready: [T('e', { assignee: 'w', tags: ['epic'] }), T('f')], claims: [{ area: 'task:e', agent: 'x' }], skip: 'epic', role: 'w', want: 'f',
+      skipped: { tags: 1, claimed: 0 }, own: 'e' },
+    { name: 'why names at most five own tasks kept back and counts the rest; skippedOwn lists them all',
+      ready: [...['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7'].map(id => T(id, { assignee: 'w', tags: ['epic'] })), T('f')],
+      skip: 'epic', role: 'w', want: 'f', own: 'k1,k2,k3,k4,k5,k6,k7',
+      why: /^unassigned; skipped own: k1 \(epic\), k2 \(epic\), k3 \(epic\), k4 \(epic\), k5 \(epic\), \+2 more$/ },
+    { name: 'an empty assignee is no assignee',
+      ready: [T('a', { assignee: '' })], role: 'w', want: 'a' },
+    { name: 'the urgency order is the one hub now uses: due within three days beats importance',
+      ready: [T('i', { importance: 'high' }), T('d', { deadline: '2026-03-12' })], role: 'w', want: 'd', why: /^unassigned · due 2026-03-12$/ },
+    { name: 'nothing ready, nothing to take',
+      ready: [], role: 'w', want: null },
+  ];
+  for (const c of CASES) {
+    const r = core.pickForRole({ ready: c.ready, claims: c.claims || [], owners: c.owners || [], role: c.role, onlyTags: c.only, skipTags: c.skip, ...D });
+    const got = r.task ? String(r.task.id) : null;
+    const sk = r.skipped, total = r.eligible + sk.assigned + sk.claimed + sk.tags + sk.owner;
+    const skOk = Object.entries(c.skipped || {}).every(([k, v]) => sk[k] === v);
+    const ownOk = r.skippedOwn.map(x => String(x.id)).join() === (c.own || '');
+    ok(got === c.want && skOk && ownOk && total === r.ready && (!c.why || c.why.test(r.why)),
+      `pick for a role: ${c.name} (got ${got}, ${r.why}, ${JSON.stringify(sk)})`);
+  }
+  const again = core.pickForRole({ ready: CASES[0].ready, role: 'w', ...D });
+  ok(String(again.task.id) === 'a' && CASES[0].ready.map(t => t.id).join() === 'e,a,b', 'pick for a role: the same inputs give the same task, and the input list is not reordered');
+}
+
 done();

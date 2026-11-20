@@ -159,7 +159,9 @@ flowchart LR
   cancelled task never runs.
 - **Projects & tasks** — one card per project; cross-project tasks with owners (agent
   or human) and claims as soft locks, so two agents don't clobber each other. `hub now`
-  names the one task to do next and why it won; `hub agenda` splits the day by who can
+  names the one task to do next and why it won, and `hub now --for <role>` the first one
+  that role may take (its own, else one nobody holds); `hub claim --task <id> --exclusive`
+  starts it only if no other agent has; `hub agenda` splits the day by who can
   act; `hub plan` walks the dependency graph.
 - **Roles, tracks, supervision** — a role is a resource card of type `role` (`rank`
   head / worker / fleet, a `head` link, its repo). A project with a head is a track.

@@ -4989,9 +4989,84 @@ export function byUrgency(today3) {
   };
 }
 
+const urgencyReasons = (t, today, today3) => {
+  const reasons = [];
+  if (t.deadline && t.deadline < today) reasons.push(`overdue since ${t.deadline}`);
+  else if (t.deadline && t.deadline <= today3) reasons.push(`due ${t.deadline}`);
+  if (t.importance === 'high') reasons.push('importance high');
+  return reasons;
+};
+const normTag = (x) => String(x).trim().toLowerCase().replace(/^#/, '');
+const tagList = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []).map(normTag).filter(Boolean);
+
+/* `for`: the first ready task, in the urgency order, that this role may take. A worker that asked
+ * only for its own tasks and then looked at the one top task of the project gave up whenever that
+ * top task was someone else's, while unassigned work sat further down the same list. The role's
+ * own task comes first; then a task with no assignee that no other agent has started (a live claim
+ * on task:<id>). The owner's tasks and tasks assigned to another role are never handed out.
+ * skipTags is a ban on every task, the role's own included: an epic or a held task assigned to a
+ * worker is a mistake in the hand-out, the worker must not sit on it, and why names each own task
+ * kept back so the mistake is seen. onlyTags narrows the unassigned work only: a task assigned to
+ * the role was assigned on purpose. Each ready task is counted under exactly one reason it was
+ * passed over, so ready = eligible + the skipped counts.
+ *
+ * A pure function: the ready tasks, the live claims, the owner roles and the dates come in, the
+ * choice goes out. No file, no clock, so the same inputs give the same task on every node, and
+ * the cases are checked as a table (tests/logic/tasks.mjs). */
+export function pickForRole({ ready = [], claims = [], owners = [], role, onlyTags, skipTags, today, today3 }) {
+  role = String(role);
+  const only = tagList(onlyTags), skip = tagList(skipTags);
+  const isOwner = isOwnerTask(owners instanceof Set ? owners : new Set(owners));
+  const startedBy = new Map();   // task id -> an agent other than the role holding task:<id>
+  for (const c of claims) {
+    const area = String(c.area || '');
+    if (c.agent !== role && area.startsWith('task:')) startedBy.set(area.slice(5), c.agent);
+  }
+  const skipped = { assigned: 0, claimed: 0, tags: 0, owner: 0 };
+  const skippedOwn = [];   // the role's own tasks a skipTags tag kept back: { id, tag }
+  const mine = [], free = [];
+  for (const t of [...ready].sort(byUrgency(today3))) {
+    const tags = tagList(t.tags);
+    const banned = tags.find(x => skip.includes(x));
+    if (isOwner(t)) skipped.owner++;
+    else if (t.assignee && t.assignee !== role) skipped.assigned++;
+    else if (t.assignee === role && banned) { skipped.tags++; skippedOwn.push({ id: t.id, tag: banned }); }
+    else if (startedBy.has(String(t.id))) skipped.claimed++;
+    else if (t.assignee === role) mine.push(t);
+    else if (banned || (only.length && !tags.some(x => only.includes(x)))) skipped.tags++;
+    else free.push(t);
+  }
+  const take = [...mine, ...free];
+  const base = { eligible: take.length, ready: ready.length, skipped, skippedOwn };
+  const NAMED = 5;
+  const keptBack = !skippedOwn.length ? '' : '; skipped own: ' + skippedOwn.slice(0, NAMED).map(x => `${x.id} (${x.tag})`).join(', ') +
+    (skippedOwn.length > NAMED ? `, +${skippedOwn.length - NAMED} more` : '');
+  if (!take.length) {
+    return { task: null, ...base,
+      why: `nothing for ${role}: ${ready.length} ready, ${skipped.assigned} assigned to others, ${skipped.claimed} claimed by others, ` +
+        `${skipped.tags} off the tags, ${skipped.owner} the owner's` + keptBack };
+  }
+  const t = take[0];
+  let pick = `assigned to ${role}`;
+  if (t.assignee !== role) {
+    const hit = only.length ? tagList(t.tags).find(x => only.includes(x)) : null;
+    pick = 'unassigned' + (hit ? `, tag ${hit}` : '');
+  }
+  return { task: t, why: [pick, ...urgencyReasons(t, today, today3)].join(' · ') + keptBack,
+    runnerUp: take[1] ? { id: take[1].id, text: (take[1].text || '').slice(0, 80) } : null, ...base };
+}
+
 export function runNext(a = {}) {
   const today = new Date().toISOString().slice(0, 10);
   const today3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  if (a.for != null && a.for !== '') {
+    if (a.assignee) throw new Error('for and assignee ask different questions: for <role> already takes the role\'s own tasks first');
+    const { list, blocked } = eligibleOpen(loadTasks().tasks, { project: a.project });
+    const r = pickForRole({ ready: list, claims: activeClaims(loadClaims().claims), owners: ownerRoles(),
+      role: a.for, onlyTags: a.onlyTags, skipTags: a.skipTags, today, today3 });
+    if (!r.task && blocked.length) r.why += `; ${blocked.length} blocked`;
+    return { ...r, blockedCount: blocked.length };
+  }
   const { list, blocked } = eligibleOpen(loadTasks().tasks, a);
   if (!list.length) {
     return { task: null, why: blocked.length
@@ -5000,10 +5075,7 @@ export function runNext(a = {}) {
   }
   const sorted = [...list].sort(byUrgency(today3));
   const t = sorted[0];
-  const reasons = [];
-  if (t.deadline && t.deadline < today) reasons.push(`overdue since ${t.deadline}`);
-  else if (t.deadline && t.deadline <= today3) reasons.push(`due ${t.deadline}`);
-  if (t.importance === 'high') reasons.push('importance high');
+  const reasons = urgencyReasons(t, today, today3);
   if (!reasons.length) reasons.push('oldest of the equally urgent');
   if (t.owner_kind === 'human' || (t.assignee && new Set(ownerRoles()).has(t.assignee)))
     reasons.push('NOTE: this one is the owner\'s to press, not an agent\'s — prepare it, do not decide it');
@@ -5251,6 +5323,18 @@ export function runClaim(a) {
     const others = db.claims.filter(c => c.project === a.project && c.agent !== a.agent);
     const existing = others.find(c => c.area === a.area);
     const overlapping = existing ? [] : others.filter(c => areasOverlap(c.area, a.area));
+    // `?? 240` as activeClaims reads it: a claim written without ttlMin made this NaN, and
+    // toISOString() on an Invalid Date throws — the new claim was saved and the call still failed.
+    const until = (c) => new Date(parseTs(c.since).getTime() + (c.ttlMin ?? 240) * 60000)
+      .toISOString().slice(0, 16).replace('T', ' ');
+    // exclusive: a live claim by another agent on the same area refuses this one, and nothing is
+    // written. Checked under the lock, so of two agents racing for one task exactly one holds it.
+    // A task's area names the task, whatever project the claim was filed under.
+    if (a.exclusive) {
+      const holder = db.claims.find(c => c.area === a.area && c.agent !== a.agent && (taskId != null || c.project === a.project));
+      if (holder) return { ok: false, refused: true, holder: { agent: holder.agent, area: holder.area, until: until(holder) },
+        error: `${a.area} is held by ${holder.agent} until ${until(holder)}; nothing was claimed` };
+    }
     const ttlMin = a.ttlMin ?? 240;
     const claim = { id: crypto.randomUUID(), project: a.project, area: a.area, agent: a.agent, since: now(), ttlMin };
     if (a.note) claim.note = a.note;
@@ -5259,10 +5343,6 @@ export function runClaim(a) {
     const matchable = areaPatterns(a.area) !== null;
     const result = { ok: true, claim, matchable,
       ...(matchable ? {} : { hint: 'this area is prose, so `hub claim check <path>` cannot match files against it — a glob like "src/**/*.ts" or "docs/{a,b}.md" would' }) };
-    // `?? 240` as activeClaims reads it: a claim written without ttlMin made this NaN, and
-    // toISOString() on an Invalid Date throws — the new claim was saved and the call still failed.
-    const until = (c) => new Date(parseTs(c.since).getTime() + (c.ttlMin ?? 240) * 60000)
-      .toISOString().slice(0, 16).replace('T', ' ');
     if (existing) result.warning = `area already claimed by ${existing.agent} until ${until(existing)}`;
     else if (overlapping.length) {
       result.overlaps = overlapping.map(c => ({ agent: c.agent, area: c.area, until: until(c) }));
@@ -5270,7 +5350,7 @@ export function runClaim(a) {
     }
     return result;
   });
-  if (taskId != null) {
+  if (taskId != null && out.ok) {
     try {
       const db = loadTasks();
       const t = db.tasks.find(x => String(x.id) === String(taskId));

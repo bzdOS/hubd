@@ -193,6 +193,9 @@ const TOOLS = [
     description: 'The ONE task to do now, and why it won — not a list. Picking from a list is work, and a session that has to pick tends to pick the easy one. A task whose dependencies are still open is never eligible, however loud it is. Says explicitly when the chosen one is the owner\'s to press rather than an agent\'s.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' }, assignee: { type: 'string' },
+      for: { type: 'string', description: 'a role: the first ready task in the same order that this role may take. Its own task first, else one with no assignee that no other agent has claimed (task:<id>) and that passes the tag filters. The owner\'s tasks and tasks assigned to another role are never handed out. Returns {task, why, eligible, ready, skipped:{assigned, claimed, tags, owner}}. Not together with assignee.' },
+      onlyTags: { type: 'array', items: { type: 'string' }, description: 'with for: an unassigned task must carry at least one of these tags; the role\'s own tasks are not narrowed' },
+      skipTags: { type: 'array', items: { type: 'string' }, description: 'with for: a task carrying any of these tags is never handed out, the role\'s own included; why and skippedOwn name the own tasks kept back' },
     } } },
 
   { name: 'hub_agenda',
@@ -282,6 +285,7 @@ const TOOLS = [
       project: { type: 'string' }, area: { type: 'string', description: 'a path glob relative to the project root; several joined with " + "' }, agent: { type: 'string' },
       ttlMin: { type: 'integer', description: 'default 240' }, note: { type: 'string' },
       task: { type: ['string', 'integer'], description: 'start a task from your work queue instead: the claim is on task:<id> in the task\'s project (project and area are then not needed). While it holds the task is in progress and not offered again; when it lapses the task is offered again.' },
+      exclusive: { type: 'boolean', description: 'refuse instead of warn when another agent holds a live claim on the same area: returns {ok:false, refused:true, holder} and nothing is written. Of two agents racing for one task, exactly one holds it.' },
     }, required: ['agent'] } },
 
   { name: 'hub_claim_check',

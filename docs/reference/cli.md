@@ -14,7 +14,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`status`](#status) | project table |
 | [`brief`](#brief) | morning brief |
 | [`inbox`](#inbox) | what needs a decision now (blocked/overdue/unassigned/stale locks) |
-| [`now`](#now) | the one next thing to do |
+| [`now`](#now) | the one next thing to do; the first ready task this role may take: its own, else an unassigned one no one has started |
 | [`agenda`](#agenda) | the day, split by who can act |
 | [`plan`](#plan) | dependency-graph trajectory: ready now · critical path · unlock order · cycles |
 | [`whereami`](#whereami) | where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction |
@@ -38,7 +38,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`graph`](#graph) | typed relationship graph (runs_on/depends_on/deploys_to/...) |
 | [`harvest`](#harvest) | print the Harvest Protocol prompt (also served as an MCP prompt) |
 | [`prompts`](#prompts) | a role's rules from prompts/meta; --check: exit 1 if the file differs |
-| [`claim`](#claim) | soft lock; start a task: a claim on it while you work; who holds a claim over this path |
+| [`claim`](#claim) | soft lock; start a task: a claim on it while you work; --exclusive refuses (exit 1) if another agent holds it; who holds a claim over this path |
 | [`release`](#release) | release a lock |
 | [`heartbeat`](#heartbeat) | record liveness |
 | [`presence`](#presence) | fleet roster (who has heartbeated, alive/stale) |
@@ -95,6 +95,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 ## now
 
 - `hub now [project] [--assignee <who>]` — the one next thing to do
+- `hub now [project] --for <role> [--only-tags a,b] [--skip-tags a,b] [--json]` — the first ready task this role may take: its own, else an unassigned one no one has started
 
 Also: `hub whatnext`
 
@@ -219,7 +220,7 @@ Also: `hub res`
 ## claim
 
 - `hub claim <proj> <area> [-t min] [--note "<why>"] --agent <you>` — soft lock
-- `hub claim --task <id> [-t min] --agent <you>` — start a task: a claim on it while you work
+- `hub claim --task <id> [-t min] [--exclusive] --agent <you>` — start a task: a claim on it while you work; --exclusive refuses (exit 1) if another agent holds it
 - `hub claim check <path> [-p <proj>] [--agent <you>]` — who holds a claim over this path
 
 ## release
@@ -351,8 +352,10 @@ The commands each flag appears with, in their usage lines.
 | `--days` | [usage](#usage), [audit](#audit), [gc](#gc), [queue](#queue), [board](#board) |
 | `--db` | [sessions](#sessions) |
 | `--dry` | [sessions](#sessions), [price](#price) |
+| `--exclusive` | [claim](#claim) |
 | `--exec` | [watch](#watch) |
 | `--follow` | [watch](#watch) |
+| `--for` | [now](#now) |
 | `--from` | [price](#price), [queue](#queue) |
 | `--from-now` | [queue](#queue) |
 | `--group` | [stats](#stats) |
@@ -363,7 +366,7 @@ The commands each flag appears with, in their usage lines.
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
-| `--json` | [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
+| `--json` | [now](#now), [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
 | `--law` | [reflect](#reflect) |
 | `--laws` | [reflect](#reflect) |
 | `--lens` | [attempt](#attempt) |
@@ -381,6 +384,7 @@ The commands each flag appears with, in their usage lines.
 | `-o` | [attempt](#attempt) |
 | `--of` | [attempt](#attempt) |
 | `--once` | [queue](#queue) |
+| `--only-tags` | [now](#now) |
 | `--opencode` | [sessions](#sessions) |
 | `--out` | [prompts](#prompts) |
 | `-p` | [watch](#watch), [report](#report), [decide](#decide), [next](#next), [task](#task), [graph](#graph), [claim](#claim), [usage](#usage), [stats](#stats), [serve](#serve) |
@@ -403,6 +407,7 @@ The commands each flag appears with, in their usage lines.
 | `--section` | [card](#card) |
 | `--set` | [section](#section) |
 | `--since` | [log](#log), [watch](#watch), [reflect](#reflect), [stats](#stats), [queue](#queue) |
+| `--skip-tags` | [now](#now) |
 | `--src` | [section](#section) |
 | `--stale-days` | [recall](#recall) |
 | `--status` | [task](#task), [resource](#resource), [heartbeat](#heartbeat) |

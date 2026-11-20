@@ -73,20 +73,20 @@ hub plan shop
 ```
 
 ```text
-── TRAJECTORY · shop · 2026-10-17 23:23 ──  open 4 · held 0 · ready 2 · blocked 2 · depth 2
+── TRAJECTORY · shop · 2026-10-17 23:23 ──  open 4 · held 0 · owner 1 · ready 2 · blocked 1 · depth 2
+  OWNER ONLY (not agent work): #oak-1
 
 READY NOW (2):
-  #oak-1 [shop] choose the payment provider
+  #oak-2 [shop] ! wire the hosted payment page into checkout
   #oak-3 [shop] fix the 30 s checkout timeout on big carts
 
-CRITICAL PATH (2): #oak-1 → #oak-2
+CRITICAL PATH (2): #oak-3 → #oak-4
 
 UNLOCK ORDER (topo layers):
-  L0: #oak-1 #oak-3
-  L1: #oak-2 #oak-4
+  L0: #oak-2 #oak-3
+  L1: #oak-4
 
-BLOCKED (2):
-  #oak-2 ← waiting on #oak-1 — wire the hosted payment page into checkout
+BLOCKED (1):
   #oak-4 ← waiting on #oak-3 — load-test checkout with 200 items
 ```
 
@@ -130,6 +130,30 @@ hub claim --task oak-3 --agent dev-shop -t 60
 
 ```text
 Started #oak-3: 8f17a466-9a4a-44d0-8f64-e4dff4c1bff7 (until 2026-10-07 13:55)
+```
+
+A worker that loops asks for the first task it may take: one assigned to it, else one
+assigned to nobody that nobody has started. Another role's task and the owner's are passed
+over. `--only-tags` narrows the unassigned work to the tags the worker takes; `--skip-tags`
+bans a tag outright, on the worker's own tasks too, and `why` names any own task it kept back:
+
+```bash
+hub now shop --for dev-api
+```
+
+```text
+nothing to do: nothing for dev-api: 2 ready, 0 assigned to others, 1 claimed by others, 0 off the tags, 1 the owner's; 2 blocked
+```
+
+Two workers that ask at once get the same answer. `--exclusive` lets one of them start
+it; the other is refused with exit 1, nothing is written, and it asks again on its next round:
+
+```bash
+hub claim --task oak-3 --exclusive --agent dev-api
+```
+
+```text
+Error: task:oak-3 is held by dev-shop until 2026-10-07 13:55; nothing was claimed
 ```
 
 It can also claim the files it is about to change, as a glob:

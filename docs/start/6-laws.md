@@ -133,14 +133,14 @@ not said anything yet has no candidate to accept — and a rule the head wants f
 first day is written with the head's own words:
 
 ```bash
-hub reflect --law "the load test runs against the cart size the bug was reported at" --project shop --by head-shop
+hub reflect --law "a payment change is tried in the provider sandbox before it reaches checkout" --project shop --by head-shop
 hub reflect --laws --project shop
 ```
 
 ```text
-law of shop, in its card's Laws section: the load test runs against the cart size the bug was reported at
+law of shop, in its card's Laws section: a payment change is tried in the provider sandbox before it reaches checkout
 - load-test with the cart size the bug was reported at, not the tool's default
-- the load test runs against the cart size the bug was reported at
+- a payment change is tried in the provider sandbox before it reaches checkout
 ```
 
 The right is the same as for a candidate — the project's head, or a fleet role's — and

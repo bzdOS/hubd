@@ -322,6 +322,9 @@ The ONE task to do now, and why it won — not a list. Picking from a list is wo
 | --- | --- | --- | --- |
 | `project` | string |  |  |
 | `assignee` | string |  |  |
+| `for` | string |  | a role: the first ready task in the same order that this role may take. Its own task first, else one with no assignee that no other agent has claimed (task:&lt;id>) and that passes the tag filters. The owner's tasks and tasks assigned to another role are never handed out. Returns {task, why, eligible, ready, skipped:{assigned, claimed, tags, owner}}. Not together with assignee. |
+| `onlyTags` | string[] |  | with for: an unassigned task must carry at least one of these tags; the role's own tasks are not narrowed |
+| `skipTags` | string[] |  | with for: a task carrying any of these tags is never handed out, the role's own included; why and skippedOwn name the own tasks kept back |
 
 ### hub_agenda
 
@@ -363,6 +366,7 @@ Soft-lock a work area so other agents see it. Not enforced — informational. Wr
 | `ttlMin` | integer |  | default 240 |
 | `note` | string |  |  |
 | `task` | string or integer |  | start a task from your work queue instead: the claim is on task:&lt;id> in the task's project (project and area are then not needed). While it holds the task is in progress and not offered again; when it lapses the task is offered again. |
+| `exclusive` | boolean |  | refuse instead of warn when another agent holds a live claim on the same area: returns {ok:false, refused:true, holder} and nothing is written. Of two agents racing for one task, exactly one holds it. |
 
 ### hub_claim_check
 

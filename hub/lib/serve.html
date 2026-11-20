@@ -157,7 +157,7 @@ details.item>summary .meta{font-weight:400}
 <header>
   <h1>hubd</h1>
   <div style="display:flex;align-items:center;gap:16px">
-    <span id="updated"></span>
+    <span id="updated">loading...</span>
     <button id="btn-rules">&#9881; Rules</button>
   </div>
 </header>
@@ -172,21 +172,21 @@ details.item>summary .meta{font-weight:400}
 <div id="tasks-view" class="hide">
   <div id="tk-list-wrap">
     <div id="tk-bar"></div>
-    <div id="tk-list"></div>
+    <div id="tk-list"><div class="empty">loading...</div></div>
   </div>
   <div id="tk-detail" class="hide"></div>
 </div>
-<div id="summary-view" class="hide"><div id="summary"></div></div>
+<div id="summary-view" class="hide"><div id="summary"><div class="empty">loading...</div></div></div>
 <div id="tracks-view" class="hide">
   <details id="waiting" open><summary id="waiting-sum">Waiting for you</summary><div class="w-grid" id="waiting-body"></div></details>
   <div id="track-filter"></div>
-  <div id="tracks"></div>
+  <div id="tracks"><div class="empty">loading...</div></div>
 </div>
 <div id="live-view">
   <div class="board">
-    <div class="col"><div class="col-head"><span class="col-title">Queued</span><span class="col-count" id="cnt-q">0</span></div><div id="col-q"></div></div>
-    <div class="col"><div class="col-head"><span class="col-title">In progress</span><span class="col-count" id="cnt-p">0</span></div><div id="col-p"></div></div>
-    <div class="col"><div class="col-head"><span class="col-title">Done today</span><span class="col-count" id="cnt-d">0</span></div><div id="col-d"></div></div>
+    <div class="col"><div class="col-head"><span class="col-title">Queued</span><span class="col-count" id="cnt-q">0</span></div><div id="col-q"><div class="empty">loading...</div></div></div>
+    <div class="col"><div class="col-head"><span class="col-title">In progress</span><span class="col-count" id="cnt-p">0</span></div><div id="col-p"><div class="empty">loading...</div></div></div>
+    <div class="col"><div class="col-head"><span class="col-title">Done today</span><span class="col-count" id="cnt-d">0</span></div><div id="col-d"><div class="empty">loading...</div></div></div>
   </div>
   <div><div class="act-head">Mail</div><div id="mail"></div></div>
   <div><div class="act-head">Activity</div><div id="activity"></div></div>
@@ -580,7 +580,7 @@ function loadTasks(){
   return fetch('/api/tasks'+location.search).then(function(r){return r.json()}).then(function(d){
     tkData=d;renderTasks();
     document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
-  });
+  }).catch(function(e){document.getElementById('updated').textContent='error: '+e.message});
 }
 function link(u){
   var url=String(u||'').split(/\s+/)[0], rest=String(u||'').slice(url.length);

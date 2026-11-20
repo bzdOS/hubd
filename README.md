@@ -91,6 +91,7 @@ hub doctor           # hub base, team root, locks, queues, writer versions, the 
 hub status           # every project at a glance (⚠ marks a card behind its journal)
 hub brief            # morning brief: tasks, journal, locks
 hub now              # the ONE task to do next, and why it won
+hub now --for <role> # the first ready task that role may take: its own, else a free one
 hub agenda           # the day split by who can act: agent work vs owner buttons
 hub recall "<q>"     # ranked memory, every hit dated and flagged if stale
 hub usage --days 7   # what the work cost: supplied vs measured, never mixed
