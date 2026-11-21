@@ -12,10 +12,10 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`doctor`](#doctor) | check hub base, team root, locks, queues and writer versions |
 | [`upgrade`](#upgrade) | refresh HUBD.md (the agent protocol) to the installed version |
 | [`status`](#status) | project table |
-| [`brief`](#brief) | morning brief |
+| [`brief`](#brief) | morning brief; work nobody holds: high tasks with no assignee, waits that end on nobody |
 | [`inbox`](#inbox) | what needs a decision now (blocked/overdue/unassigned/stale locks) |
 | [`now`](#now) | the one next thing to do; the first ready task this role may take: its own, else an unassigned one no one has started |
-| [`agenda`](#agenda) | the day, split by who can act |
+| [`agenda`](#agenda) | the day, split by who can act, and the work nobody holds |
 | [`plan`](#plan) | dependency-graph trajectory: ready now · critical path · unlock order · cycles |
 | [`whereami`](#whereami) | where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction |
 | [`log`](#log) | journal tail; --since: all of the window; --json: every field, to included |
@@ -25,7 +25,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
-| [`task`](#task) | a new task; close a task; tasks; one task, where else its id appears, and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
+| [`task`](#task) | a new task; close a task; tasks; one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
 | [`attempt`](#attempt) | record what you tried on a task and what came of it |
 | [`card`](#card) | set a project card without a folder; fix lines of a card, leave the rest byte-for-byte; read a card back: whole, its sections as data, or one section's body (exit 1 when the card does not hold it); union the list hunks of a conflicted card, name the rest; on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time |
 | [`cards`](#cards) | move the overflow of over-long card sections into projects/history/ (dry run without --apply); merge two cards for the same project (dry run without --apply); fold a section a card holds twice (same heading, or two locales) into the live one |
@@ -86,7 +86,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 
 ## brief
 
-- `hub brief [-h <hours>]` — morning brief
+- `hub brief [-h <hours>]` — morning brief; work nobody holds: high tasks with no assignee, waits that end on nobody
 
 ## inbox
 
@@ -101,7 +101,7 @@ Also: `hub whatnext`
 
 ## agenda
 
-- `hub agenda [project]` — the day, split by who can act
+- `hub agenda [project]` — the day, split by who can act, and the work nobody holds
 
 ## plan
 
@@ -156,7 +156,7 @@ Also: `hub where`
 - `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
 - `hub task done <id> --by <you>` — close a task
 - `hub task list [-p proj] [--status open|done|all] [--json]` — tasks
-- `hub task get <id> [--json]` — one task, where else its id appears, and its thread of attempts
+- `hub task get <id> [--json]` — one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts
 - `hub task retag [--apply --by <you>]` — move categories off the fixed list into tags (dry run without --apply)
 
 ## attempt

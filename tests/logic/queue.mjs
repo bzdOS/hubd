@@ -780,9 +780,12 @@ const AK = mktmp();
   for (let i = 1; i <= 12; i++) queueLib.queueSend('ak', 'order ' + i, { from: 'dev-t', root: AK, node: 'n1' });
   await queueLib.queueWait('ak', { root: AK, timeout: 0 });
   ok(queueLib.peekQueueDepthWithAcks('ak', { root: AK }).unacked === 12, 'acks: a delivered block is unacked until acked');
+  const never = queueLib.queueSendChecked('ak', 'order 13', { from: 'dev-t', root: AK });
+  ok(never.unacked === 12 && /never acked a block/.test(never.ackNote || ''), 'acks: a role that reads and has never acked is said to be one: its unacked count is its history, not a backlog');
   queueLib.queueAck('ak', 'n1-12', { root: AK });
   queueLib.queueAck('ak', '3', { root: AK });
   const u = queueLib.peekQueueDepthWithAcks('ak', { root: AK });
+  ok(!queueLib.queueSendChecked('ak', 'order 14', { from: 'dev-t', root: AK }).ackNote, 'acks: once the role acks, the send says nothing of it');
   ok(u.unacked === 10 && !u.unackedBlocks.some(b => b.id === 'n1-12' || b.id === 'n1-3'),
     `acks: an acked block leaves the unacked count, and a bare number is the one id ending in it (it only ever grew; got ${u.unacked})`);
   // a trimmed shard that still holds id 12 but not id 1, read before the shard that holds id 1

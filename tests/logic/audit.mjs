@@ -83,7 +83,10 @@ ok(au.apply === false && core.runTaskList({ status: 'all' }).count === 0, 'audit
 {
   const TE = mktmp();
   core.setHubBase(TE); core.ensureHubDirs();
-  const at = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString().slice(0, 16).replace('T', ' ');
+  // all lines on one calendar day: in the first hour after midnight the hour-old line would fall on
+  // the day before, so the whole trace moves two hours back (still inside the one-day window)
+  const base = (Date.now() % 86400000) < 70 * 60000 ? Date.now() - 120 * 60000 : Date.now();
+  const at = (minAgo) => new Date(base - minAgo * 60000).toISOString().slice(0, 16).replace('T', ' ');
   const line = (agent, kind, text, minAgo) => JSON.stringify({ ts: at(minAgo), project: 'psy', agent, kind, text }) + '\n';
   // "dumper": one bookkeeping line an hour ago, then three structured lines in the last minute.
   // "steady": three structured lines spread across the hour. Same day for both, by construction.

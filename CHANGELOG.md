@@ -4,6 +4,41 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.82 — 2026-11-20
+
+- **Work nobody holds is said apart.** An open high task with no assignee sat four days among
+  the other open tasks: every list showed it, none said it was nobody's. A task waiting on it
+  looked busy, and nothing woke anyone for three days. `hub brief` and `hub agenda` now open
+  with two lists. `unowned` holds open high tasks with no assignee for over an hour, not held.
+  `deadlocks` holds open tasks whose `depends_on` chain ends on a task nobody holds, or loops
+  back on itself, each with the path (`waits on #b, which nobody has held for 30 h (via #c)`).
+  A held task is not nobody's, nor one an agent has claimed, nor one under an hour old (that is
+  the pool `hub now --for` hands out); none of them ends a chain. Over MCP: `unowned` and `deadlocks` in
+  `hub_brief` and `hub_agenda`. The head of the project (`hub sense <head>`) is woken for each
+  case in its project once, and reminded every six hours while it stands (`nobodyMin`,
+  `nobodyRepeatS` in `sense.json`). Assigning work is the head's job, so the case is never
+  escalated to the fleet. A wait said only in a blocked report's prose is not read: put it in
+  `depends_on`.
+- **Links in data, not prose.** `hub task add` and `hub_task_add`/`hub_task_update` warn
+  when the text names an open task and `depends_on` is empty: a wait said in prose ("after the
+  merge of X") is seen by no list, plan or sensor. They also warn when a task depends on an
+  epic (tag `epic`) without being one: the epic waits on its parts, so the link belongs on the
+  epic. The write goes through either way. `hub task get` and `hub_task_get` show what holds a
+  task (`holding`): each open task it waits on, who has it or `NOBODY`, and when it last moved
+  (its newest attempt or journal line naming it).
+- **A change handed in twice is said to be a copy.** One edit lay in a canon under six branch
+  names, and another under two, all already in its base; each came to the head for acceptance.
+  `hub sense <head>` now reads the patch-id of each task branch against the base. Of branches
+  with one patch-id the first by name is kept and the others are duplicates of it; a branch
+  whose every commit is already in the base under another sha is a duplicate of the base.
+  A duplicate is not raised for acceptance: the head is told once that it is a copy, with the
+  command to delete it. Patch-ids are kept per branch and base sha, so a pass reads only what
+  moved.
+- **A role that reads but never acks is said to be one.** A send reported over six hundred
+  unacked blocks for a role whose read mark was current on every shard: it read everything and
+  had never acked once, so the count was its whole history, not a stopped consumer. `hub queue
+  send` and `hub_queue_send` now say so (`ackNote`) when the role has never acked a block.
+
 ## 0.9.81 — 2026-11-20
 
 - **`hub now --for <role>`: the first ready task this role may take.** A worker with

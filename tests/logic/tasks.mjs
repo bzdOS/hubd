@@ -700,4 +700,69 @@ ok(core.loadTasks().tasks.length === 1 && JSON.parse(fs.readFileSync(path.join(F
   ok(String(again.task.id) === 'a' && CASES[0].ready.map(t => t.id).join() === 'e,a,b', 'pick for a role: the same inputs give the same task, and the input list is not reordered');
 }
 
+// ── nobody's work: a high task with no assignee, a wait that ends on nobody or in a loop ──
+{
+  const NOW = Date.parse('2026-05-01T12:00:00Z');
+  const ago = (min) => new Date(NOW - min * 60000).toISOString().slice(0, 16).replace('T', ' ');
+  const T = (id, o = {}) => ({ id, project: 'p', status: 'open', importance: 'normal', assignee: null, created: ago(600), depends_on: [], tags: [], text: 'task ' + id, ...o });
+  const W = (tasks, o) => core.nobodysWork(tasks, { nowMs: NOW, ...o });
+  const u = W([T('h1', { importance: 'high' }), T('h2', { importance: 'high', assignee: 'w' }), T('h3', { importance: 'high', tags: ['hold'] }),
+    T('h4', { importance: 'high', created: ago(30) }), T('n1'), T('h5', { importance: 'high', status: 'done' })]).unowned;
+  ok(u.map(t => t.id).join() === 'h1' && u[0].ageHours === 10,
+    'nobody holds: a high task with no assignee over an hour old is listed; one with an assignee, one held, one younger than an hour, a normal one and a closed one are not');
+  ok(W([T('h1', { importance: 'high', created: ago(30) })], { unownedMin: 20 }).unowned.length === 1, 'nobody holds: the hour is a parameter');
+
+  const d1 = W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b')]).deadlocks;
+  ok(d1.length === 1 && d1[0].id === 'a' && d1[0].kind === 'nobody' && /waits on #b, which nobody has held for 10 h/.test(d1[0].why),
+    'deadlock: A waits on B and B has no assignee');
+  ok(W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { created: ago(30) })]).deadlocks.length === 0
+    && W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { created: undefined })]).deadlocks.length === 0,
+    'deadlock: a wait on a task just made (or of unknown age) is the pool, not a deadlock yet');
+  ok(W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { importance: 'high' })], { claimed: new Set(['b']) }).deadlocks.length === 0
+    && W([T('b', { importance: 'high' })], { claimed: new Set(['b']) }).unowned.length === 0,
+    'deadlock: a task an agent has claimed is held, though no one is assigned');
+  ok(W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { assignee: 'y' })]).deadlocks.length === 0,
+    'deadlock: B with an assignee is a wait, not a deadlock');
+  const d2 = W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { assignee: 'y', depends_on: ['c'] }), T('c')]).deadlocks;
+  ok(d2.map(t => t.id).join() === 'a,b' && /via #b/.test(d2[0].why), 'deadlock: a chain that ends on nobody is a deadlock all along it, and the path is named');
+  const d3 = W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { assignee: 'y', depends_on: ['a'] })]).deadlocks;
+  ok(d3.length === 2 && d3.every(t => t.kind === 'cycle'), 'deadlock: two tasks that wait on each other are a loop');
+  ok(W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { tags: ['hold'] })]).deadlocks.length === 0
+    && W([T('a', { assignee: 'x', depends_on: ['b'] }), T('b', { status: 'done' })]).deadlocks.length === 0,
+    'deadlock: a wait on a held task or on a closed one is not a deadlock');
+  ok(W([T('a', { depends_on: ['b'] }), T('b'), T('q', { project: 'other', depends_on: ['b'] })], { project: new Set(['p']) }).deadlocks.map(t => t.id).join() === 'a',
+    'deadlock: narrowed to a project, a task of another project waiting on it is not listed');
+  // a wide diamond: every path is walked once, not once per route
+  const wide = [T('top', { assignee: 'x', depends_on: Array.from({ length: 30 }, (_, i) => 'm' + i) })];
+  for (let i = 0; i < 30; i++) wide.push(T('m' + i, { assignee: 'x', depends_on: Array.from({ length: 30 }, (_, j) => 'k' + j) }));
+  for (let j = 0; j < 30; j++) wide.push(T('k' + j, { assignee: 'x', depends_on: ['z'] }));
+  wide.push(T('z', { assignee: 'x' }));
+  const t0 = Date.now(); const dw = W(wide).deadlocks;
+  ok(dw.length === 0 && Date.now() - t0 < 5000, 'deadlock: a wide graph with no dead end is walked fast and finds nothing');
+}
+
+// ── links in data, not prose: a named wait, a part on its epic, what holds a task ──
+{
+  const add = (o) => core.runTaskAdd({ project: 'linkp', importance: 'normal', by: 'tester', ...o });
+  const epic = add({ text: 'the release', tags: ['epic'] }).task;
+  const part = add({ text: 'one part' }).task;
+  const said = add({ text: `goes after the merge of #${part.id}` });
+  ok((said.warnings || []).some(w => w.includes('#' + part.id) && /depends_on is empty/.test(w)),
+    'links: a task whose text names an open task with no depends_on is warned, and the write goes through');
+  ok(!(add({ text: `goes after #${part.id}`, depends_on: [String(part.id)] }).warnings || []).some(w => /depends_on is empty/.test(w)),
+    'links: with depends_on set, naming the task in the text is not warned');
+  const back = add({ text: 'a part that waits on its epic', depends_on: [String(epic.id)] });
+  ok((back.warnings || []).some(w => w.startsWith('#' + epic.id + ' is an epic')), 'links: a part that depends on its epic is warned: the link belongs on the epic');
+  ok(!(add({ text: 'a sub-epic', tags: ['epic'], depends_on: [String(epic.id)] }).warnings || []).length, 'links: an epic depending on an epic is not warned');
+  const up = core.runTaskUpdate({ id: epic.id, depends_on: [String(part.id), String(said.task.id)], by: 'tester' });
+  ok(!(up.warnings || []).length, 'links: the epic waiting on its parts is the right way and says nothing');
+  core.runTaskUpdate({ id: part.id, assignee: 'w1', by: 'tester' });
+  const g = core.runTaskGet({ id: epic.id });
+  const h = Object.fromEntries((g.holding || []).map(x => [String(x.id), x]));
+  ok(g.holding && g.holding.length === 2 && h[part.id].assignee === 'w1' && h[said.task.id].assignee === null && h[part.id].lastMoved,
+    'links: task get shows what holds an epic: each open task it waits on, who has it (or nobody) and when it last moved');
+  core.runTaskUpdate({ id: part.id, status: 'done', by: 'tester' });
+  ok(core.runTaskGet({ id: epic.id }).holding.length === 1, 'links: a closed part no longer holds it');
+}
+
 done();

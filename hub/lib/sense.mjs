@@ -40,7 +40,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   HUB, JOURNAL_NODE, now, parseTs, slugify, loadTasks, journalSinceMs, headConf, runPresence,
-  runReport, atomicWrite, withLock, parseVerdict, shareMode, readJson,
+  runReport, atomicWrite, withLock, parseVerdict, shareMode, readJson, nobodysWork, claimedTaskIds,
 } from './core.mjs';
 import { queueSend, recentBlocks, resolveQueueRoot } from './queue.mjs';
 import { splitReflect } from './reflect.mjs';
@@ -56,6 +56,8 @@ export const SENSE_DEFAULTS = {
   queueTwinS: 3600,     // a report is matched against the worker's messages to the head within this window only
   twinPrefix: 80,       // this much of a report's first line must appear in such a message to be the same report
   budgetPerH: 4,        // non-critical wakes per hour; critical ones always go
+  nobodyMin: 60,        // an open high task of the head's project with no assignee this long: the head is told
+  nobodyRepeatS: 21600, // ...and reminded no more often than this; it is the head's to assign, never escalated
   idleWaitMin: 15,      // waiting this long (sensor clock, across loop restarts): idle
   idleCritMin: 30,      // ...and this long: critical, the budget does not hold it back
   quietJournal: [],     // regexes: a worker's journal line matching one is "still waiting", not a report
@@ -187,7 +189,7 @@ export function workerState(p, nowS, cfg = SENSE_DEFAULTS) {
  * The events for one sensor pass. Pure over its inputs; mutates `st`.
  * @returns {{ev: Array<[string, boolean, string]>, esc: string[]}}  events (key, critical, text), escalations
  */
-export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, checker, queued = {}, cfg = SENSE_DEFAULTS, decided = new Set()) {
+export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, checker, queued = {}, cfg = SENSE_DEFAULTS, decided = new Set(), claimed = new Set(), dupes = {}) {
   const ev = [], esc = [];
   const pend = st.pending || (st.pending = {});
   const live = new Set();
@@ -202,6 +204,17 @@ export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, check
     if (nowS - p.last >= cfg.repeatS) {
       p.last = nowS;
       ev.push([key, crit, `${text} (reminder: standing for ${Math.floor((nowS - p.first) / 60)} min)`]);
+    }
+  };
+  /* A case that is the head's own to settle: told once, reminded every nobodyRepeatS, never
+   * escalated to the fleet. */
+  const quiet = (key, text) => {
+    live.add(key);
+    const p = pend[key];
+    if (!p) { pend[key] = { first: nowS, last: nowS, esc: 1 }; ev.push([key, false, text]); return; }
+    if (nowS - p.last >= (cfg.nobodyRepeatS ?? SENSE_DEFAULTS.nobodyRepeatS)) {
+      p.last = nowS;
+      ev.push([key, false, `${text} (reminder: standing for ${Math.floor((nowS - p.first) / 3600)} h)`]);
     }
   };
   const openOf = (w) => tasks.filter(t => t.assignee === w && OPEN_STATUSES.has(t.status)).map(t => String(t.id)).sort();
@@ -268,10 +281,25 @@ export function collectEvents(conf, st, nowS, pres, tasks, ents, branches, check
     }
   }
 
+  /* Work in the head's project that nobody holds: a high task with no assignee, a task waiting on
+   * such a one or in a loop. Assigning is the head's job, so it is the head who is told — once, and
+   * again every nobodyRepeatS while it stands; the fleet is not escalated to over it. */
+  if (conf.project) {
+    const nb = nobodysWork(tasks, { nowMs: nowS * 1000, unownedMin: cfg.nobodyMin ?? SENSE_DEFAULTS.nobodyMin, project: new Set([slugify(conf.project)]), claimed });
+    for (const t of nb.unowned) quiet(`nobody:${t.id}`, `NOBODY HOLDS: #${t.id} (high, no assignee for ${t.ageHours} h): ${t.text}. Give it to a worker, or hold it.`);
+    for (const t of nb.deadlocks) quiet(`deadlock:${t.id}`, `DEADLOCK: #${t.id}${t.assignee ? ' @' + t.assignee : ''} ${t.why}. Give the task it waits on to someone, or cut the link.`);
+  }
+
   const verd = st.verdicts || (st.verdicts = {});
   if (branches) {
     for (const br of Object.keys(branches).sort()) {
       const sha = branches[br];
+      const dup = dupes[br];
+      if (dup) {
+        const of = dup.base ? `already in ${conf.base} under other commits` : `the same change as ${dup.of}`;
+        quiet(`dup:${br}:${sha}`, `DUPLICATE BRANCH: ${br} (${sha.slice(0, 10)}) is ${of}. Nothing to accept; delete it: git push origin --delete ${br}`);
+        continue;
+      }
       // decided at this sha: by this sensor, or by anyone whose verdict is in the journal — so a
       // fresh sensor state (a new node, a parallel run) does not re-raise what was already judged
       if ((verd[br] && verd[br].sha === sha) || decided.has(`${br}@${sha}`) || decided.has(`@${sha}`)) continue;
@@ -300,6 +328,43 @@ export function remoteBranches(repo) {
     if (sha && ref && ref.startsWith('refs/heads/')) out[ref.slice('refs/heads/'.length)] = sha;
   }
   return out;
+}
+
+/** Which task branches are copies. `ids` maps a branch to the patch-id of its whole change against
+ *  the base, or null when it could not be read; `inBase` holds the branches whose every commit is
+ *  already in the base under another sha (a rebase or cherry-pick that was merged). A copy of the
+ *  base is a duplicate of it; of branches with one patch-id the first by name is kept and the
+ *  rest are its duplicates. Pure. → { branch: { of } | { base: true } } */
+export function duplicateBranches(ids, inBase = new Set()) {
+  const out = {}, first = new Map();
+  for (const br of [...new Set([...Object.keys(ids), ...inBase])].sort()) {
+    if (inBase.has(br)) { out[br] = { base: true }; continue; }
+    const id = ids[br];
+    if (!id) continue;
+    if (first.has(id)) out[br] = { of: first.get(id) };
+    else first.set(id, br);
+  }
+  return out;
+}
+
+/** Patch-ids of the task branches in the head's review clone (fetched by the caller). One edit
+ *  handed in again under a new name is the same patch-id: a canon once held one change under
+ *  six names, all already in its base. → { ids, inBase } */
+export function branchPatchIds(conf, names) {
+  const rv = conf.review, bb = `origin/${conf.base}`, ids = {}, inBase = new Set();
+  if (!rv || !fs.existsSync(rv)) return { ids, inBase };
+  for (const br of names) {
+    const b = `origin/${br}`;
+    if (git(['merge-base', '--is-ancestor', b, bb], rv).rc === 0) continue;   // merged as is: not a copy
+    const ch = git(['cherry', bb, b], rv).out.split('\n').filter(Boolean);
+    if (ch.length && ch.every(l => l.startsWith('-'))) { inBase.add(br); continue; }
+    const diff = git(['diff', `${bb}...${b}`], rv, 300000);
+    if (diff.rc !== 0 || !diff.out) { ids[br] = null; continue; }
+    try {
+      ids[br] = execFileSync('git', ['patch-id', '--stable'], { cwd: rv, input: diff.out, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split(/\s+/)[0] || null;
+    } catch { ids[br] = null; }
+  }
+  return { ids, inBase };
 }
 
 /** Acceptance checklist → [ok: true | false | null (already in the base), text]. */
@@ -420,6 +485,24 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
   const branches = conf.repo ? remoteBranches(conf.repo) : null;
   let fetched = false;
   const checker = (br) => { const r = checkBranch(conf, br, { fetch: !fetched, cfg }); fetched = true; return r; };
+  // patch-ids are kept per branch@sha and base@sha: a pass reads only what moved since the last one
+  let dupes = {};
+  if (branches && Object.keys(branches).length && conf.review && fs.existsSync(conf.review)) {
+    const bsha = (git(['ls-remote', conf.repo, `refs/heads/${conf.base}`], undefined, 60000).out.split('\t')[0] || '').trim();
+    const known = st.patch && st.patch_base === bsha ? st.patch : {};
+    st.patch_base = bsha;
+    const fresh = Object.keys(branches).filter(br => !known[br] || known[br].sha !== branches[br]);
+    if (fresh.length) {
+      git(['fetch', '-q', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'], conf.review, 300000);
+      fetched = true;
+      const { ids, inBase } = branchPatchIds(conf, fresh);
+      for (const br of fresh) known[br] = { sha: branches[br], id: ids[br] || null, base: inBase.has(br) };
+    }
+    for (const br of Object.keys(known)) if (!(br in branches)) delete known[br];
+    st.patch = known;
+    dupes = duplicateBranches(Object.fromEntries(Object.entries(known).map(([b, k]) => [b, k.id])),
+      new Set(Object.keys(known).filter(b => known[b].base)));
+  }
   // what the pass may move and a held-back wake has to put back: the journal marks AND the
   // fingerprints of the mark's minute — restoring only the marks replayed that minute's reports
   const jmark = { ...(st.journal || {}) };
@@ -430,7 +513,7 @@ export function runSenseEvents(head, { nowS = Date.now() / 1000 } = {}) {
     const v = e.kind === 'decision' ? parseVerdict(e.text) : null;
     if (v && v.sha.length === 40) { decided.add(`@${v.sha}`); if (v.branch) decided.add(`${v.branch}@${v.sha}`); }
   }
-  let { ev, esc } = collectEvents(conf, st, nowS, pres, loadTasks().tasks, ents.filter(e => epoch(e.ts) >= nowS - 72 * 3600), branches, checker, queuedFrom(conf.head), cfg, decided);
+  let { ev, esc } = collectEvents(conf, st, nowS, pres, loadTasks().tasks, ents.filter(e => epoch(e.ts) >= nowS - 72 * 3600), branches, checker, queuedFrom(conf.head), cfg, decided, claimedTaskIds(), dupes);
   const unwritten = esc.filter(e => !escalate(conf.head, e, nowS));
   const crit = ev.some(([, c]) => c);
   if (ev.length && !budgetOk(st, nowS, crit, cfg)) {

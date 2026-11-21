@@ -4061,6 +4061,28 @@ function dependsOnGuard(db, taskId, deps) {
 }
 
 
+/* Links said in prose and links that point the wrong way. Warnings only: the write goes through.
+ *  - the text names an open task and depends_on is empty: if this task waits on it, the hub cannot
+ *    know that from prose ("after the merge of X"), and nothing that reads the graph sees the wait;
+ *  - a task depends on an epic (tag epic) while not being one: the epic waits on its parts, so the
+ *    link belongs on the epic. An epic once held no links at all while a part waited on the epic. */
+const EPIC_TAG = 'epic';
+const isEpic = (t) => (Array.isArray(t && t.tags) ? t.tags : []).some(x => String(x).toLowerCase().replace(/^#/, '') === EPIC_TAG);
+function linkHints(db, { id, text, deps, tags }) {
+  const out = [];
+  const byId = new Map(db.tasks.map(t => [String(t.id), t]));
+  const list = (Array.isArray(deps) ? deps : []).map(String);
+  if (!list.length && text) {
+    const named = [...new Set((String(text).match(/#?\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*-\d+\b/gi) || []).map(x => x.replace(/^#/, '')))]
+      .filter(x => x !== String(id) && byId.has(x) && byId.get(x).status === 'open');
+    if (named.length) out.push(`the text names open task(s) ${named.map(x => '#' + x).join(', ')} and depends_on is empty — if this task waits on one, put it in depends_on: a wait said in prose is seen by no list, plan or sensor`);
+  }
+  if (!isEpic({ tags })) {
+    for (const d of list) if (isEpic(byId.get(d))) out.push(`#${d} is an epic: the epic waits on its parts, not a part on the epic — put #${id || 'this task'} in #${d}'s depends_on instead`);
+  }
+  return out;
+}
+
 export function runTaskAdd(a) {
   const author = requireAuthor(a.by, 'by');
   requireTaskText(a.text);
@@ -4071,6 +4093,7 @@ export function runTaskAdd(a) {
     const norm = normalizeCat(a.cat, a.tags);
     const deps = Array.isArray(a.depends_on) ? a.depends_on : [];
     const guard = dependsOnGuard(db, id, deps);
+    const hints = linkHints(db, { id, text: a.text, deps, tags: norm.tags });
     const t = {
       // New work lands on the canonical slug, so an alias never grows a fresh backlog of its own.
       id, project: canonProject(a.project), text: a.text,
@@ -4085,7 +4108,8 @@ export function runTaskAdd(a) {
     rebuildTaskCache();
     journalAppend({ ts: now(), project: t.project, agent: t.by, kind: 'task', text: '+ task #' + id + ': ' + t.text });
     const out = { ok: true, task: t };
-    if (guard && guard.warnings && guard.warnings.length) out.warnings = guard.warnings;
+    const warns = [...((guard && guard.warnings) || []), ...hints];
+    if (warns.length) out.warnings = warns;
     return out;
   });
 }
@@ -4260,8 +4284,22 @@ export function runTaskGet(a) {
     blocks: all.filter(x => (Array.isArray(x.depends_on) ? x.depends_on : []).map(String).includes(String(t.id))).map(brief),
     ...(attempts.length ? { standing: attemptStanding(attempts), attempts, attemptsNote: ATTEMPTS_NOTE } : {}),
   };
+  /* What holds it: each open task it waits on, who has it and when it last moved. For an epic this
+   * is the answer to "why is it not done"; for any task it shows a wait on nobody at a glance. */
+  const openDeps = all.filter(x => deps.includes(String(x.id)) && x.status === 'open');
+  if (openDeps.length) out.holding = openDeps.map(x => ({ ...brief(x), assignee: x.assignee || null, lastMoved: lastMoved(x, db) }));
   if (a.dossier) out.dossier = taskDossier(t, db);
   return out;
+}
+/* When a task last moved: its newest attempt, or the newest journal line that names it, in the last
+ * 30 days; else its creation. Read only for the few tasks a task get shows. */
+function lastMoved(t, db) {
+  const id = String(t.id);
+  let at = t.created || null;
+  for (const x of (db.attempts || {})[t.id] || []) if (x.ts && (!at || String(x.ts) > at)) at = String(x.ts);
+  const re = new RegExp('#' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![0-9])');
+  for (const e of journalSince(24 * 30)) if (e.ts && re.test(e.text || '') && (!at || e.ts > at)) at = e.ts;
+  return at;
 }
 
 /* ── Attempts: what was tried on a task, for whoever tries next ──
@@ -4478,6 +4516,11 @@ export function runTaskUpdate(a) {
     if (Array.isArray(a.resources)) patch.resources = a.resources.map(slugify);
     let depGuard = { warnings: [] };
     if (Array.isArray(a.depends_on)) depGuard = dependsOnGuard(db, t.id, a.depends_on);
+    // said again only when this write touches the text, the links or the tags: an edit of the date says nothing new
+    if (a.text != null || Array.isArray(a.depends_on) || a.tags != null) {
+      const hints = linkHints(db, { id: t.id, text: patch.text ?? t.text, deps: patch.depends_on ?? t.depends_on, tags: patch.tags ?? t.tags });
+      if (hints.length) depGuard = { ...depGuard, warnings: [...(depGuard.warnings || []), ...hints] };
+    }
     /* Closing a closed task is a no-op, not a second closing. `DONE:` in a report closes
      * ids without asking, and two agents finishing the same handoff both report it (task
      * #189 was closed twice, 34 minutes apart, by two sessions) — which used to append a
@@ -4632,6 +4675,8 @@ export function runBrief(a = {}) {
   const claimsDb = loadClaims();
   return {
     tasksOpen, journalRecent, staleCards, staleDigests, activeClaims: activeClaims(claimsDb.claims),
+    // work nobody holds, apart from the list where it sat unseen: see nobodysWork
+    ...(({ unowned, deadlocks }) => ({ unowned, deadlocks }))(nobodysWork(db.tasks, { nowMs, claimed: claimedTaskIds() })),
     // The audit rides here rather than waiting to be called — see runReview. `queues` arrives from
     // the caller (index.mjs/cli.mjs already compute the rows for the queue section).
     review: runReview({ queues: a.queues, limit: a.reviewLimit, local: a.local }),
@@ -4974,6 +5019,62 @@ export function eligibleOpen(tasks, { project, assignee } = {}) {
   return { list, held, blocked: open.filter(blocked), openIds };
 }
 
+/** Ids of the tasks an agent has started: a live claim on task:<id>. */
+export function claimedTaskIds() {
+  const out = new Set();
+  try { for (const c of activeClaims(loadClaims().claims)) if (String(c.area || '').startsWith('task:')) out.add(String(c.area).slice(5)); } catch {}
+  return out;
+}
+/* Work nobody holds. Two signals, both read from the task graph alone:
+ *  unowned   — an open high task with no assignee, older than `unownedMin` minutes, not held.
+ *              A tag blocker once sat four days without an assignee: every list showed it, none
+ *              said that it was nobody's.
+ *  deadlocks — an open task that waits (depends_on) on a chain that ends in an open task nobody
+ *              holds, or that loops back on itself. The waiting side looked busy, the side it waited
+ *              on had no one, and nothing woke anyone for three days.
+ * A held task is not nobody's (the owner froze it), nor one an agent has started (a live claim on
+ * task:<id>, ids in `claimed`), nor one younger than `unownedMin`: fresh work with no assignee is
+ * the pool `hub now --for` hands out, not a stall. Neither ends a chain as a deadlock.
+ * Pure over its inputs; brief, agenda and the head's sensor all read it. */
+export function nobodysWork(tasks, { nowMs = Date.now(), unownedMin = 60, project, claimed = new Set() } = {}) {
+  const open = tasks.filter(t => t.status === 'open');
+  const byId = new Map(open.map(t => [String(t.id), t]));
+  const inProject = (t) => !project || project.has(t.project);
+  const ageMin = (t) => { const c = t.created ? parseTs(t.created).getTime() : NaN; return Number.isFinite(c) ? (nowMs - c) / 60000 : null; };
+  const nobodys = (t) => { const age = ageMin(t); return !t.assignee && !isHeldTask(t) && !claimed.has(String(t.id)) && age != null && age >= unownedMin; };
+  const short = (t) => ({ id: t.id, project: t.project, importance: t.importance || 'normal', assignee: t.assignee || null, text: (t.text || '').slice(0, 100) });
+  const unowned = open.filter(t => inProject(t) && t.importance === 'high' && nobodys(t))
+    .map(t => ({ t, age: ageMin(t) }))
+    .sort((x, y) => y.age - x.age)
+    .map(x => ({ ...short(x.t), ageHours: Math.floor(x.age / 60) }));
+  const deps = (t) => (Array.isArray(t.depends_on) ? t.depends_on : []).map(String).filter(d => byId.has(d));
+  const deadlocks = [];
+  for (const t of open) {
+    if (!inProject(t) || !deps(t).length) continue;
+    // walk every chain out of t; the first dead end or loop is the reason
+    const seen = new Set([String(t.id)]), clean = new Set();
+    let found = null;
+    const walk = (id, chain) => {
+      if (found || clean.has(id)) return;
+      const d = byId.get(id);
+      if (seen.has(id)) { found = { kind: 'cycle', chain: [...chain, id] }; return; }
+      if (nobodys(d)) { found = { kind: 'nobody', chain: [...chain, id] }; return; }
+      seen.add(id);
+      for (const n of deps(d)) walk(n, [...chain, id]);
+      seen.delete(id);
+      if (!found) clean.add(id);   // explored to the end, nothing there: a second path need not go again
+    };
+    for (const n of deps(t)) walk(n, [String(t.id)]);
+    if (!found) continue;
+    const end = found.chain[found.chain.length - 1];
+    deadlocks.push({ ...short(t), kind: found.kind, chain: found.chain,
+      why: found.kind === 'cycle'
+        ? `waits in a loop: ${found.chain.map(x => '#' + x).join(' → ')}`
+        : `waits on #${end}, which nobody has held for ${Math.floor(ageMin(byId.get(end)) / 60)} h${found.chain.length > 2 ? ` (via ${found.chain.slice(1, -1).map(x => '#' + x).join(' → ')})` : ''}` });
+  }
+  return { unowned, deadlocks, unownedMin };
+}
+
 /* The one "what first" order — due within three days, then importance, then oldest — shared by
  * hub_next, hub_agenda, hub_brief and the kanban. It was written out three times, and a fix to one
  * copy (a task with no `created` sorting unpredictably) had not reached the other two. */
@@ -5146,7 +5247,9 @@ export function runAgenda(a = {}) {
     assignee: t.assignee || null, text: (t.text || '').slice(0, 100),
     overdue: !!(t.deadline && t.deadline < today) });
   const isOwner = isOwnerTask(new Set(ownerRoles()));
+  const nobody = nobodysWork(loadTasks().tasks, { project: a.project ? projectSlugSet(a.project) : undefined, claimed: claimedTaskIds() });
   return {
+    unowned: nobody.unowned, deadlocks: nobody.deadlocks,
     overdue: sorted.filter(t => t.deadline && t.deadline < today).map(short),
     dueSoon: sorted.filter(t => t.deadline && t.deadline >= today && t.deadline <= today3).map(short),
     agentReady: sorted.filter(t => !isOwner(t)).map(short),
@@ -5154,7 +5257,8 @@ export function runAgenda(a = {}) {
     held: held.map(short),
     blocked: blocked.map(t => ({ ...short(t), waitingOn: (t.depends_on || []).map(String) })),
     counts: { eligible: list.length, held: held.length, blocked: blocked.length,
-      agentReady: sorted.filter(t => !isOwner(t)).length, ownerButtons: sorted.filter(isOwner).length },
+      agentReady: sorted.filter(t => !isOwner(t)).length, ownerButtons: sorted.filter(isOwner).length,
+      unowned: nobody.unowned.length, deadlocks: nobody.deadlocks.length },
     generated: now(),
   };
 }

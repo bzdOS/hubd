@@ -112,7 +112,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'plain-text substring, case-insensitive' } }, required: ['query'] } },
 
   { name: 'hub_task_add',
-    description: 'Add a task to the shared cross-project backlog.',
+    description: 'Add a task to the shared cross-project backlog. A wait goes in depends_on, not in the text: `warnings` says so when the text names an open task and depends_on is empty, and when a part depends on its epic (tag epic) instead of the epic on it.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'the project slug, as hub_status lists it' },
       text: { type: 'string', description: 'what the task is, in a line or two' },
@@ -128,7 +128,7 @@ const TOOLS = [
     }, required: ['project', 'text', 'by'] } },
 
   { name: 'hub_task_get',
-    description: 'ONE task by id, plus what it is blocked by and what it blocks, and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. When anyone has recorded an attempt on it (hub_attempt), also the thread: `standing` first (lenses already dead and why, spaces covered, leads waiting for someone, claims and where their review stands), then the attempts themselves, newest last. Read the standing before you start on a task: repeating a dead lens without a new argument wastes the run. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.',
+    description: 'ONE task by id, plus what it is blocked by and what it blocks, `holding` (each open task it waits on, who has it or null, and when it last moved: why an epic is not done), and, once the hub holds sessions (hub sessions ingest), `cost`: the tokens its attempts spent, at list price, and the verdict on them. When anyone has recorded an attempt on it (hub_attempt), also the thread: `standing` first (lenses already dead and why, spaces covered, leads waiting for someone, claims and where their review stands), then the attempts themselves, newest last. Read the standing before you start on a task: repeating a dead lens without a new argument wastes the run. Use this when you know the id — do NOT go guessing project × status combinations with hub_task_list. Know a keyword but not the id? hub_search first.',
     inputSchema: { type: 'object', properties: {
       id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' },
     }, required: ['id'] } },
@@ -199,7 +199,7 @@ const TOOLS = [
     } } },
 
   { name: 'hub_agenda',
-    description: 'The day split by WHO CAN ACT: agent work ready now, the owner\'s buttons (owner_kind human, or assigned to a role declared in HUB/owner-roles.json), what is blocked and on what, overdue and due-soon. Different question from hub_brief (everything that is going on) and hub_inbox (what needs a decision): this one answers "what can I actually start", which a mixed list hides.',
+    description: 'The day split by WHO CAN ACT: agent work ready now, the owner\'s buttons (owner_kind human, or assigned to a role declared in HUB/owner-roles.json), what is blocked and on what, overdue and due-soon, and the work nobody holds: unowned (an open high task with no assignee for over an hour) and deadlocks (a task waiting on a chain that ends on a task nobody holds, or loops). Different question from hub_brief (everything that is going on) and hub_inbox (what needs a decision): this one answers "what can I actually start", which a mixed list hides.',
     inputSchema: { type: 'object', properties: { project: { type: 'string' } } } },
 
   { name: 'hub_recall',
@@ -268,7 +268,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} } },
 
   { name: 'hub_brief',
-    description: 'Morning brief across all projects: open tasks (deadlines first), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json). Two things wait on the owner and they are NOT the same: buttonItems = each unanswered package in an owner queue (age, sender, subject); ownerWaiting = open tasks only the owner can move, with age and how far past deadline — invisible in every "what can I start" list because the answer there is "not this". `review` carries the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces with the date that rule was written: the audit rides on this call instead of waiting to be remembered. It reports only — nothing is filed without an explicit hub_audit({apply:true}) carrying somebody\'s name.',
+    description: 'Morning brief across all projects: open tasks (deadlines first), unowned (open high tasks with no assignee for over an hour) and deadlocks (tasks waiting on nobody, or in a loop), journal since N hours, stale cards, cards whose digest trails their own journal (staleDigests — the misleading kind of stale), active claims, per-role queue depth with last-seen agent (broadcast roles are flagged fanout instead of a depth — their cursors are per-reader), and a buttons rollup ("N buttons waiting, oldest X days" — pending items in a human-owner queue, see HUB/owner-roles.json). Two things wait on the owner and they are NOT the same: buttonItems = each unanswered package in an owner queue (age, sender, subject); ownerWaiting = open tasks only the owner can move, with age and how far past deadline — invisible in every "what can I start" list because the answer there is "not this". `review` carries the top few hub_lint + hub_audit findings, one per kind, each quoting the rule it enforces with the date that rule was written: the audit rides on this call instead of waiting to be remembered. It reports only — nothing is filed without an explicit hub_audit({apply:true}) carrying somebody\'s name.',
     inputSchema: { type: 'object', properties: {
       hours: { type: 'integer', description: 'journal window, default 48' },
       staleDays: { type: 'integer', description: 'card considered stale after N days, default 7' },

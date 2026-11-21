@@ -224,6 +224,15 @@ function formatBrief(data, hours) {
       lines.push(` ${mark} #${t.id} [${t.project || '?'}] ${txt}${dl}${ass}`);
     }
   }
+  // nobody's work, said apart: in TASKS it sits among the rest and reads as someone's
+  if (data.unowned && data.unowned.length) {
+    lines.push(`NOBODY HOLDS (${data.unowned.length} high, no assignee):`);
+    for (const t of data.unowned) lines.push(`  #${t.id} [${t.project || '?'}] ${t.ageHours}h  ${(t.text || '').slice(0, 60)}`);
+  }
+  if (data.deadlocks && data.deadlocks.length) {
+    lines.push(`DEADLOCKED (${data.deadlocks.length}):`);
+    for (const t of data.deadlocks) lines.push(`  #${t.id} [${t.project || '?'}]${t.assignee ? ' @' + t.assignee : ''} ${t.why}`);
+  }
   lines.push(`JOURNAL (${hours}h):`);
   if (!data.journalRecent.length) {
     lines.push('  no entries');
@@ -836,6 +845,7 @@ command('task', () => {
     console.log(`Task #${t.task.id} added: ${t.task.text}` + (resources.length ? `  [${resources.map(r => '⛬' + r).join(' ')}]` : '')
       + ((t.task.tags || []).length ? `  #${t.task.tags.join(' #')}` : '')
       + (moved ? `  (cat "${cat}" is not one of ${TASK_CATS.join('/')} — kept as a tag)` : ''));
+    for (const w of t.warnings || []) console.log('  warning: ' + w);
   } else if (sub === 'done') {
     // bare number or node-scoped string (task #194) — runTaskUpdate compares by String();
     // read past flags in any order, so `hub task done --by x 42` closes 42, not "--by".
@@ -873,7 +883,11 @@ command('task', () => {
     if ((t.resources || []).length) console.log('resources: ' + t.resources.map(x => '⛬' + x).join(' '));
     if (t.note) console.log('note: ' + t.note);
     console.log(`created ${t.created || '?'} by ${t.by || '?'}${t.done ? ' · closed ' + t.done : ''}`);
-    for (const [label, rows] of [['blocked by', r.blockedBy], ['blocks', r.blocks]]) {
+    if (r.holding && r.holding.length) {
+      console.log(`held by (${r.holding.length} open):`);
+      for (const x of r.holding) console.log(`  #${x.id} ${x.assignee ? '@' + x.assignee : 'NOBODY'} · last moved ${x.lastMoved || 'never'} · ${x.text}`);
+    }
+    for (const [label, rows] of [['blocked by', r.holding && r.holding.length ? r.blockedBy.filter(x => x.status !== 'open') : r.blockedBy], ['blocks', r.blocks]]) {
       if (rows.length) console.log(`${label}: ` + rows.map(x => `#${x.id} (${x.status})`).join(', '));
     }
     let c = null; try { c = taskCost(t.id); } catch {}
@@ -1491,6 +1505,8 @@ command('agenda', () => {
   const P = (title, rows, fmt) => { if (rows.length) { console.log(`\n${title} (${rows.length}):`); for (const x of rows) console.log('  ' + fmt(x)); } };
   console.log(`\u2500\u2500 AGENDA${proj ? ' \u00b7 ' + proj : ''} \u00b7 ${r.generated} \u2500\u2500  ready ${r.counts.eligible} \u00b7 held ${r.counts.held} \u00b7 blocked ${r.counts.blocked}`);
   const line = (x) => `#${x.id} [${x.project}]${x.deadline ? ' \u23f0' + x.deadline : ''}${x.assignee ? ' @' + x.assignee : ''} ${x.text}`;
+  P('NOBODY HOLDS (high, no assignee for over an hour)', r.unowned, x => `#${x.id} [${x.project}] ${x.ageHours}h ${x.text}`);
+  P('DEADLOCKED (waits on nobody, or in a loop)', r.deadlocks, x => `#${x.id} [${x.project}]${x.assignee ? ' @' + x.assignee : ''} ${x.why}`);
   P('OVERDUE', r.overdue, line);
   P('DUE SOON', r.dueSoon, line);
   P('OWNER BUTTONS (only a human can press)', r.ownerButtons, line);
@@ -2097,6 +2113,7 @@ command('queue', () => {
     }
     console.log(`→ ${path.basename(sent.file)} delivered` + (typeof taskRef === 'string' ? `  (about task #${sent.task}${sent.taskAsGiven ? ', given as ' + sent.taskAsGiven : ''})` : ''));
     if (sent.taskKnown === false) console.error(`  warning: no task #${taskRef} in this hub — the reference was still recorded, check the id`);
+    if (sent.ackNote) console.log('  note: ' + sent.ackNote);
     done(0);
   } else if (sub === 'wait') {
     const role = args[2];
@@ -2398,11 +2415,11 @@ const HELP = [
   ['doctor', 'check hub base, team root, locks, queues and writer versions'],
   ['upgrade', 'refresh HUBD.md (the agent protocol) to the installed version'],
   ['status', 'project table'],
-  ['brief [-h <hours>]', 'morning brief'],
+  ['brief [-h <hours>]', 'morning brief; work nobody holds: high tasks with no assignee, waits that end on nobody'],
   ['inbox [--hours <N>]', 'what needs a decision now (blocked/overdue/unassigned/stale locks)'],
   ['now [project] [--assignee <who>]', 'the one next thing to do'],
   ['now [project] --for <role> [--only-tags a,b] [--skip-tags a,b] [--json]', 'the first ready task this role may take: its own, else an unassigned one no one has started'],
-  ['agenda [project]', 'the day, split by who can act'],
+  ['agenda [project]', 'the day, split by who can act, and the work nobody holds'],
   ['plan [project]', 'dependency-graph trajectory: ready now · critical path · unlock order · cycles'],
   ['whereami [cwd] [--json]', 'where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction'],
   ['log [project] [-n 20] [--since 3h|<time>] [--agent <name>] [--to <role>] [--json]', 'journal tail; --since: all of the window; --json: every field, to included'],
@@ -2421,7 +2438,7 @@ const HELP = [
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
   ['task done <id> --by <you>', 'close a task'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
-  ['task get <id> [--json]', 'one task, where else its id appears, and its thread of attempts'],
+  ['task get <id> [--json]', 'one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts'],
   ['attempt <task> -o dead|lead|partial|claim|review --lens "<approach>" [--tried ..] [--result ..] [--why ..] [--next ..] [--covered ..] [--builds-on <id>] [--artifact <url>] [--commitment <sha256>] [--of <id> --check <c> --verdict pass|fail] --by <you> [--json]', 'record what you tried on a task and what came of it'],
   ['task retag [--apply --by <you>]', 'move categories off the fixed list into tags (dry run without --apply)'],
   ['card <slug> -m "<digest>"', 'set a project card without a folder'],

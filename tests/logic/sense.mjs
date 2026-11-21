@@ -137,6 +137,22 @@ core.setHubBase(SN); core.ensureHubDirs();
   const ev2 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 + 5 });
   ok(ev2.code === 0 && ev2.events.some(e => e.key.startsWith('br:task/feat:')) && /hub sense h1 verdict/.test(ev2.text),
     'sense: a new push to the branch is an event, and the text says how to decide it');
+  // one change handed in under two names, and one already in the base under another commit
+  const D = sense.duplicateBranches({ 'task/a': 'p1', 'task/b': 'p1', 'task/c': 'p2', 'task/d': null }, new Set(['task/e']));
+  ok(D['task/b'] && D['task/b'].of === 'task/a' && !D['task/a'] && !D['task/c'] && !D['task/d'] && D['task/e'].base,
+    'duplicates: of two branches with one patch-id the first is kept and the other is its duplicate; a branch already in the base is one too');
+  sh('git checkout -q main && git checkout -q -b task/feat-again && echo dd > d.txt && git add d.txt && git commit -q -m "d" && git push -q origin task/feat-again'
+    + ' && git checkout -q main && git checkout -q -b task/feat-redo && echo dd > d.txt && git add d.txt && git commit -q -m "d, handed in again" && git push -q origin task/feat-redo'
+    + ' && git checkout -q main && git checkout -q -b task/landed && echo ee > e.txt && git add e.txt && git commit -q -m "e" && git push -q origin task/landed'
+    + ' && git checkout -q main && echo ee > e.txt && git add e.txt && git commit -q -m "e, cherry-picked" && git push -q origin main', path.join(G, 'work'));
+  const evD = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 + 10 });
+  const dk = evD.events.map(e => e.key);
+  ok(dk.some(k => k.startsWith('dup:task/feat-redo:')) && !dk.some(k => k.startsWith('dup:task/feat-again:'))
+    && dk.some(k => k.startsWith('dup:task/landed:')) && !dk.some(k => /^br:task\/(feat-redo|landed):/.test(k))
+    && /DUPLICATE BRANCH: task\/feat-redo .* the same change as task\/feat-again/.test(evD.text) && /git push origin --delete task\/landed/.test(evD.text),
+    'duplicates: two branches with one patch-id: one is marked a duplicate, and a branch already in the base is listed to delete, neither raised for acceptance');
+  const evD2 = sense.runSenseEvents('h1', { nowS: Date.now() / 1000 + 20 });
+  ok(!evD2.events.some(e => e.key.startsWith('dup:')), 'duplicates: told once, not on every pass');
   const snap = sense.senseSnapshots();
   ok(snap.h1 && snap.h1.pending.some(k => k.startsWith('br:task/feat:')), 'sense: what the sensor raised is published for boards on every node');
   const cliR = run('sense h1 --json', { HUBD_DIR: SN, HUBD_TEAM_DIR: SN, HUBD_NODE: 'cedar' });
@@ -201,5 +217,31 @@ core.setHubBase(SN); core.ensureHubDirs();
   fs.rmSync(G, { recursive: true, force: true });
 }
 core.setHubBase(T0); core.ensureHubDirs();
+
+// ── the head is told of its project's work nobody holds, not every pass ──
+{
+  const sense = await import(path.join(REPO, 'hub/lib/sense.mjs'));
+  const cfg = { ...sense.SENSE_DEFAULTS, quietRe: [], privateRe: [] };
+  const nowS = Date.parse('2026-05-01T12:00:00Z') / 1000;
+  const ago = (min) => new Date((nowS - min * 60) * 1000).toISOString().slice(0, 16).replace('T', ' ');
+  const conf = { head: 'h', project: 'p', repo: '', base: 'main', review: '', workers: [], idleMin: {}, cwd: {} };
+  const tasks = [
+    { id: 'u1', project: 'p', status: 'open', importance: 'high', assignee: null, created: ago(120), text: 'blocker' },
+    { id: 'w1', project: 'p', status: 'open', importance: 'normal', assignee: 'a', created: ago(120), depends_on: ['u1'], text: 'waits' },
+    { id: 'o1', project: 'other', status: 'open', importance: 'high', assignee: null, created: ago(120), text: 'not mine' },
+  ];
+  const st = {};
+  const r1 = sense.collectEvents(conf, st, nowS, {}, tasks, [], null, null, {}, cfg);
+  const keys = r1.ev.map(e => e[0]).sort().join();
+  ok(keys === 'deadlock:w1,nobody:u1' && r1.ev.every(e => e[1] === false) && /NOBODY HOLDS: #u1/.test(r1.ev.map(e => e[2]).join('\n')),
+    'sense: the head is woken for a high task of its project with no assignee and for a task waiting on it; another project\'s is not its');
+  const r2 = sense.collectEvents(conf, st, nowS + 3600, {}, tasks, [], null, null, {}, cfg);
+  ok(r2.ev.length === 0 && r2.esc.length === 0, 'sense: the same standing case does not wake the head again within hours, and is not escalated to the fleet');
+  const r3 = sense.collectEvents(conf, st, nowS + cfg.nobodyRepeatS + 60, {}, tasks, [], null, null, {}, cfg);
+  ok(r3.ev.length === 2 && r3.ev.every(e => /reminder/.test(e[2])), 'sense: after nobodyRepeatS it is said again, as a reminder');
+  const fixed = tasks.map(t => t.id === 'u1' ? { ...t, assignee: 'b' } : t);
+  sense.collectEvents(conf, st, nowS + cfg.nobodyRepeatS + 120, {}, fixed, [], null, null, {}, cfg);
+  ok(!Object.keys(st.pending).some(k => /^(nobody|deadlock):/.test(k)), 'sense: once the task is given to someone, the case is gone from the sensor state');
+}
 
 done();

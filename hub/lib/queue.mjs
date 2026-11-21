@@ -1334,25 +1334,26 @@ export function getUnacked(role, { root } = {}) {
   let files;
   try { files = fs.readdirSync(qdir).filter(f => fileRe.test(f)); } catch { return { blocks: [], total: 0 }; }
   const blocks = [];
+  let acked = 0;
   for (const f of files) {
     // The ack log is append-only, so an acked block still has its "delivered" line: an id is
     // unacked only while no "acked" line follows it, and a redelivery does not count it twice.
     const pending = new Map();
     for (const a of readAcks(acksPath(path.join(qdir, f)))) {
       const id = idOf(a.id);
-      if (a.status === 'acked') pending.set(id, null);
+      if (a.status === 'acked') { pending.set(id, null); acked++; }
       else if (a.status === 'delivered' && !pending.has(id)) pending.set(id, a);
     }
     for (const a of pending.values()) if (a) blocks.push({ id: a.id, status: a.status, ts: a.ts, roleFile: f });
   }
-  return { blocks, total: blocks.length };
+  return { blocks, total: blocks.length, acked };
 }
 
 /** Extend peekQueueDepth with unacked counts. */
 export function peekQueueDepthWithAcks(role, opts = {}) {
   const d = peekQueueDepth(role, opts);
   const u = getUnacked(role, opts);
-  return { ...d, unacked: u.total, unackedBlocks: u.blocks.slice(0, 20) };
+  return { ...d, unacked: u.total, everAcked: u.acked > 0, unackedBlocks: u.blocks.slice(0, 20) };
 }
 
 /**
@@ -2254,5 +2255,8 @@ export function queueSendChecked(role, text, { from, root, task, remote = false 
   return { ...(remote ? {} : { file }), ...(taskKnown === undefined ? {} : { task, taskKnown, ...(asGiven ? { taskAsGiven: asGiven } : {}) }),
     ...(depth ? { pending: depth.pending, oldestWaiting: depth.oldestWaiting, ...(remote ? {} : { consumedHere: seenHere }),
       ...(readOn.length ? { readOn: readOn.map(x => x.node) } : {}),
-      unacked: depth.unacked || 0, ...(note ? { note } : {}) } : {}) };
+      unacked: depth.unacked || 0, ...(note ? { note } : {}),
+      /* A count of unacked blocks reads as a consumer that stopped. A role that reads every block and
+       * has never acked one counts its whole history there: say that, not the bare number. */
+      ...(depth.unacked && !depth.everAcked ? { ackNote: `This role reads its queue but has never acked a block: the ${depth.unacked} unacked are its whole history, not a backlog. Delivery is the read mark above; ask its runner to ack what it has handled.` } : {}) } : {}) };
 }
