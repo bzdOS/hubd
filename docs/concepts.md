@@ -34,7 +34,7 @@ There is no database and no daemon you must keep running. `hubd` and `hub` are t
 front ends to one folder; the board only reads it. With several machines, the folder is
 a git repository and each machine is a node. A node appends its journal, its task events
 and the queue messages it sends to files that bear its own name, so the logs merge
-without conflict; a card, which any node may edit, merges by section once
+without conflict; a project or resource card, which any node may edit, merges by section once
 `hub card merge-driver` is on.
 
 ## Words

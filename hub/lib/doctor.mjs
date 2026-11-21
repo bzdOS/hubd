@@ -20,7 +20,7 @@ import { conflictedFiles } from './conflicts.mjs';
 import { directCommons } from './commons.mjs';
 import { configuredAgents } from './setup.mjs';
 import { cardSectionIssues } from './cards.mjs';
-import { CARD_ATTR, CARD_DRIVER, driverStatus } from './cardmerge.mjs';
+import { CARD_ATTRS, CARD_DRIVER, driverStatus } from './cardmerge.mjs';
 import { STATE_ATTRS, STATE_DRIVER } from './statemerge.mjs';
 import {
   resolveQueueRoot, resolveQueueRootInfo, subscriberRoles, subscriberNamespaces, queueInventory, strandedQueues, outOfBandTrims,
@@ -179,7 +179,7 @@ export function meshStatus() {
 export function mergeDriverIssues(hub = HUB) {
   const out = [];
   for (const [name, attrs, instead, stale] of [
-    [CARD_DRIVER, [CARD_ATTR], 'cards merge as the hub\'s .gitattributes says', 'cards fall back to a union merge'],
+    [CARD_DRIVER, CARD_ATTRS, 'cards merge as the hub\'s .gitattributes says', 'cards fall back to a union merge'],
     [STATE_DRIVER, STATE_ATTRS, 'a snapshot, presence, sense or read-mark file rewritten on two nodes stops the sync',
       'such a file keeps the side git calls ours'],
   ]) {

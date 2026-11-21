@@ -108,6 +108,7 @@ elm hub card merge-driver
 ```text
 Card merge driver installed in /tmp/hub-tour
   .git/info/attributes   + projects/*.md merge=hubd-card
+  .git/info/attributes   + resources/*.md merge=hubd-card
   git config           merge.hubd-card.driver = '…/node' '…/@bzdos/hubd/scripts/card-merge.mjs' %O %A %B || git merge-file --union %A %O %B
 State file merge driver installed in /tmp/hub-tour
 …

@@ -4,6 +4,18 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.87 — 2026-11-21
+
+- **Resource cards merge like project cards.** The card driver covered `projects/*.md` only. A
+  resource card is rewritten from two nodes as well: a rollout stamps its card on every run while
+  a person adds a field on another node, and git's text merge stopped that node's sync for five
+  hours on one `- set:` line. `hub card merge-driver` now puts `resources/*.md` under the driver
+  too; `hub doctor` names a node that has the old install. Run it again on every node.
+- **Frontmatter merges field by field.** A rollout rewriting `rolled:` and a person adding a field
+  on the next line were one clash to a line merge, kept twice and marked. Each field now takes the
+  side that changed it, and a field new on one side is added. One field given two new values, or a
+  field that is not a one-line `key: value`, falls back to the line merge and its mark.
+
 ## 0.9.86 — 2026-11-21
 
 - **A task is closed on a ground.** Heads closed sixteen tasks in a minute with nothing said,

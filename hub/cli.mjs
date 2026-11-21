@@ -19,7 +19,7 @@ import {
   trackedNodeLocal, freezeFile, readFreeze, setReadOnly, cardTraceText, sinceToMs, runCardShow,
 } from './lib/core.mjs';
 import { conflictedFiles, resolveQueueConflicts, resolveCardConflicts } from './lib/conflicts.mjs';
-import { CARD_ATTR, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
+import { CARD_ATTRS, CARD_DRIVER, installCardDriver, removeCardDriver } from './lib/cardmerge.mjs';
 import { STATE_ATTRS, STATE_DRIVER, installStateDriver, removeStateDriver } from './lib/statemerge.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
 import { runSessionsIngest } from './lib/sessions.mjs';
@@ -1316,7 +1316,7 @@ command('card', () => args[1] === 'merge-driver', () => {
       done(0);
     }
     const drivers = [
-      ['Card merge driver', CARD_DRIVER, installCardDriver(HUB, { script: path.join(scripts, 'card-merge.mjs') }), [CARD_ATTR]],
+      ['Card merge driver', CARD_DRIVER, installCardDriver(HUB, { script: path.join(scripts, 'card-merge.mjs') }), CARD_ATTRS],
       ['State file merge driver', STATE_DRIVER, installStateDriver(HUB, { script: path.join(scripts, 'state-merge.mjs') }), STATE_ATTRS],
     ];
     for (const [what, name, r, attrs] of drivers) {

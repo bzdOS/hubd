@@ -35,6 +35,11 @@ import { execFileSync } from 'node:child_process';
 
 export const CARD_DRIVER = 'hubd-card';
 export const CARD_ATTR = `projects/*.md merge=${CARD_DRIVER}`;
+/* Resource cards have the same shape (frontmatter, a `- set:` stamp, ## sections) and are rewritten
+ * from two nodes too: a rollout on one node stamps its card on every run while a person adds a field
+ * from another, and with no driver git's text merge stopped that node's sync for five hours on one
+ * `- set:` line. */
+export const CARD_ATTRS = [CARD_ATTR, `resources/*.md merge=${CARD_DRIVER}`];
 export const MERGED_MARK = '<!-- hubd: two nodes changed this section at once; both versions are kept. Review, then delete this line. -->';
 
 const STAMP_RE = /^- (?:set|synced): (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?).*$/m;
@@ -105,6 +110,8 @@ function mergePiece(key, o, a, b) {
       const newer = sb[1] > sa[1] ? sb[0] : sa[0];
       a = a.replace(sa[0], () => newer); b = b.replace(sb[0], () => newer);
     }
+    const fm = mergeFrontmatter(o, a, b);
+    if (fm) { a = fm.a; b = fm.b; if (o != null) o = fm.o; }
   }
   if (a === b) return { text: a, both: false };
   if (a === o) return { text: b, both: false };
@@ -118,6 +125,39 @@ function mergePiece(key, o, a, b) {
   const r = ab === bb ? { text: ab, both: false } : ab === ob ? { text: bb, both: false }
     : bb === ob ? { text: ab, both: false } : lineMerge(ob, ab, bb);
   return { text: r.text + gap, both: r.both };
+}
+
+/* The frontmatter of a card, field by field. A resource card's fields change on their own: a rollout
+ * rewrites `rolled:` on every run while a person adds a field on the line below it, and a line merge
+ * calls two neighbouring lines one clash. Each field takes the side that changed it; a field new on
+ * one side is added after ours. When both sides changed one field differently, or a field is not a
+ * one-line `key: value`, this gives up (null) and the top of the card merges by line as before. */
+const FM_RE = /^---\n([\s\S]*?\n)---\n/;
+const FIELD_RE = /^([A-Za-z_][\w-]*):(?: .*)?$/;
+function fields(text) {
+  const m = FM_RE.exec(text ?? '');
+  if (!m) return null;
+  const map = new Map();
+  for (const line of m[1].split('\n').filter(l => l !== '')) {
+    const f = FIELD_RE.exec(line);
+    if (!f || map.has(f[1])) return null;
+    map.set(f[1], line);
+  }
+  return { map, rest: text.slice(m[0].length) };
+}
+function mergeFrontmatter(o, a, b) {
+  const O = o != null ? fields(o) : { map: new Map(), rest: '' }, A = fields(a), B = fields(b);
+  if (!O || !A || !B) return null;
+  const out = [];
+  for (const k of [...A.map.keys(), ...[...B.map.keys()].filter(k => !A.map.has(k))]) {
+    const ov = O.map.get(k), av = A.map.get(k), bv = B.map.get(k);
+    if (av === bv) { if (av != null) out.push(av); continue; }
+    if (av === ov) { if (bv != null) out.push(bv); continue; }   // changed or removed there only
+    if (bv === ov) { if (av != null) out.push(av); continue; }
+    return null;                                                 // one field, two new values
+  }
+  const head = '---\n' + out.map(l => l + '\n').join('') + '---\n';
+  return { a: head + A.rest, b: head + B.rest, o: o != null ? head + O.rest : o };
 }
 
 /* [body, gap]: the gap is the blank lines after the body's last line break. */
@@ -225,10 +265,10 @@ export function removeDriver(hub, { name, attrs }) {
 
 /** Install (or refresh) the card driver. `script` is scripts/card-merge.mjs. */
 export function installCardDriver(hub, { node = stableNode(), script }) {
-  const r = installDriver(hub, { name: CARD_DRIVER, label: 'hubd: project cards, merged by ## section',
-    command: `${shq(node)} ${shq(script)} %O %A %B || git merge-file --union %A %O %B`, attrs: [CARD_ATTR] });
+  const r = installDriver(hub, { name: CARD_DRIVER, label: 'hubd: project and resource cards, merged by ## section',
+    command: `${shq(node)} ${shq(script)} %O %A %B || git merge-file --union %A %O %B`, attrs: CARD_ATTRS });
   return { ...r, attrAdded: r.added.length > 0 };
 }
 
 /** Take it out again: the hub's own .gitattributes decides how cards merge on this node. */
-export function removeCardDriver(hub) { return removeDriver(hub, { name: CARD_DRIVER, attrs: [CARD_ATTR] }); }
+export function removeCardDriver(hub) { return removeDriver(hub, { name: CARD_DRIVER, attrs: CARD_ATTRS }); }

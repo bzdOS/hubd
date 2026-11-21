@@ -153,7 +153,7 @@ TASKS (1 open):
 JOURNAL (48h):
  10-07 16:05 [wiki/night] card: card reported: FACT — 11 of 12 dead links in docs/ fixed; th
  10-07 16:05 [wiki/night] card: card reported: FACT — search.spec.ts flaked because the inde
- 10-07 16:05 [wiki/night] done: #oak-2 find why tests/search.spec.ts fails one run in ten
+ 10-07 16:05 [wiki/night] done: #oak-2 find why tests/search.spec.ts fails one run in ten —
  …
 LOCKS:
  [wiki] task:oak-3 — night, 7h 59m left

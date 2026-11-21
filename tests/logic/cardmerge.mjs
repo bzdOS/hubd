@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ok, mktmp, run, REPO, core, done } from './_h.mjs';
 
-const { mergeCard, MERGED_MARK, CARD_ATTR } = await import(path.join(REPO, 'hub/lib/cardmerge.mjs'));
+const { mergeCard, MERGED_MARK, CARD_ATTR, CARD_ATTRS } = await import(path.join(REPO, 'hub/lib/cardmerge.mjs'));
 
 const card = (stamp, sections) => `---\nslug: p\n---\n# p\n\n- slug: p\n- set: ${stamp} by t\n\n` +
   Object.entries(sections).map(([h, body]) => `## ${h}\n\n${body}\n`).join('\n');
@@ -87,6 +87,24 @@ const gitClashes = (o, a, b) => {
 }
 ok(mergeCard(BASE, BASE, BASE).text === BASE, 'unchanged: three equal cards merge to the same bytes');
 
+// ── a resource card: a rollout stamps it on one node, a person adds a field on another ──
+{
+  const res = (fm, set) => `---\nkind: resource\nstatus: live\n${fm}---\n# canon\n\n- slug: canon\n- set: ${set}\n\n## Digest\n\nthe tools, rolled out from one mirror\n`;
+  const O = res('rolled: aaa1\n', '2026-11-21 05:50 by roll');
+  const A = res('rolled: aaa1\nedit_path: commit, pull --rebase, push\n', '2026-11-21 07:28 by person');
+  const B = res('rolled: bbb2\n', '2026-11-21 11:28 by roll');
+  ok(gitClashes(O, A, B) > 0, 'resource: (git\'s text merge does clash on this pair: the stamp line)');
+  const r = mergeCard(O, A, B);
+  ok(r.text === res('rolled: bbb2\nedit_path: commit, pull --rebase, push\n', '2026-11-21 11:28 by roll') && !r.both.length,
+    'resource: the new rollout, the added field and the later stamp, with nothing marked');
+  const gone = mergeCard(O, res('', '2026-11-21 07:28 by person'), res('rolled: aaa1\nstatus_note: ok\n', '2026-11-21 11:28 by roll'));
+  ok(!/rolled:/.test(gone.text) && /status_note: ok/.test(gone.text) && !gone.both.length,
+    'resource: a field removed on one side and left alone on the other is gone; one added there arrives');
+  const two = mergeCard(O, res('rolled: ccc3\n', '2026-11-21 07:28 by person'), B);
+  ok(two.text.includes('rolled: ccc3') && two.text.includes('rolled: bbb2') && two.both[0] === '(top of card)',
+    'resource: one field given two new values keeps both and is marked, as a section is');
+}
+
 // ── the install, on one node ──
 const H = mktmp();
 execFileSync('git', ['init', '-q', '-b', 'main', H]);
@@ -95,13 +113,15 @@ let r = run('card merge-driver', env);
 const attrs = () => fs.readFileSync(path.join(H, '.git', 'info', 'attributes'), 'utf8');
 const drv = () => { try { return execFileSync('git', ['-C', H, 'config', '--get', 'merge.hubd-card.driver'], { encoding: 'utf8' }).trim(); } catch { return ''; } };
 ok(r.code === 0 && attrs().includes(CARD_ATTR), `install: the attribute goes to .git/info/attributes, which never travels (code ${r.code})`);
+ok(attrs().includes('resources/*.md merge=hubd-card') && CARD_ATTRS.length === 2,
+  'install: resource cards get the driver too, since a rollout stamps one node while a person edits on another');
 ok(drv().includes('scripts/card-merge.mjs') && /\|\| git merge-file --union %A %O %B$/.test(drv()),
   'install: the driver names this hubd\'s script and falls back to a union merge when it cannot run');
 ok(!fs.existsSync(path.join(H, '.gitattributes')), 'install: the shared .gitattributes is not touched');
 r = run('card merge-driver', env);
 ok(r.code === 0 && /already installed/.test(r.out) && attrs().split(CARD_ATTR).length === 2, 'install: a second run changes nothing');
 r = run('card merge-driver --remove', env);
-ok(r.code === 0 && !drv() && !attrs().includes(CARD_ATTR), 'install: --remove takes both out');
+ok(r.code === 0 && !drv() && !CARD_ATTRS.some(x => attrs().includes(x)), 'install: --remove takes both out');
 const NOGIT = mktmp();
 r = run('card merge-driver', { HUBD_DIR: NOGIT, HUBD_TEAM_DIR: NOGIT });
 ok(r.code !== 0 && /not a git repository/.test(r.out), 'install: a hub that is not its own git repository is refused');

@@ -127,9 +127,10 @@ Violating these means it is not this product.
 - **Before you rewrite the hub folder** (0.9.20) — `hub freeze "<why>" --by <you>`
   stops this node's mesh-sync whatever schedules it, `hub unfreeze` releases it, and
   `hub doctor` will not let you forget it is on.
-- **A card does not conflict** (0.9.40, 0.9.51) — run `hub card merge-driver` once on
-  each node. Cards then merge by `##` section: two nodes writing different sections
-  never conflict, and one section changed on both keeps both versions under a line
+- **A card does not conflict** (0.9.40, 0.9.51, 0.9.87) — run `hub card merge-driver`
+  once on each node. Project and resource cards then merge by `##` section, and their
+  frontmatter field by field: two nodes writing different sections or fields never
+  conflict, and one section or field changed on both keeps both versions under a line
   asking a person to look. A node's snapshot, presence, sense and read-mark files take
   the version with the later time, in a merge and a rebase alike. It lives in the
   node's own `.git`, so a node without it merges as before, and `hub doctor` says so
