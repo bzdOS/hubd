@@ -23,7 +23,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`reactions`](#reactions) | the declared event -> action rules of &lt;hub>/reactions.json: refused or valid, who holds each, how each last went |
 | [`recall`](#recall) | ranked, dated hits across cards, tasks and the journal |
 | [`report`](#report) | structured report → card sections (no input prints the template) |
-| [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
+| [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said by 2 roles; take a law out of the card, into the project's history; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
 | [`task`](#task) | a new task; change one task (reassign it); close a task on a ground: what was checked, what it showed; tasks; one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
@@ -145,7 +145,8 @@ Also: `hub where`
 ## reflect
 
 - `hub reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]` — the reflection digest: results and obstacles per role, the latest facts, repeated rules
-- `hub reflect --promote --project <proj> [--since 7d]` — candidates for the project's laws: a rule said 3 times by one role, or by 2 roles
+- `hub reflect --promote --project <proj> [--since 7d]` — candidates for the project's laws: a rule said by 2 roles
+- `hub reflect --retire <id|text> --reason "<why>" --project <proj> --by <head>` — take a law out of the card, into the project's history
 - `hub reflect --accept|--reject <id> --project <proj> --by <head>` — the head's verdict on a candidate; an accepted one is a law, in hub_context
 - `hub reflect --law "<the rule>" --project <proj> --by <head>` — the head dictates a law: no reflection has to have grown it first
 - `hub reflect --laws --project <proj>` — the project's laws, one per line
@@ -402,12 +403,14 @@ The commands each flag appears with, in their usage lines.
 | `--project` | [reflect](#reflect) |
 | `--promote` | [reflect](#reflect) |
 | `--prompt` | [setup](#setup) |
+| `--reason` | [reflect](#reflect) |
 | `--reflect` | [report](#report) |
 | `--reject` | [reflect](#reflect) |
 | `--remove` | [card](#card) |
 | `--replace` | [card](#card) |
 | `--resource` | [task](#task) |
 | `--result` | [attempt](#attempt) |
+| `--retire` | [reflect](#reflect) |
 | `--role` | [heartbeat](#heartbeat), [presence](#presence) |
 | `--rows` | [sessions](#sessions) |
 | `--scope` | [setup](#setup) |

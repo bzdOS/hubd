@@ -11,7 +11,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
   HUB, PROJ, JOURNAL_NODE, VERSION, now, parseTs, slugify, sh, cardPath, digestOf, requireAuthor, runSync,
-  runCardSet, runReport, runReflect, runPromote, runLaw, projectLaws, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runAttemptAdd, ATTEMPT_OUTCOMES,
+  runCardSet, runReport, runReflect, runPromote, runLaw, runLawRetire, LAWS_WARN_BYTES, projectLaws, runStatus, runSectionAdd, runTaskAdd, runTaskList, runTaskUpdate, runTaskGet, runAttemptAdd, ATTEMPT_OUTCOMES,
   runTaskRetag, TASK_CATS, runClaim, runClaimCheck, runRelease, runInbox, runTrajectory,
   runResourceSet, runResourceList, runResourceGet, runGraph, sectionsConfig, ensureProtocol, harvestPrompt,
   runLint, runAudit, runNext, runAgenda, runRules, runOperatorGet, journalTail, journalAppend, activeClaims,
@@ -1668,13 +1668,23 @@ command('reflect', () => {
     '       hub reflect --promote --project <project> [--since 7d] [--json]\n' +
     '       hub reflect --accept <id> | --reject <id> [--reason "<why>"] --project <project> --by <head> [--since 7d]\n' +
     '       hub reflect --law "<the rule>" --project <project> --by <head>\n' +
-    '       hub reflect --laws --project <project> [--json]';
+    '       hub reflect --laws --project <project> [--json]\n' +
+    '       hub reflect --retire <id|text> --reason "<why>" --project <project> --by <head>';
   const flag = (n) => { const v = getFlag(n); if (v === true) die(`${n} needs a value\n${usage}`); return v; };
   const project = flag('--project') ?? flag('-p');
   if (!project) die(usage);
   const since = flag('--since') ?? undefined;
   const accept = flag('--accept'), reject = flag('--reject');
   const law = flag('--law');
+  const retire = flag('--retire');
+  if (retire != null) {
+    if (law != null || accept != null || reject != null) die(`--retire alone, not with --law, --accept or --reject\n${usage}`);
+    let v;
+    try { v = runLawRetire({ project, law: retire, reason: flag('--reason') ?? undefined, by: authorOrDie('--by') }); }
+    catch (e) { die(e.message); }
+    console.log(`law of ${v.project} retired, ${v.left} left: ${v.rule}\n  moved to ${v.history}`);
+    done(0);
+  }
   if (law != null) {
     if (accept != null || reject != null) die(`--law with --accept or --reject, not both\n${usage}`);
     let v;
@@ -1695,6 +1705,8 @@ command('reflect', () => {
     const laws = projectLaws(project);
     if (args.includes('--json')) { console.log(JSON.stringify(laws)); done(0); }
     for (const l of laws) console.log(`- ${l.rule}`);
+    const kb = Buffer.byteLength(laws.map(l => l.line).join('\n'), 'utf8');
+    if (kb > LAWS_WARN_BYTES) console.error(`  ${laws.length} laws, ${(kb / 1024).toFixed(1)} KB, read by every role at the start of every session: retire what no longer holds (hub reflect --retire <id> --reason "<why>"; --json shows the ids)`);
     done(0);
   }
   if (args.includes('--promote')) {
@@ -1702,7 +1714,7 @@ command('reflect', () => {
     try { p = runPromote({ project, since }); } catch (e) { die(e.message); }
     if (args.includes('--json')) { console.log(JSON.stringify(p)); done(0); }
     console.log(`${p.project}: ${p.candidates.length} candidate(s) for the project's laws since ${p.since} ` +
-      `(a rule said 3 times by one role, or by 2 roles), ${p.laws.length} law(s) already`);
+      `(a rule said by 2 roles), ${p.laws.length} law(s) already`);
     for (const c of p.candidates) {
       console.log(`\n  ${c.id}  ×${c.count}  ${Object.entries(c.by).map(([r, n]) => `${r} ${n}`).join(', ')}; last ${c.last}` +
         (c.rejected ? `; said again since its rejection ${c.rejected}` : ''));
@@ -2478,7 +2490,8 @@ const HELP = [
   ['report [-p <proj>] --agent <you> [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
     'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF:/VERDICT: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
   ['reflect --project <proj> [--since 7d] [--level turn|head|fleet] [--json]', 'the reflection digest: results and obstacles per role, the latest facts, repeated rules'],
-  ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said 3 times by one role, or by 2 roles"],
+  ['reflect --promote --project <proj> [--since 7d]', "candidates for the project's laws: a rule said by 2 roles"],
+  ['reflect --retire <id|text> --reason "<why>" --project <proj> --by <head>', "take a law out of the card, into the project's history"],
   ['reflect --accept|--reject <id> --project <proj> --by <head>', "the head's verdict on a candidate; an accepted one is a law, in hub_context"],
   ['reflect --law "<the rule>" --project <proj> --by <head>', "the head dictates a law: no reflection has to have grown it first"],
   ['reflect --laws --project <proj>', "the project's laws, one per line"],

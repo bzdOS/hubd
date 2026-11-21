@@ -66,7 +66,7 @@ without conflict; a project or resource card, which any node may edit, merges by
 | **mail** | A file delivered from one role to another, reported as a journal line with its size and sha256. | journal kind `delivery` |
 | **ledger** | What each session of a client spent, read from the client's own database: its role, models, tokens, the orders it read, the tasks it closed. `hub stats` binds it to tasks. | `ledger.<node>.jsonl`, `hub sessions ingest` |
 | **reflection** | The end of a turn's report, as fields: goal, result, obstacle (a class from a fixed list), what to do instead, a proposed rule. | the report's `reflect` field |
-| **candidate** | A rule said 3 times by one role, or by 2 roles, within 7 days. | `hub reflect --promote` |
+| **candidate** | A rule said by 2 roles within 7 days. | `hub reflect --promote` |
 | **law** | A candidate the head accepted: a line of the card's Laws section, given to every role of the project. | the card's `## Laws` |
 | **AGENTS.md** | The team's own rules, yours to write. | the team folder |
 | **INBOX.md** | Notes between people, newest on top, written by hand. Agents read it and report to the hub. | the team folder |
@@ -185,8 +185,8 @@ flowchart LR
   the prompt's own example is refused in the field, named a problem in the text, and
   counted apart, never as a rule. `hub recall` finds a rule or an obstacle as a hit of
   its own. One rule in other words counts as one: wordings that share 40% of their
-  words (a word by its first five letters) are its variants. A rule said 3 times by one
-  role, or by 2 roles, in 7 days is a candidate for the project's laws:
+  words (a word by its first five letters) are its variants. A rule said by 2 roles in
+  7 days is a candidate for the project's laws:
   `hub reflect --promote` lists them by id, and the head accepts or rejects each with
   `hub reflect --accept|--reject <id>`. An accepted one is a line in the card's Laws
   section, never rotated out, and `hub_context` returns the laws to every role of the

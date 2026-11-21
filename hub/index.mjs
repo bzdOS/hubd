@@ -11,7 +11,7 @@ import {
   runTaskList, runTaskUpdate, runTaskGet, runAttemptAdd, ATTEMPT_OUTCOMES, REVIEW_CHECKS, isCommons, assertNoLeak, commonsProtocol, runClaim, runClaimCheck, runRelease, runKanban, setAuthorTransport,
   setHubBase, ensureHubDirs, HUB, runResourceSet, runResourceList, runResourceGet, runGraph, ensureProtocol, harvestPrompt,
   runOnboarding, runWhatsNew, runInbox, runContext, runHeartbeat, runPresence, refreshPresenceSnapshot, runTrajectory, requireAuthor,
-  envChecks, ackEnvNotices, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw,
+  envChecks, ackEnvNotices, capOutput, runAudit, runLint, runNext, runAgenda, runRules, runOperatorGet, ownerWaiting, runReflect, runPromote, runLaw, runLawRetire,
   PRESET,
 } from './lib/core.mjs';
 import { runUsageAdd, runUsage } from './lib/usage.mjs';
@@ -212,7 +212,7 @@ const TOOLS = [
     }, required: ['query'] } },
 
   { name: 'hub_reflect',
-    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule\'s other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project\'s laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.',
+    description: 'The reflection digest of one project, what a head reads instead of its workers\' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment\'s example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule\'s other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report\'s reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project\'s laws instead: a rule said by 2 roles in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string', description: 'the project; its aliases count as it' },
       since: { type: 'string', description: 'the window: a duration (7d, 12h, 30m) or a time (2026-10-01, 2026-10-01 14:00); default 7d' },
@@ -221,12 +221,12 @@ const TOOLS = [
     }, required: ['project'] } },
 
   { name: 'hub_law',
-    description: 'A head\'s verdict on a candidate for its project\'s laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card\'s Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head\'s to rule on, or a fleet role\'s. Either verdict is a journal line; a law said again is refused with the one the card already holds.',
+    description: 'A head\'s verdict on a candidate for its project\'s laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card\'s Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head\'s to rule on, or a fleet role\'s. Every verdict is a journal line; a law said again is refused with the one the card already holds. retire takes a law out of the card into the project\'s history, with its reason.',
     inputSchema: { type: 'object', properties: {
       project: { type: 'string' },
       id: { type: 'string', description: 'the candidate\'s id, as hub_reflect with promote lists it' },
       rule: { type: 'string', description: 'the rule\'s own text, when the head dictates a law instead of accepting a candidate — one of id or rule' },
-      verdict: { type: 'string', enum: ['accept', 'reject'] },
+      verdict: { type: 'string', enum: ['accept', 'reject', 'retire'], description: 'retire: a law that no longer holds leaves the card for the project\'s history, by its id (hub_reflect laws list them) or its text, with a reason' },
       by: { type: 'string', description: 'the head ruling on it' },
       reason: { type: 'string', description: 'why, for a reject above all' },
       since: { type: 'string', description: 'the window the candidate was listed over; default 7d' },
@@ -510,7 +510,7 @@ const DISPATCH = {
   // itself without closing an import cycle (see runAudit).
   hub_audit: (a) => runAudit({ ...a, queues: queueSummaryForBrief({ root: teamRoot() }) }),
   hub_lint: runLint,
-  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall, hub_reflect: (a) => (a.promote ? runPromote(a) : runReflect(a)), hub_law: runLaw,
+  hub_next: runNext, hub_agenda: runAgenda, hub_recall: runRecall, hub_reflect: (a) => (a.promote ? runPromote(a) : runReflect(a)), hub_law: (a) => (a.verdict === 'retire' ? runLawRetire({ ...a, law: a.id ?? a.rule }) : runLaw(a)),
   hub_usage: runUsage, hub_usage_add: runUsageAdd,
   hub_rules: (a) => runRules({ ...a, teamRoot: teamRoot() }), hub_operator: () => runOperatorGet(),
   hub_kanban: runKanban, hub_claim: runClaim, hub_claim_check: runClaimCheck, hub_release: runRelease,

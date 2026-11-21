@@ -224,12 +224,15 @@ existing tasks carry an off-enum category and moves them into tags on `--apply`.
   not a rule: the field refuses it, and the digest counts it apart (`exampleRule`). Wordings of
   one rule that share 40% of their words count as one, the rest as its `variants`.
 - **`hub reflect --promote --project <p>`** / `hub_reflect` with `promote` — the candidates for the
-  project's laws: a rule said 3 times by one role, or by 2 roles, in 7 days. The head rules on each
+  project's laws: a rule said by 2 roles in 7 days. The head rules on each
   by its id: `hub reflect --accept <id> --project <p> --by <head>`, or `--reject <id> --reason
   "<why>"` (MCP `hub_law`). A project whose head is a role card is the head's to rule on, or a fleet
   role's. An accepted rule is a line in the card's Laws section; `hub_context` returns the laws as
   `laws` and `hub reflect --laws --project <p>` lists them: every role of the project works by them.
-  A rejected one leaves the list until it is said again after the rejection.
+  A rejected one leaves the list until it is said again after the rejection. A law that no longer
+  holds is retired: `hub reflect --retire <id> --reason "<why>" --project <p> --by <head>` (MCP
+  `hub_law` with verdict `retire`) moves it to the project's history; `hub lint` warns when a card's
+  Laws pass 8 KB, since every role reads them at the start of every session.
 
 ## Scope: project, person, machine
 

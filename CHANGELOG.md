@@ -4,6 +4,20 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.88 — 2026-11-21
+
+- **A law can be retired.** Laws were only ever added: the section is never rotated, and
+  `hub_context` hands every law to every role of the project, so one card reached 116 laws,
+  17 KB, read at the start of every session. `hub reflect --retire <id|text> --reason "<why>"
+  --project <p> --by <head>` (MCP `hub_law` with verdict `retire`) moves a law's line to the
+  project's history with its reason, under the same right as accepting one; the journal says so,
+  and the rule is no candidate again until it is said after the retirement. `hub reflect --laws
+  --json` now gives each law its id.
+- **A candidate is a rule two roles said.** A rule one role said three times was a candidate too;
+  a role repeating itself is that role's habit, not a law for every role. `hub reflect --promote`
+  now lists only rules said by two roles in the window.
+- **`hub lint` warns when a card's Laws pass 8 KB** (`laws-too-long`), with how to retire one.
+
 ## 0.9.87 — 2026-11-21
 
 - **Resource cards merge like project cards.** The card driver covered `projects/*.md` only. A

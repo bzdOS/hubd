@@ -29,7 +29,7 @@ result_ref: <artifact name and check command, or "not measured", when task is se
 - `rule`: one rule, what this turn taught, in your own words, or `none`. Not the lines of this block restated, and
   not several joined: a `;` outside backticks is refused.
 <!-- wish: a rule is not this block's lines restated; no check -->
-- A rule said 3 times by one role, or by 2 roles, within 7 days is a candidate for the project's laws, and the
+- A rule said by 2 roles within 7 days is a candidate for the project's laws, and the
   head accepts or rejects it. The laws accepted are `hub reflect --laws --project {{project}}` (hub_context returns
   them as `laws`): work by them as by the rules here. A law is not a turn's rule; the rule is what the laws lack.
 - When the turn worked on a task, add `task:` and `learned:` (one line, what you learned about the task, not the process). Add `result_ref:` with the artifact name and the command that checks it, or "not measured".

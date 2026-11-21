@@ -89,17 +89,18 @@ hub reflect --promote --project shop
 ```
 
 ```text
-shop: 1 candidate(s) for the project's laws since 2026-09-30 13:04 (a rule said 3 times by one role, or by 2 roles), 0 law(s) already
+shop: 1 candidate(s) for the project's laws since 2026-11-14 13:50 (a rule said by 2 roles), 0 law(s) already
 
-  4c20cb  ×2  worker 1, dev-shop 1; last 2026-10-07 13:04
+  4c20cb  ×2  worker 1, dev-shop 1; last 2026-11-21 13:50
     load-test with the cart size the bug was reported at, not the tool's default
 
 accept: hub reflect --accept <id> --project shop --by <head>
 reject: hub reflect --reject <id> --project shop --by <head> --reason "<why>"
 ```
 
-A rule said three times by one role, or by two roles, within seven days is a
-candidate. The head rules on it:
+A rule said by two roles within seven days is a candidate: one that two roles arrived
+at apart is one the track teaches, while one role repeating itself is that role's habit.
+The head rules on it:
 
 ```bash
 hub reflect --accept 4c20cb --project shop --by head-shop
@@ -124,11 +125,15 @@ laws:     1, accepted by the project's head
 
 A rejected candidate (`--reject <id> --reason "<why>"`) leaves the list, and comes back
 only if the turns keep saying it. Laws are never rotated into history with a section's
-older lines: a law moved out of the card would be a law nobody reads.
+older lines: a law moved out of the card would be a law nobody reads. A law that no
+longer holds is retired by the head, by its id (`hub reflect --laws --json` shows the
+ids) or its text, with a reason: `hub reflect --retire <id> --reason "<why>" --project
+shop --by head-shop` moves its line to the project's history. Every role reads the laws
+at the start of every session, so `hub lint` warns when a card's Laws pass 8 KB.
 
 ## A law the head dictates
 
-A candidate has to have been said three times, or by two roles. A head whose team has
+A candidate has to have been said by two roles. A head whose team has
 not said anything yet has no candidate to accept — and a rule the head wants from the
 first day is written with the head's own words:
 
@@ -159,9 +164,9 @@ HUBD_DIR=/tmp/hub-tour-demo HUBD_TEAM_DIR=/tmp/hub-tour-demo hub reflect --promo
 ```
 
 ```text
-relay: 1 candidate(s) for the project's laws since 2026-09-30 13:13 (a rule said 3 times by one role, or by 2 roles), 0 law(s) already
+relay: 1 candidate(s) for the project's laws since 2026-11-14 13:50 (a rule said by 2 roles), 0 law(s) already
 
-  9370a7  ×3  relay-dev 3; last 2026-10-06 17:13
+  9370a7  ×3  relay-dev 2, relay-head 1; last 2026-11-20 17:50
     raise the file limit before load tests
     ~ ×1 raise the open file limit before every load test
     ~ ×1 raise the open-file limit before a load test
@@ -170,9 +175,9 @@ accept: hub reflect --accept <id> --project relay --by <head>
 reject: hub reflect --reject <id> --project relay --by <head> --reason "<why>"
 ```
 
-One role said it three times, in three wordings. Wordings that share most of their
-words count as one rule, and the `~` lines are the other wordings counted with it: a
-rule said three ways is still said three times.
+The worker said it twice and the head once, in three wordings. Wordings that share most
+of their words count as one rule, and the `~` lines are the other wordings counted with
+it: a rule said three ways is still said three times.
 
 ## What hubd refuses here, and why
 

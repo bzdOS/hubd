@@ -291,8 +291,8 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
 
   const at = (rule, role, h) => ({ rule, role, ts: `2026-10-03 ${String(h).padStart(2, '0')}:00`, ms: Date.UTC(2026, 9, 3, h) });
   const A = 'alpha bravo charlie delta', B = 'alpha bravo charlie echo', C = 'bravo charlie echo foxtrot';
-  const g = R.promoteCandidates([at(A, 'dev-a', 1), at(A, 'dev-a', 2), at(C, 'dev-b', 3), at(C, 'dev-c', 4), at(A, 'dev-a', 5), at(B, 'dev-a', 6), at(B, 'dev-a', 7)]);
-  ok(g.length === 2 && g[0].rule === A && g[0].count === 5 && g[0].by['dev-a'] === 5 && g[0].last === '2026-10-03 07:00' &&
+  const g = R.promoteCandidates([at(A, 'dev-a', 1), at(A, 'dev-a', 2), at(C, 'dev-b', 3), at(C, 'dev-c', 4), at(A, 'dev-a', 5), at(B, 'dev-d', 6), at(B, 'dev-a', 7)]);
+  ok(g.length === 2 && g[0].rule === A && g[0].count === 5 && g[0].by['dev-a'] === 4 && g[0].by['dev-d'] === 1 && g[0].last === '2026-10-03 07:00' &&
     JSON.stringify(g[0].variants) === JSON.stringify([{ rule: B, count: 2 }]) && g[0].id === R.ruleId(A),
     `promote: a wording joins the most repeated one it resembles, counted with it as a variant (${JSON.stringify(g[0])})`);
   ok(g[1] && g[1].rule === C && g[1].count === 2 && Object.keys(g[1].by).join() === 'dev-b,dev-c',
@@ -300,15 +300,16 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
 
   const X = 'keep the build log beside the package';
   ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2)]).length === 0, 'promote: twice by one role is no candidate');
-  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3)]).length === 1, 'promote: three times by one role is');
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4), at(X, 'dev-a', 5)]).length === 0,
+    'promote: one role saying it, however often, is a habit of that role, no candidate (candidates 0)');
   ok(R.promoteCandidates([at(X, 'dev-a', 1), at('the package, and beside it the build log, kept', 'dev-b', 2)])[0]?.count === 2, 'promote: and so is once each by two roles, worded apart');
   ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-b', 2)], { laws: ['the build log is kept beside the package'] }).length === 0,
     'promote: a rule that is a law already, in whatever words, is no candidate');
   const no = { rule: X, ...at(X, 'dev-h', 2) };
-  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4)], { rejected: [no] }).length === 0,
+  ok(R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-b', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4)], { rejected: [no] }).length === 0,
     'promote: a rejected one counts only what was said after the rejection');
-  const back = R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-a', 2), at(X, 'dev-a', 3), at(X, 'dev-a', 4), at(X, 'dev-a', 5)], { rejected: [no] });
-  ok(back.length === 1 && back[0].count === 3 && back[0].rejected === '2026-10-03 02:00', 'promote: said three times since, it is back, with the rejection it outlived');
+  const back = R.promoteCandidates([at(X, 'dev-a', 1), at(X, 'dev-b', 2), at(X, 'dev-a', 3), at(X, 'dev-b', 4), at(X, 'dev-a', 5)], { rejected: [no] });
+  ok(back.length === 1 && back[0].count === 3 && back[0].rejected === '2026-10-03 02:00', 'promote: said by two roles since, it is back, with the rejection it outlived');
 }
 
 // ── a project's laws: the candidates, the head's verdict, the card ──
@@ -374,7 +375,7 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
   core.runResourceSet({ slug: 'rfl-dev', type: 'role', attrs: { rank: 'worker', project: H }, edges: { head: ['rfl-head'] }, by: 'dev-t' });
   core.runResourceSet({ slug: 'rfl-fleet', type: 'role', attrs: { rank: 'fleet', project: 'fleet' }, by: 'dev-t' });
   const L4 = 'write the plan before the code', L5 = 'one commit per task';
-  for (const h of [10, 11, 12]) { say(H, 'rfl-dev', `2026-10-02 ${h}:00`, L4); say(H, 'rfl-dev', `2026-10-02 ${h}:30`, L5); }
+  for (const [h, who] of [[10, 'rfl-dev'], [11, 'rfl-dev2']]) { say(H, who, `2026-10-02 ${h}:00`, L4); say(H, who, `2026-10-02 ${h}:30`, L5); }
   const hp = core.runPromote({ project: H, since: '2026-10-01' });
   const [i4, i5] = [L4, L5].map(l => hp.candidates.find(c => c.rule === l)?.id);
   ok(throws(() => core.runLaw({ project: H, id: i4, verdict: 'accept', by: 'rfl-dev', since: '2026-10-01' }), /a law of rflaw-head is its head's to rule on \(rfl-head\) or a fleet role's; rfl-dev is of rank worker/) &&
@@ -390,7 +391,7 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
   say(Z, 'dev-a', '2026-10-02 10:00', Z1); say(Z, 'dev-b', '2026-10-02 10:10', Z1b);
   const pr = cli(['reflect', '--promote', '--project', Z, '--since', '2026-10-01']);
   const zid = core.runPromote({ project: Z, since: '2026-10-01' }).candidates[0]?.id;
-  ok(pr.code === 0 && /^rflaw-cli: 1 candidate\(s\) for the project's laws since 2026-10-01 00:00 \(a rule said 3 times by one role, or by 2 roles\), 0 law\(s\) already$/m.test(pr.stdout) &&
+  ok(pr.code === 0 && /^rflaw-cli: 1 candidate\(s\) for the project's laws since 2026-10-01 00:00 \(a rule said by 2 roles\), 0 law\(s\) already$/m.test(pr.stdout) &&
     new RegExp(`^ {2}${zid} {2}×2 {2}dev-a 1, dev-b 1; last 2026-10-02 10:10$`, 'm').test(pr.stdout) && pr.stdout.includes(`    ~ ×1 `) &&
     /accept: hub reflect --accept <id> --project rflaw-cli --by <head>/.test(pr.stdout), `CLI: hub reflect --promote lists the candidates and how to rule on them (${pr.stdout.split('\n').slice(2, 3)})`);
   ok(JSON.parse(cli(['reflect', '--promote', '--project', Z, '--since', '2026-10-01', '--json']).stdout).candidates[0].id === zid, 'CLI: and --json');
@@ -437,6 +438,29 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
   ok(core.projectLaws(D).length === 2 && (card2.match(/build log stays beside the package/g) || []).length === 1,
     'law: and the card holds one line for it');
 
+  // retiring a law: out of the card, --laws and hub_context, into the project's history
+  {
+    const NAMES = 'the report names the file it changed';
+    const id = core.projectLaws(D).find(l => l.rule === NAMES).id;
+    ok(throws(() => core.runLawRetire({ project: D, law: id, by: 'dev-h' }), /reason required/) &&
+      throws(() => core.runLawRetire({ project: D, law: 'no such law at all here', reason: 'x', by: 'dev-h' }), /no law of rflaw-dictated is/),
+      'retire: a reason is required, and a law that is not there is named as such');
+    const r = core.runLawRetire({ project: D, law: id, reason: 'every report template names the file now', by: 'dev-h' });
+    ok(r.verdict === 'retired' && r.rule === NAMES && r.left === 1, `retire: by its id (${JSON.stringify({ v: r.verdict, left: r.left })})`);
+    ok(!core.projectLaws(D).some(l => l.rule === NAMES) && !core.runContext({ cwd: ctxDir }).laws.includes(NAMES) &&
+      JSON.stringify(core.runContext({ cwd: ctxDir }).laws) === JSON.stringify([RULE]),
+      'retire: the law is gone from the laws and from hub_context, the other stays');
+    const hist = fs.readFileSync(r.history, 'utf8');
+    ok(/### law retired .* by dev-h: every report template names the file now\n- .*the report names the file it changed/.test(hist),
+      'retire: the project\'s history holds the law\'s line and why it was retired');
+    const je = [...core.journalEntries()].reverse().find(e => e.law && e.law.verdict === 'retired');
+    ok(je && je.project === D && je.law.rule === NAMES && je.law.reason, 'retire: and the journal says so');
+    ok(core.runLawRetire({ project: D, law: 'the build log stays beside the package', reason: 'moved to the CI', by: 'dev-h' }).left === 0 &&
+      core.projectLaws(D).length === 0, 'retire: by its text, in other words, down to no laws');
+    const out = cli(['reflect', '--retire', 'nope', '--project', D, '--by', 'dev-h', '--reason', 'r']);
+    ok(out.code !== 0 && /no law of rflaw-dictated/.test(out.stderr), 'CLI: hub reflect --retire refuses a law that is not there');
+  }
+
   // the right is the head's, exactly as for a candidate
   const H2 = 'rflaw-dict-head';
   core.runResourceSet({ slug: 'rfd-head', type: 'role', attrs: { rank: 'head', project: H2 }, by: 'dev-t' });
@@ -475,7 +499,7 @@ ok(core.sinceToMs('2d', 1e12) === 1e12 - 2 * 86400000 && core.sinceToMs('3h', 1e
 
 // ── over MCP ──
 const MCP_RULE = 'quote the error line in the report';
-for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, project: 'rflaw-mcp', agent: 'dev-m', kind: 'done', text: 'turn', reflect: R.checkReflect({ ...GOOD, rule: MCP_RULE }) });
+for (const [h, agent] of [[10, 'dev-m'], [11, 'dev-n']]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, project: 'rflaw-mcp', agent, kind: 'done', text: 'turn', reflect: R.checkReflect({ ...GOOD, rule: MCP_RULE }) });
 {
   const reqs = [
     { id: 1, method: 'tools/list', params: {} },
@@ -509,7 +533,7 @@ for (const h of [10, 11, 12]) core.journalAppend({ ts: `2026-10-02 ${h}:00`, pro
   const pv = res[7]?.result && !res[7].result.isError ? JSON.parse(res[7].result.content[0].text) : null;
   ok(pv && JSON.stringify(pv) === JSON.stringify(core.runPromote({ project: 'rflaw', since: '2026-10-01' })), 'MCP: hub_reflect with promote answers what hub reflect --promote --json does');
   const lt = (res[1]?.result?.tools || []).find(t => t.name === 'hub_law');
-  ok(lt && lt.inputSchema.required.join() === 'project,verdict,by' && lt.inputSchema.properties.verdict.enum.join() === 'accept,reject' &&
+  ok(lt && lt.inputSchema.required.join() === 'project,verdict,by' && lt.inputSchema.properties.verdict.enum.join() === 'accept,reject,retire' &&
     !!lt.inputSchema.properties.rule, 'MCP: hub_law is listed, the verdicts as its enum, the rule it can be given');
   ok(res[8]?.result && !res[8].result.isError && JSON.parse(res[8].result.content[0].text).verdict === 'accepted' && core.projectLaws('rflaw-mcp')[0]?.rule === MCP_RULE,
     'MCP: hub_law accepts a candidate into the project\'s laws');

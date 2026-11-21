@@ -148,6 +148,18 @@ ok(lrIds.includes('card-without-digest:nodigest'),
 ok(!lrIds.includes('card-without-digest:titleonly'),
   'runLint: an empty card is not also told it lacks a digest — one remedy per card');
 ok(!lrIds.some(x => x.endsWith(':fine')), 'runLint: a card with a digest and sections is clean');
+{
+  // Laws are never rotated and every role reads them: past 8 KB, lint says so.
+  const law = (i) => `- 2026-11-0${1 + (i % 9)} 10:00 (head): rule number ${i} says to do the ${'thing '.repeat(12).trim()} before the next step`;
+  const card = (n) => `# lawful\n\n- synced: 2026-06-01 10:00\n\n## Laws\n\n${Array.from({ length: n }, (_, i) => law(i)).join('\n')}\n`;
+  fs.writeFileSync(path.join(lrRoot, 'projects', 'lawful.md'), card(40));
+  const few = core.runLint({ projects: ['lawful'] }).findings.filter(f => f.id === 'laws-too-long');
+  fs.writeFileSync(path.join(lrRoot, 'projects', 'lawful.md'), card(120));
+  const many = core.runLint({ projects: ['lawful'] }).findings.filter(f => f.id === 'laws-too-long');
+  ok(few.length === 0 && many.length === 1 && /lawful has 120 laws, \d+\.\d KB, over 8 KB/.test(many[0].what) && /hub reflect --retire <id>/.test(many[0].fix),
+    `runLint: Laws past 8 KB are a finding that says how to retire one (${many[0] && many[0].what})`);
+  fs.rmSync(path.join(lrRoot, 'projects', 'lawful.md'));
+}
 ok(lr1.findings.find(f => f.id === 'card-empty').law && lr1.findings.find(f => f.id === 'card-empty').lawDeclared === false,
   'runLint: a new finding still quotes a rule, and admits the rule is the engine\'s own');
 

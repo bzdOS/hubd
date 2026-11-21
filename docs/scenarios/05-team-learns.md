@@ -55,16 +55,16 @@ that was wrong, not a worker that was slow.
 
 ## A law
 
-A rule said three times by one role, or by two roles, within seven days, is a candidate:
+A rule said by two roles within seven days is a candidate:
 
 ```bash
 hub reflect --promote --project atlas
 ```
 
 ```text
-atlas: 1 candidate(s) for the project's laws since 2026-09-30 16:20 (a rule said 3 times by one role, or by 2 roles), 1 law(s) already
+atlas: 1 candidate(s) for the project's laws since 2026-11-14 13:50 (a rule said by 2 roles), 1 law(s) already
 
-  73c7bc  ×2  atlas-dev 1, atlas-qa 1; last 2026-10-05 16:20
+  73c7bc  ×2  atlas-dev 1, atlas-qa 1; last 2026-11-19 13:50
     run the smoke test before every deploy
 
 accept: hub reflect --accept <id> --project atlas --by <head>
@@ -95,9 +95,9 @@ hub reflect --promote --project relay
 ```
 
 ```text
-relay: 1 candidate(s) for the project's laws since 2026-09-30 16:20 (a rule said 3 times by one role, or by 2 roles), 0 law(s) already
+relay: 1 candidate(s) for the project's laws since 2026-11-14 13:50 (a rule said by 2 roles), 0 law(s) already
 
-  9370a7  ×3  relay-dev 3; last 2026-10-06 20:20
+  9370a7  ×3  relay-dev 2, relay-head 1; last 2026-11-20 17:50
     raise the file limit before load tests
     ~ ×1 raise the open file limit before every load test
     ~ ×1 raise the open-file limit before a load test
@@ -106,7 +106,7 @@ accept: hub reflect --accept <id> --project relay --by <head>
 reject: hub reflect --reject <id> --project relay --by <head> --reason "<why>"
 ```
 
-`relay-dev` said it three times in three wordings, and it is true. But a law is
+`relay-dev` said it twice and `relay-head` once, in three wordings, and it is true. But a law is
 something every session must remember, every time, and this one can be made true
 once: the load box can boot with the higher limit. The head rejects it with that
 reason, and turns it into the task that makes it unnecessary:

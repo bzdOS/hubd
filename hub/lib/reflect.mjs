@@ -269,11 +269,11 @@ function groupRules(said) {
 const rolesOf = (at) => { const by = {}; for (const a of at) by[a.role] = (by[a.role] || 0) + 1; return by; };
 const byCount = (a, b) => b.count - a.count || (a.last < b.last ? 1 : a.last > b.last ? -1 : 0);
 
-/* A candidate for the project's laws (hub reflect --promote): a rule said PROMOTE.oneRole times by
- * one role, or by PROMOTE.roles roles, in the window. A rule its writer keeps saying is one the
- * rules it runs by do not hold yet; one that two roles arrived at apart is one the track teaches.
- * The head accepts it into the project's laws or rejects it, by its id. */
-export const PROMOTE = { oneRole: 3, roles: 2 };
+/* A candidate for the project's laws (hub reflect --promote): a rule said by PROMOTE.roles roles in
+ * the window. One that two roles arrived at apart is one the track teaches. A rule one role keeps
+ * saying was a candidate too, until one card held 116 laws: a role repeating itself is a habit of
+ * that role, not a law every role of the project reads at the start of every session. */
+export const PROMOTE = { roles: 2 };
 /** The candidates among `said` (as groupRules takes it, each with `ms`, its time). A rule that is one
  *  of `laws` (wordings) is a law already and no candidate. One that was rejected (`{rule, ms}`)
  *  counts only what was said after the rejection: the head said no to what it had seen, and a rule
@@ -289,7 +289,7 @@ export function promoteCandidates(said, { laws = [], rejected = [] } = {}) {
     const no = noWords.filter(r => near(r.words)).sort((a, b) => a.ms - b.ms).at(-1);
     const at = no ? g.at.filter(a => a.ms > no.ms) : g.at;
     const by = rolesOf(at);
-    if (!at.length || (Math.max(...Object.values(by)) < PROMOTE.oneRole && Object.keys(by).length < PROMOTE.roles)) continue;
+    if (!at.length || Object.keys(by).length < PROMOTE.roles) continue;
     out.push({ id: ruleId(g.rule), rule: g.rule, count: at.length, by, last: at.at(-1).ts,
       variants: g.wordings.slice(1).map(w => ({ rule: w.rule, count: w.at.length })), ...(no ? { rejected: no.ts } : {}) });
   }

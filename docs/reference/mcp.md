@@ -165,7 +165,7 @@ Append a session report to the shared journal: what was done / broken / blocked.
 
 ### hub_reflect
 
-The reflection digest of one project, what a head reads instead of its workers' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment's example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule's other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report's reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project's laws instead: a rule said 3 times by one role, or by 2 roles, in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.
+The reflection digest of one project, what a head reads instead of its workers' reports in full: per role, how turns ended (result) and what got in the way (obstacle class), and how many found no work (idle: result no with obstacle none, never an obstacle); per class, the count and the latest 3 facts; the rules proposed more than once; how many rules held the fragment's example (exampleRule, never counted as a rule); the verdicts heads and the orchestrator gave. A rule's other wordings count with it (`variants`): two wordings sharing 40% of their words are one rule. Reads the report's reflect field and a REFLECT block in its text alike. Every key, and every value of each list, is present with zeros, so the shape never depends on the data. With `promote`, the candidates for the project's laws instead: a rule said by 2 roles in the window, not a law yet, each with the id hub_law rules on; and the laws the project has. Read-only.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -177,14 +177,14 @@ The reflection digest of one project, what a head reads instead of its workers' 
 
 ### hub_law
 
-A head's verdict on a candidate for its project's laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card's Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head's to rule on, or a fleet role's. Either verdict is a journal line; a law said again is refused with the one the card already holds.
+A head's verdict on a candidate for its project's laws (hub_reflect with promote lists them, each with an id), or on a law the head dictates: give `rule` (the text itself) instead of `id`, and nothing has to have grown it first. accept: the rule becomes a law, a line in the card's Laws section that hub_context returns to every role of the project. reject: it leaves the list until it is said often enough again after the rejection. A project with a head on record is that head's to rule on, or a fleet role's. Every verdict is a journal line; a law said again is refused with the one the card already holds. retire takes a law out of the card into the project's history, with its reason.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `project` | string | yes |  |
 | `id` | string |  | the candidate's id, as hub_reflect with promote lists it |
 | `rule` | string |  | the rule's own text, when the head dictates a law instead of accepting a candidate — one of id or rule |
-| `verdict` | one of `accept`, `reject` | yes |  |
+| `verdict` | one of `accept`, `reject`, `retire` | yes | retire: a law that no longer holds leaves the card for the project's history, by its id (hub_reflect laws list them) or its text, with a reason |
 | `by` | string | yes | the head ruling on it |
 | `reason` | string |  | why, for a reject above all |
 | `since` | string |  | the window the candidate was listed over; default 7d |

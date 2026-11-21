@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
 import { LEVELS, checkReflect, entryReflect, isExampleRule, isNoRule, isWaitingTurn, promoteCandidates, readReflect, reflectDigest,
-  renderReflect, ruleId, sameRule, splitReflect } from './reflect.mjs';
+  renderReflect, ruleId, ruleKey, sameRule, splitReflect } from './reflect.mjs';
 import { deliveries, DELIVERY, MAIL_LIMIT } from './mail.mjs';
 
 // Installed hubd version (stamps the generated HUBD.md so each node can tell if its
@@ -1433,6 +1433,15 @@ export function runLint(a = {}) {
         what: `${c.slug}.md has ${lines.length} lines and ${sections} section(s) but no digest line, so every freshness check skips it silently`,
         fix: `hub card ${c.slug} -m "<what is true now>" --by <you>  (writes the "- synced:" line the checks read)` });
     }
+    // The Laws section is never rotated, and hub_context hands it to every role of the project at
+    // the start of every session: one card reached 116 laws, 17 KB.
+    const laws = projectLaws(c.slug);
+    const lawBytes = Buffer.byteLength(laws.map(l => l.line).join('\n'), 'utf8');
+    if (lawBytes > LAWS_WARN_BYTES) {
+      findings.push({ id: 'laws-too-long', severity: 'med', project: c.slug,
+        what: `${c.slug} has ${laws.length} laws, ${(lawBytes / 1024).toFixed(1)} KB, over ${LAWS_WARN_BYTES / 1024} KB: every role reads them at the start of every session`,
+        fix: `hub reflect --laws --project ${c.slug} --json lists them with ids; retire what no longer holds: hub reflect --retire <id> --reason "<why>" --project ${c.slug} --by <head>` });
+    }
   }
 
   // (5) Duplicate project cards: two slugs for the same repo or working directory.
@@ -1496,6 +1505,7 @@ export function runLint(a = {}) {
     'button-without-prep': 'Work only the owner can do splits into prep (an agent) and the button (the owner).',
     'card-empty': 'A card is what a session reads before it acts; a title is not a card.',
     'card-without-digest': 'A card no check can read is unchecked, however well it reads to a person.',
+    'laws-too-long': 'A law every role reads at the start of every session costs every session; one that no longer holds is retired.',
     'duplicate-project': 'Two slugs for the same project split its history and tasks between two cards — a worker was seen entering an empty loop.',
     'assignee-outside-roster': 'The role registry is the only source of role names; work assigned to any other name is nobody\'s.',
     'private-check-undeclared': 'What counts as private is data the owner declares; a check that has none passes nothing.',
@@ -3382,6 +3392,7 @@ export function runReflect(a = {}) {
  * accepted one is a line in the card's laws section, `- <when> (<head>): <rule>`, which hub_context
  * returns to every role of the project; a rejected one is a journal line, which keeps the rule
  * off the list until it is said again after it. */
+export const LAWS_WARN_BYTES = 8 * 1024;
 export function projectLaws(project) {
   const card = readCard(canonProject(project));
   const body = card ? sectionHeadings('laws').map(h => sectionBody(card, h)).find(b => b != null) : null;
@@ -3390,12 +3401,13 @@ export function projectLaws(project) {
     const item = /^\s*[-*+]\s+(.+?)\s*$/.exec(l);
     if (!item || l.startsWith(MOVED_MARK)) continue;
     const m = /^(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?) \(([^)]+)\): (.+)$/.exec(item[1]);
-    if (m) { laws.push({ rule: m[3], since: m[1], by: m[2] }); continue; }
+    if (m) { laws.push({ id: ruleId(m[3]), rule: m[3], since: m[1], by: m[2], line: l }); continue; }
     // A line an older `hub section add laws` wrote carries a date and no head: the date is not part
     // of the rule, and hub_context handed it back as one — the rule every role reads said
     // "2026-11-15 06:11: keep the build log beside the package".
     const d = /^(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?): (.+)$/.exec(item[1]);
-    laws.push(d ? { rule: d[2], since: d[1] } : { rule: item[1] });
+    const rule = d ? d[2] : item[1];
+    laws.push({ id: ruleId(rule), rule, ...(d ? { since: d[1] } : {}), line: l });
   }
   return laws;
 }
@@ -3413,7 +3425,7 @@ export function runPromote(a = {}) {
   entries.sort((x, y) => x.ms - y.ms);
   const said = [], rejected = [];
   for (const { e, ms } of entries) {
-    if (e.law && e.law.verdict === 'rejected' && e.law.rule) { rejected.push({ rule: e.law.rule, ms, ts: e.ts }); continue; }
+    if (e.law && (e.law.verdict === 'rejected' || e.law.verdict === 'retired') && e.law.rule) { rejected.push({ rule: e.law.rule, ms, ts: e.ts }); continue; }
     const r = entryReflect(e);
     if (r && r.rule && !isNoRule(r.rule) && !isExampleRule(r.rule)) said.push({ rule: r.rule, role: e.agent || '?', ts: e.ts, ms });
   }
@@ -3422,12 +3434,24 @@ export function runPromote(a = {}) {
     laws, candidates: promoteCandidates(said, { laws: laws.map(l => l.rule), rejected }) };
 }
 
+/* Who rules on a project's laws: its live head (a head switched off has handed the project over, so
+ * its successor rules, not it), or a fleet role above the heads; with no head on record, whoever signs. */
+function lawRuler(projectName, by) {
+  const project = canonProject(projectName);
+  const set = projectSlugSet(projectName);
+  const reg = roleRegistry();
+  const heads = [...reg.values()].filter(r => r.rank === 'head' && r.status !== 'off' && set.has(r.project)).map(r => r.role);
+  const me = reg.get(slugify(by));
+  if (heads.length && !heads.includes(me?.role) && me?.rank !== 'fleet')
+    throw new Error(`a law of ${project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);
+}
+
 /** The head's verdict on one candidate, by its id: `accept` makes it a law of the project, `reject`
  *  takes it off the list. A project whose head is a role card is the head's to rule on (or a fleet
  *  role's, above the heads); with no head on record, whoever signs.
  *
  *  A head can also DICTATE a law: `rule` is the text itself, and nothing has to have grown it
- *  first. A candidate is a rule a role said three times (or two roles said once each), so a project
+ *  first. A candidate is a rule two roles said, so a project
  *  whose roles never reflected had no law to accept at all — and the head's own word was the only
  *  way to write one. The right is the same (the head's, or a fleet role's), the line in the card is
  *  the same, and the journal says the law was dictated, not grown. Saying it again is refused with
@@ -3440,13 +3464,7 @@ export function runLaw(a = {}) {
   if (!id && !dictated) throw new Error('id required: the candidate\'s id, as hub reflect --promote lists it — or rule, the text of a law the head dictates');
   if (id && dictated) throw new Error('id or rule, not both: a candidate is ruled on by its id, a law the head dictates by its own text');
   const project = canonProject(a.project);
-  const set = projectSlugSet(a.project);
-  const reg = roleRegistry();
-  // a head switched off has handed the project over: its successor rules, not it
-  const heads = [...reg.values()].filter(r => r.rank === 'head' && r.status !== 'off' && set.has(r.project)).map(r => r.role);
-  const me = reg.get(slugify(by));
-  if (heads.length && !heads.includes(me?.role) && me?.rank !== 'fleet')
-    throw new Error(`a law of ${project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);
+  lawRuler(a.project, by);
   const reason = String(a.reason ?? '').replace(/\s+/g, ' ').trim();
 
   // The law the head dictates: the same line in the card, the same right, and a journal entry that
@@ -3488,6 +3506,48 @@ export function runLaw(a = {}) {
     text: `${law.verdict === 'accepted' ? 'law accepted' : 'law candidate rejected'}: ${c.rule.slice(0, 160)}${reason ? ' (' + reason + ')' : ''}`,
     ...(trace ? { card: trace } : {}) });
   return { ok: true, project: p.project, verdict: law.verdict, id: c.id, rule: c.rule, count: c.count, ...(section ? { section, card: cardPath(p.project) } : {}) };
+}
+
+/* ── Retiring a law ──
+ * Laws were only ever added: the section is never rotated, hub_context hands every law to every
+ * role of the project, and one card reached 116 laws, 17 KB, read at the start of every session,
+ * until 35 were moved out by hand. A law is retired by its head the way it was accepted: by its id
+ * (hub reflect --laws --json lists them) or its text, with a reason. The line goes to the project's
+ * history with the reason, the journal says so, and the rule is no candidate again until it is said
+ * after the retirement, as a rejected one is. */
+export function runLawRetire(a = {}) {
+  const by = requireAuthor(a.by, 'by');
+  const want = String(a.law ?? '').replace(/\s+/g, ' ').trim();
+  if (!want) throw new Error('law required: its id as hub reflect --laws --json lists it, or its text');
+  const reason = String(a.reason ?? '').replace(/\s+/g, ' ').trim();
+  if (!reason) throw new Error('reason required: why the law is retired (it is kept with the law in the project\'s history)');
+  if (!a.project || typeof a.project !== 'string') throw new Error('project required');
+  const project = canonProject(a.project);
+  lawRuler(a.project, by);
+  const card = readCard(project);
+  const section = card ? liveHeading(card, 'laws') : null;
+  const body = card ? sectionBody(card, section) : null;
+  if (body == null) throw new Error(`${project} has no laws`);
+  const laws = projectLaws(project);
+  const id = want.toLowerCase();
+  let hit = laws.filter(l => l.id === id);
+  if (!hit.length) hit = laws.filter(l => ruleKey(l.rule) === ruleKey(want));
+  if (!hit.length) hit = laws.filter(l => sameRule(l.rule, want));
+  if (!hit.length) throw new Error(`no law of ${project} is "${want.slice(0, 120)}"; hub reflect --laws --project ${project} --json lists them with their ids`);
+  if (hit.length > 1) throw new Error(`"${want.slice(0, 80)}" matches ${hit.length} laws of ${project}; name one by its id: ` + hit.map(l => `${l.id} ${l.rule.slice(0, 60)}`).join('; '));
+  const law = hit[0];
+  const lines = body.split('\n');
+  const at = lines.findIndex(l => l === law.line);
+  if (at === -1) throw new Error(`the law's line moved while it was read; run it again`);
+  lines.splice(at, 1);
+  const next = editSection(card, section, lines.join('\n').replace(/^\n+|\s+$/g, ''), 'set');
+  atomicWrite(cardPath(project), next);
+  const hist = appendHistory(project, `\n---\n### law retired ${now()} by ${by}: ${reason}\n${law.line}\n`);
+  const trace = cardTrace(card, next, [section], 'law', []);
+  journalAppend({ ts: now(), project, agent: by, kind: 'decision',
+    law: { verdict: 'retired', id: law.id, rule: law.rule, reason },
+    text: `law retired: ${law.rule.slice(0, 160)} (${reason})`, ...(trace ? { card: trace } : {}) });
+  return { ok: true, project, verdict: 'retired', id: law.id, rule: law.rule, reason, history: hist, left: laws.length - 1 };
 }
 
 /** Where else this name exists — the pointer a "no card" error owes its caller. */

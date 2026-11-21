@@ -12,8 +12,8 @@
  *          today; the onboarding copy handed in and rejected; a law accepted two days ago, and a
  *          rule two roles keep proposing (a candidate);
  *   relay  backpressure accepted and closed today; webhook retries stalled on the staging key
- *          server, escalated to coord and waiting; the release blocked on it; a rule one role
- *          said three times this week (a candidate);
+ *          server, escalated to coord and waiting; the release blocked on it; a rule its worker
+ *          and its head both said this week (a candidate);
  *   infra  coord's own work; an escalation answered last night in the card's Owner decisions;
  *          the owner holds two buttons: a question from the atlas head, a disk to approve;
  *   nodes  fir with a disk at 93%, pine healthy, maple silent for 38 minutes with a failed relay.
@@ -150,8 +150,8 @@ export function writeDemo(dir, { nowMs = Date.now(), version = '' } = {}) {
   report('pine', 4 * D + 20 * H, 'relay', 'relay-dev', ['pine-1: backpressure in; the load test stopped at 20k connections'],
     { goal: 'hold the ingest queue under load', result: 'partial', obstacle: 'environment', obstacle_fact: 'the load generator ran out of file descriptors at 20k connections',
       instead: 'raise the limit in the harness first', rule: 'raise the open-file limit before a load test' });
-  report('pine', 2 * D + 3 * H, 'relay', 'relay-dev', ['pine-1: 50k msg/s on the second run'],
-    { goal: 'measure the ingest queue at 50k msg/s', result: 'partial', obstacle: 'environment', obstacle_fact: 'the new load box came up with the default limit of 1024',
+  report('pine', 2 * D + 3 * H, 'relay', 'relay-head', ['pine-1: rechecked the 50k msg/s run on the new load box'],
+    { goal: 'check the 50k msg/s claim myself before accepting it', result: 'partial', obstacle: 'environment', obstacle_fact: 'the new load box came up with the default limit of 1024',
       instead: 'put the limit in the box image', rule: 'raise the open file limit before every load test' });
   report('pine', 20 * H, 'relay', 'relay-dev', ['pine-1: 3 restart runs under load'],
     { goal: 'prove no message is lost on a restart', result: 'done', obstacle: 'none', instead: 'nothing', rule: 'raise the file limit before load tests' });
