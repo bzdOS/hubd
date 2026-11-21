@@ -738,6 +738,34 @@ command('watch', () => {
   tick(true);
 });
 
+/* hub reactions: the rules of <hub>/reactions.json (lib/reactions.mjs) — which can run, who holds
+ * each on this node, how each last went. `run` makes one pass now, as the MCP server's tick does. */
+command('reactions', async () => {
+  const { reactionsStatus, reactionsTick, releaseLeases } = await import('./lib/reactions.mjs');
+  const json = args.includes('--json');
+  if (args[1] === 'run') {
+    const rows = await reactionsTick({ holder: 'cli' });
+    releaseLeases();
+    if (json) { console.log(JSON.stringify(rows)); done(rows.some(r => r.outcome === 'failed' || r.outcome === 'invalid') ? 1 : 0); }
+    if (!rows.length) console.log('no reactions declared (' + reactionsStatus().file + ')');
+    for (const r of rows) console.log(`${r.id}: ${r.outcome}${r.detail ? ' - ' + r.detail : ''}`);
+    done(rows.some(r => r.outcome === 'failed' || r.outcome === 'invalid') ? 1 : 0);
+  }
+  if (args[1] && !args[1].startsWith('-')) die('Usage: hub reactions [run] [--json]');
+  const st = reactionsStatus();
+  if (json) { console.log(JSON.stringify(st)); done(0); }
+  if (!st.exists) { console.log(`no reactions declared. Put rules in ${st.file} (see docs/recipes.md, "Reactions").`); done(0); }
+  for (const p of st.problems) console.log(`! ${p}`);
+  for (const r of st.rules) {
+    const trig = r.trigger.every ? `every ${r.trigger.every}` : 'on ' + Object.entries(r.trigger.on).map(([k, v]) => `${k}=${v}`).join(' ');
+    console.log(`${r.id}  ${trig}  run ${r.run}  by ${r.by || '?'}`);
+    if (r.problem) { console.log(`  REFUSED: ${r.problem}`); continue; }
+    console.log(`  lease: ${r.lease ? `pid ${r.lease.pid} until ${r.lease.until}${r.lease.alive ? '' : ' (free)'}` : 'nobody yet'}` +
+      `   last: ${r.last || 'never'}${r.outcome ? ' ' + r.outcome : ''}${r.failing ? `   failing: ${r.failing}` : ''}`);
+  }
+  done(st.problems.length || st.rules.some(r => r.problem) ? 1 : 0);
+});
+
 command('report', () => {
   const pf = getFlag('-p');
   const proj = (typeof pf === 'string') ? pf : 'general';
@@ -2441,6 +2469,8 @@ const HELP = [
   ['log [project] [-n 20] [--since 3h|<time>] [--agent <name>] [--to <role>] [--json]', 'journal tail; --since: all of the window; --json: every field, to included'],
   ['watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json | --exec <cmd>]', 'new journal entries, each shown once to the cursor <name>',
     'one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to <cmd> on stdin, marked when it exits 0'],
+  ['reactions [run] [--json]', 'the declared event -> action rules of <hub>/reactions.json: refused or valid, who holds each, how each last went',
+    'run: one pass now, as the MCP server does every 30 s'],
   ['recall "<what do we know about X>" [--limit 20] [--stale-days N] [--json]', 'ranked, dated hits across cards, tasks and the journal'],
   ['report [-p <proj>] --agent <you> [--reflect <json|file>]', 'structured report → card sections (no input prints the template)',
     'DECIDE:/FACT:/HYPO:/COMM:/NEXT:/DONE:/TASK:/NOTE:/HANDOFF:/VERDICT: lines, via stdin (heredoc) or -m; --reflect: the turn\'s reflection as checked fields'],
@@ -2573,5 +2603,6 @@ if (!cmd || cmd === 'help' || cmd === '--help' || args.includes('--help')) {
   const h = handlers.find(x => !x.when || x.when());
   if (!h) { printHelp(cmd); die(`hub ${cmd}: no such subcommand`); }
   // A refusal from the engine is a message to read, not a stack trace.
-  try { h.run(); } catch (e) { die(e && e.message ? e.message : String(e)); }
+  const fail = (e) => die(e && e.message ? e.message : String(e));
+  try { const r = h.run(); if (r && typeof r.then === 'function') r.catch(fail); } catch (e) { fail(e); }
 }

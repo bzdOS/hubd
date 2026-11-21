@@ -148,16 +148,25 @@ export function watchPass({ name, project = null, since = null, includePrivate =
  * HUBD_WATCH_KEY is the entry's hash, the same on every attempt: a receiver that drops a repeat by
  * it (a Matrix transaction id) shows a retried entry once. */
 export const EXEC_TIMEOUT_S = 20;
+const CAPTURE_MAX = 16384;
 
 /** Runs `cmd` with sh on one entry, the entry as one JSON line on stdin. Resolves to null when it
  *  exited 0, else to why not. */
-export function execEntry(cmd, e, key, { timeoutS = EXEC_TIMEOUT_S } = {}) {
+export function execEntry(cmd, e, key, { timeoutS = EXEC_TIMEOUT_S, capture = null, env = null, cwd } = {}) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn('/bin/sh', ['-c', cmd], { stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env, HUBD_WATCH_KEY: key },
-        timeout: timeoutS * 1000, killSignal: 'SIGKILL' });
+      // capture: an object whose .out collects the command's output instead of this process's
+      // stdout — an MCP server over stdio speaks JSON-RPC there, and one stray line breaks it.
+      child = spawn('/bin/sh', ['-c', cmd], { stdio: ['pipe', capture ? 'pipe' : 'inherit', capture ? 'pipe' : 'inherit'],
+        env: { ...process.env, ...(env || {}), HUBD_WATCH_KEY: key }, cwd, timeout: timeoutS * 1000, killSignal: 'SIGKILL' });
     } catch (err) { resolve(`could not start: ${err.message}`); return; }
+    if (capture) {
+      capture.out = capture.out || '';
+      const take = (d) => { if (capture.out.length < CAPTURE_MAX) capture.out += String(d).slice(0, CAPTURE_MAX - capture.out.length); };
+      child.stdout.on('data', take);
+      child.stderr.on('data', take);
+    }
     const t0 = Date.now();
     child.on('error', (err) => resolve(`could not start: ${err.message}`));
     child.on('close', (code, signal) => resolve(code === 0 ? null
@@ -172,7 +181,7 @@ export function execEntry(cmd, e, key, { timeoutS = EXEC_TIMEOUT_S } = {}) {
  *  {why, ts, project, agent} when a command did not exit 0: that entry and the ones after it are
  *  new on the next pass. `stop()` true ends the pass after the entry in flight. */
 export async function watchExec({ name, cmd, project = null, since = null, includePrivate = false, nowMs = Date.now(), memo = null,
-  timeoutS = EXEC_TIMEOUT_S, stop = () => false } = {}) {
+  timeoutS = EXEC_TIMEOUT_S, stop = () => false, match = null, capture = null, env = null, cwd, onDone = null } = {}) {
   const key = keyOf(name);
   if (!cmd || typeof cmd !== 'string') throw new Error('watch: --exec needs a command');
   const file = watchFile(key);
@@ -182,13 +191,16 @@ export async function watchExec({ name, cmd, project = null, since = null, inclu
     let failed = null;
     for (const x of st.fresh) {
       if (stop()) break;
-      if (st.show(x)) {
+      // match: a predicate on the entry; one it refuses is passed (marked) without running cmd
+      if (st.show(x) && (!match || match(x.e))) {
         touch(lock);
-        const why = await execEntry(cmd, x.e, x.h, { timeoutS });
-        if (why) { failed = { why, ts: x.e.ts, project: x.e.project, agent: x.e.agent }; break; }
+        const cap = capture ? {} : null;
+        const why = await execEntry(cmd, x.e, x.h, { timeoutS, capture: cap, env, cwd });
+        if (why) { failed = { why, ts: x.e.ts, project: x.e.project, agent: x.e.agent, key: x.h, ...(cap ? { out: cap.out } : {}) }; break; }
         st.shown++;
         mark(st, x);
         save(st);
+        if (onDone) { try { onDone(x.e, x.h, cap ? cap.out : ''); } catch {} }
         continue;
       }
       mark(st, x);

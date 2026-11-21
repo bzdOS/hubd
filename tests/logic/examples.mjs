@@ -9,7 +9,7 @@ import { ok, mktmp, REPO, done } from './_h.mjs';
 
 const DIR = path.join(REPO, 'examples/team');
 const files = fs.readdirSync(DIR).filter(f => /^\d\d-.*\.sh$/.test(f)).sort();
-ok(files.length >= 8, `examples/team holds the eight examples (${files.length})`);
+ok(files.length >= 9, `examples/team holds the nine examples (${files.length})`);
 for (const f of files) {
   const head = fs.readFileSync(path.join(DIR, f), 'utf8').split('\n').slice(0, 15).join('\n');
   ok(/^# Rule: /m.test(head) && /^# Scar: /m.test(head), `${f}: its header names the rule and the scar`);
@@ -18,7 +18,7 @@ for (const f of files) {
 const tmp = mktmp();
 const r = spawnSync('sh', [path.join(DIR, 'run.sh')], {
   encoding: 'utf8',
-  env: { ...process.env, HUB: `${process.execPath} ${path.join(REPO, 'hub/hub.mjs')}`, TMPDIR: tmp, HUBD_AGENT: '' },
+  env: { ...process.env, HUB: `${process.execPath} ${path.join(REPO, 'hub/hub.mjs')}`, HUBD: `${process.execPath} ${path.join(REPO, 'hub/index.mjs')}`, TMPDIR: tmp, HUBD_AGENT: '' },
   timeout: 300000,
 });
 const out = (r.stdout || '') + (r.stderr || '');

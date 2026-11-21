@@ -20,6 +20,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`whereami`](#whereami) | where am I: project, digest age, tasks, claims, who is here, journal tail, git inventory — first command after a compaction |
 | [`log`](#log) | journal tail; --since: all of the window; --json: every field, to included |
 | [`watch`](#watch) | new journal entries, each shown once to the cursor &lt;name> |
+| [`reactions`](#reactions) | the declared event -> action rules of &lt;hub>/reactions.json: refused or valid, who holds each, how each last went |
 | [`recall`](#recall) | ranked, dated hits across cards, tasks and the journal |
 | [`report`](#report) | structured report → card sections (no input prints the template) |
 | [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
@@ -124,6 +125,12 @@ Also: `hub where`
 - `hub watch --as <name> [-p <proj>] [--since 1h] [--follow [--interval 5]] [--private] [--json | --exec <cmd>]` — new journal entries, each shown once to the cursor &lt;name>
 
   one pass and exit, or --follow; a new cursor starts now unless --since; --json: one entry per line; --exec: each entry to &lt;cmd> on stdin, marked when it exits 0
+
+## reactions
+
+- `hub reactions [run] [--json]` — the declared event -> action rules of &lt;hub>/reactions.json: refused or valid, who holds each, how each last went
+
+  run: one pass now, as the MCP server does every 30 s
 
 ## recall
 
@@ -367,7 +374,7 @@ The commands each flag appears with, in their usage lines.
 | `--hub` | [setup](#setup) |
 | `-i` | [task](#task) |
 | `--interval` | [watch](#watch) |
-| `--json` | [now](#now), [whereami](#whereami), [log](#log), [watch](#watch), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
+| `--json` | [now](#now), [whereami](#whereami), [log](#log), [watch](#watch), [reactions](#reactions), [recall](#recall), [reflect](#reflect), [task](#task), [attempt](#attempt), [card](#card), [presence](#presence), [usage](#usage), [sessions](#sessions), [price](#price), [stats](#stats), [gc](#gc), [queue](#queue), [board](#board) |
 | `--law` | [reflect](#reflect) |
 | `--laws` | [reflect](#reflect) |
 | `--lens` | [attempt](#attempt) |

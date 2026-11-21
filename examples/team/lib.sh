@@ -3,6 +3,8 @@
 # HUB is the command that runs hub: `hub` by default, or e.g. HUB="node /path/to/hub/hub.mjs".
 # run.sh sets HUBD_DIR and HUBD_TEAM_DIR to a fresh `hub demo` before each example.
 HUB=${HUB:-hub}
+# HUBD is the command that runs the MCP server: `hubd` by default.
+HUBD=${HUBD:-hubd}
 OUT=''
 RC=0
 
@@ -46,4 +48,11 @@ push_branch() {
   ( cd "$1/work" && $GIT checkout -q main && $GIT checkout -q -b "$2" &&
     printf '%s\n' "$4" > "$3" && $GIT add "$3" && $GIT commit -q -m "$5" &&
     $GIT push -q origin "$2" ) || fail "could not push $2"
+}
+
+# wait_for <seconds> <shell test>: poll until the test holds; exit 1 if it never does.
+wait_for() {
+  n=$(($1 * 5))
+  while [ $n -gt 0 ]; do sh -c "$2" && return 0; sleep 0.2; n=$((n - 1)); done
+  return 1
 }

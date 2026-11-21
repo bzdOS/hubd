@@ -29,6 +29,7 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `sense.<node>.json` | What this node's sensor last raised, for any node's board. | `hub sense` | yes |
 | `.sense/` | Each head's sensor state, and `escalations.log` (both move with `HUBD_SENSE_DIR` and `HUBD_SENSE_ESCALATIONS`). | `hub sense` | no |
 | `.watch/<name>.json` | A `hub watch` cursor: the entries already shown to `<name>`. | `hub watch` | no |
+| `.reactions/<rule>.<node>.lease` | Which process on this node runs a rule of `reactions.json`, until when; `.json` beside it: how the rule last went. | the MCP server, `hub reactions run` | no |
 | `.checkins.json` | Each agent's `hub_whatsnew` checkpoint. | `hub_whatsnew` | no |
 | `.env-state.json` | What this node's environment checks last observed: the `environment` list of `hub_whatsnew` and `hub doctor`. | `hub_whatsnew`, `hub doctor` | no |
 | `.mesh-freeze` | This node's sync is stopped, by whom and why. | `hub freeze`, `hub unfreeze` | no |
@@ -36,6 +37,7 @@ A file that syncs is in git and goes to every node with mesh-sync. One that does
 | `sections.json` | Section keys and their headings, to rename or translate a card's sections (`hub sections` lists them). | you | yes |
 | `report-sections.json` | The old name of `sections.json`. Deprecated. | you | yes |
 | `card-template.md` | A free-form card template. Deprecated: `hub doctor` says to fold it into `sections.json`. | you | yes |
+| `reactions.json` | The event -> action rules the MCP server runs, and the only commands they may run (docs/recipes.md, section 10). | the owner, a fleet role, a project's head | yes |
 | `rules.json` | Which checks refuse instead of warn (`strict`), the wording and date of the rules behind `hub lint` and `hub audit` findings (`laws`), and the projects that are money bets (`money`). | you | yes |
 | `limits.json` | Size limits: a card's digest and section (`card.digestBytes`, `card.sectionBytes`), a queue's unread messages and bytes (`queue.msgs`, `queue.bytes`, `queue.exempt`). | you | yes |
 | `private-words` | Words `hubd commons` refuses to send to a public commons, besides the names it reads from the hub, one a line; `-<word>` lets a word through. | you | yes |

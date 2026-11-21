@@ -1025,7 +1025,7 @@ export function journalTail(project, n = 12, { sinceMs = null, agent = null, to 
  * A card is behind when WORK it does not reflect has happened, not when the tracker took notes.
  * `card` is the record of a card write that had no entry of its own to ride on (see cardTrace):
  * the write is the work, and its record moving the journal on would put the card behind itself. */
-const BOOKKEEPING_KINDS = new Set(['task', 'audit', 'card']);
+const BOOKKEEPING_KINDS = new Set(['task', 'audit', 'card', 'reaction']);
 
 export function lastJournalByProject() {
   const out = {};
@@ -2428,7 +2428,7 @@ export function staleEnvSessions({ days = 7, apply = false } = {}) {
  * rollout two nodes appended different lines to the same end of the file, a content conflict that
  * stops both syncs. Locks, tmp files and the task cache are here because `git add -A` would
  * otherwise commit a live lock with everything else. */
-export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/', '.watch/',
+export const HUB_GITIGNORE = ['.qstate/', 'HUBD.md', 'presence/', '.env-state.json', '.checkins.json', '.mesh-freeze', '.sense/', '.watch/', '.reactions/',
   'journal.life.jsonl', 'tasks.json', 'claims.json', '*.lock', '*.tmp.*'];
 
 /* `hub freeze`: the node-local marker scripts/mesh-sync.sh checks before every run. */

@@ -82,6 +82,7 @@ hub queue send worker "rerun the load test with the batched query; compare p95" 
 
 ```text
 → worker.oak.queue.md delivered  (about task #oak-4)
+  note: This role reads its queue but has never acked a block: the 1 unacked are its whole history, not a backlog. Delivery is the read mark above; ask its runner to ack what it has handled.
 ```
 
 Over MCP, the worker's `hub_queue_wait` returns the block with its id and the tasks

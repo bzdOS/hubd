@@ -73,10 +73,13 @@ Every variable hubd reads, from the code the package ships. Set them in the envi
 | --- | --- | --- |
 | `HUBD_SENSE_DIR` | `<hub>/.sense` | Where `hub sense` keeps each head's sensor state. Node-local. |
 | `HUBD_SENSE_ESCALATIONS` | `<sense dir>/escalations.log` | The file `hub sense` appends escalations to, one line each: the epoch, the head and the text, tab-separated. Point it at your monitor's file. |
+| `HUBD_REACTIONS` | — | `0` keeps the MCP server from running the rules of `<hub>/reactions.json`. |
+| `HUBD_REACTIONS_TICK_S` | `30` | Seconds between two passes of the MCP server over the rules of `<hub>/reactions.json`. |
 | `HUBD_SECRETS_DIR` | `~/.hubd-secrets` | Where `hub secret` keeps values. Refused inside the team folder, which replicates to every node. |
 
 ## Set by hubd
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `HUBD_REACTION` | — | In the environment of a reaction's command: the id of the rule that runs it (`HUBD_AGENT` is `reaction-<id>`). |
 | `HUBD_WATCH_KEY` | — | In the environment of `hub watch --exec <cmd>`: the entry's hash, the same on every attempt, so a receiver can drop a repeat. |

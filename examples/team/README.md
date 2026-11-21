@@ -1,17 +1,18 @@
 # Team organization, as runnable examples
 
-Eight ways a team of agents is organized in hubd, each a short shell script you can read top to
+Nine ways a team of agents is organized in hubd, each a short shell script you can read top to
 bottom and run. Each one shows one rule, and starts with the scar that rule came from: the thing
 that went wrong before the rule existed. Every script runs on a fresh [`hub demo`](../../docs/start/README.md)
 in a temporary folder of its own (an invented team: projects atlas, relay and infra; roles
 relay-head, relay-dev, atlas-head...). Your own hub is never read or written.
 
 ```bash
-sh examples/team/run.sh          # all eight, one PASS/FAIL line each
+sh examples/team/run.sh          # all nine, one PASS/FAIL line each
 sh examples/team/run.sh -v 04    # one, with everything it printed
 ```
 
-`HUB` picks the command (default `hub`; from a checkout: `HUB="node hub/hub.mjs"`). The examples
+`HUB` picks the command (default `hub`; from a checkout: `HUB="node hub/hub.mjs"`), `HUBD` the MCP
+server (default `hubd`; from a checkout: `HUBD="node hub/index.mjs"`). The examples
 need `sh`, `git` and `node`, nothing from the network.
 
 | Example | Rule | Scar |
@@ -24,6 +25,7 @@ need `sh`, `git` and `node`, nothing from the network.
 | [06 Readiness by heartbeat](06-readiness.sh) | A resource is ready while its check heartbeats within `--ttl`; `hub presence --alive` lists only those. A card's `status: up` is a claim written once. | A card said a service was up after it had stopped. |
 | [07 The audit](07-audit.sh) | `rules.json` holds the team's own dated laws and the checks it enforces (`strict`); `hub audit --apply` files each finding once, quoting that law. | Gates expired silently for weeks while the rule sat written down. |
 | [08 A reaction to the journal](08-watch-exec.sh) | `hub watch --as <name> --exec <cmd>` hands each new entry to a command and marks it only when the command exits 0. Here: an ACCEPT deletes the merged branch ([the handler](delete-merged-branch.sh)). | Accepted branches stayed in the remote after their merge, and each copy was raised for acceptance again. |
+| [09 Reactions in the MCP server](09-reactions.sh) | A standing reaction is declared in `reactions.json` by the owner or the project's head and runs inside the MCP server, one runner per rule per node. A rule names a declared command; journal text reaches it only on stdin. ([docs](../../docs/recipes.md#10-reactions)) | The janitor of 08 was a watcher somebody had to keep running; it stopped with its terminal, and merged branches piled up again. |
 
 What the scripts assert is what the engine guarantees: `tests/logic/examples.mjs` runs them in
 `npm test`, so a change that breaks a recipe fails there first.

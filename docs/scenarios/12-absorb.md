@@ -55,11 +55,12 @@ lost hub queue send worker "Take pine-2 next." --from head-shop
 Card set: shop → /tmp/hub-s12-home/.hubd/projects/shop.md
 Task #pine-1 added: Fix the slow cart query the load test found
 → worker.pine.queue.md delivered
-## 2026-10-07 17:11 · from head-shop · id pine-1
+## 2026-11-21 05:33 · from head-shop · id pine-1
 Run the checkout load test again once pine-1 is in; report the p95.
 Reported to shop: 1 fact, closed #pine-1
 Task #pine-2 added: Cache the shipping rates: 40% of the cart time now
 → worker.pine.queue.md delivered
+  note: This role reads its queue but has never acked a block: the 1 unacked are its whole history, not a backlog. Delivery is the read mark above; ask its runner to ack what it has handled.
 ```
 
 The head and the worker talked, the slow query was fixed and its task closed, and the

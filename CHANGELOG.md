@@ -4,6 +4,19 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.85 — 2026-11-21
+
+- **Reactions, run by the MCP server.** `hub watch --exec` reacts to the journal only while a
+  process of its own runs, and somebody has to keep it running. The rules in
+  `<hub>/reactions.json` run inside the MCP server instead, on a 30 s tick: a rule on a journal
+  entry (`on: {kind, project, agent, match}`) or on an interval (`every: 10m`), its output to a
+  role's queue or a heartbeat. A rule names a command declared in the same file, never a command
+  line, and journal text reaches the command only on stdin. Rules are declared by an owner role,
+  a fleet role or the project's live head; others are refused. One runner per rule per node,
+  through a lease that passes on when its holder dies; `node` pins a rule to one node. Each firing is a journal entry of kind
+  `reaction`. `hub reactions` shows the rules; `hub reactions run` makes one pass.
+  `HUBD_REACTIONS=0` turns it off. Example 09 in `examples/team`, and docs/recipes.md section 10.
+
 ## 0.9.84 — 2026-11-21
 
 - **Team organization, as runnable examples.** `examples/team/` holds eight scripts, each one

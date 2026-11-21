@@ -1017,4 +1017,11 @@ if (process.argv[2] === 'commons') {
 } else {
   try { ensureProtocol(); } catch {}   // materialise HUBD.md for this hub on daemon start
   if (httpPortArg) serveHttp(httpPortArg); else serveStdio();
+  // The declared reactions (<hub>/reactions.json) run here, on a tick: this process lives as long
+  // as the session does, so nobody has to keep a watcher of their own running. Never on a
+  // multi-tenant server, which repoints the hub per request.
+  if (!(httpPortArg && process.env.HUBD_MULTITENANT === '1')) {
+    const { startReactions } = await import('./lib/reactions.mjs');
+    startReactions({ holder: SERVE_MODE, log: (m) => process.stderr.write(m + '\n') });
+  }
 }
