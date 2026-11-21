@@ -1,6 +1,6 @@
 {
   "name": "@bzdos/hubd",
-  "version": "0.9.83",
+  "version": "0.9.84",
   "mcpName": "io.github.bzdOS/hubd",
   "description": "Files-first project hub for mixed teams of AI agents and humans — shared journal, tasks, queues and a read-only kanban. MCP server + CLI, zero dependencies.",
   "repository": {
@@ -24,6 +24,7 @@
     "scripts/card-merge.mjs",
     "scripts/state-merge.mjs",
     "contrib/",
+    "examples/",
     "README.md",
     "LICENSE",
     "HARVEST.md",

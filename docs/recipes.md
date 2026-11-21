@@ -40,3 +40,9 @@ and a coordinator is in [5. Roles](start/5-roles.md).
 ## 8. The weekly ritual
 
 [6. The owner's day → Once a week](scenarios/06-owners-day.md#once-a-week).
+
+## 9. Team organization, runnable
+
+[examples/team](../examples/team/README.md): laws, the role registry, handing a project to a new
+head, the sensor without a model, the queue as the channel, readiness by heartbeat, the audit,
+and a reaction to the journal. Eight scripts, each run on a fresh `hub demo` with one command.

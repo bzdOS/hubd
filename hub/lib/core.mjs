@@ -1457,13 +1457,19 @@ export function runLint(a = {}) {
     for (const t of loadTasks().tasks.filter(t => t.status === 'open' && t.assignee)) {
       if (restrict && !restrict.includes(t.project)) continue;
       const who = slugify(t.assignee);
-      if (roster.has(who) || owners.has(who) || t.owner_kind === 'human') continue;
+      if (owners.has(who) || t.owner_kind === 'human') continue;
+      // A role switched off is on the roster and runs nothing: a head handed its project over, and
+      // the release task assigned to it stayed open under its name, read by no loop.
+      if (roster.has(who) && roster.get(who).status !== 'off') continue;
       (orphans.get(t.assignee) || orphans.set(t.assignee, []).get(t.assignee)).push(t.id);
     }
     for (const [who, ids] of [...orphans].sort((x, y) => y[1].length - x[1].length)) {
+      const off = roster.has(slugify(who));
       findings.push({ id: 'assignee-outside-roster', severity: 'low', tasks: ids,
-        what: `${ids.length} open task(s) assigned to "${who}", which is neither a declared role nor an owner role: #${ids.slice(0, 8).join(', #')}${ids.length > 8 ? ' …' : ''}`,
-        fix: `reassign them (hub task update <id> --assignee <role>), or declare the role: hub resource set ${slugify(who)} --type role --attr rank=worker --attr project=<slug> --by <you>` });
+        what: `${ids.length} open task(s) assigned to "${who}", which ${off ? 'is a role switched off (status: off)' : 'is neither a declared role nor an owner role'}: #${ids.slice(0, 8).join(', #')}${ids.length > 8 ? ' …' : ''}`,
+        fix: off
+          ? `reassign them to a live role: hub task update <id> --assignee <role> --by <you>`
+          : `reassign them (hub task update <id> --assignee <role> --by <you>), or declare the role: hub resource set ${slugify(who)} --type role --attr rank=worker --attr project=<slug> --by <you>` });
     }
   }
 
@@ -3429,7 +3435,8 @@ export function runLaw(a = {}) {
   const project = canonProject(a.project);
   const set = projectSlugSet(a.project);
   const reg = roleRegistry();
-  const heads = [...reg.values()].filter(r => r.rank === 'head' && set.has(r.project)).map(r => r.role);
+  // a head switched off has handed the project over: its successor rules, not it
+  const heads = [...reg.values()].filter(r => r.rank === 'head' && r.status !== 'off' && set.has(r.project)).map(r => r.role);
   const me = reg.get(slugify(by));
   if (heads.length && !heads.includes(me?.role) && me?.rank !== 'fleet')
     throw new Error(`a law of ${project} is its head's to rule on (${heads.join(', ')}) or a fleet role's; ${by} is ${me ? 'of rank ' + me.rank : 'no role on record'}`);

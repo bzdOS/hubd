@@ -328,8 +328,10 @@ format is the stable contract; everything else is negotiable.
 
 [docs/index.md](docs/index.md) maps the documentation by what you want to do;
 [the reference](docs/reference/README.md) lists every command, tool, variable and
-file, generated from the code. The npm package carries the binaries, `prompts/`,
-`contrib/`, the mesh scripts, this README, the changelog, `HARVEST.md`, and of
+file, generated from the code. [examples/team](examples/team/README.md) is how a team of agents
+is organized (laws, the role registry, a head handover, the sensor, queues, readiness, the audit,
+reactions to the journal), as eight scripts that run on `hub demo` with one command. The npm package carries the binaries, `prompts/`,
+`contrib/`, `examples/`, the mesh scripts, this README, the changelog, `HARVEST.md`, and of
 `docs/` the map, [the tutorials](docs/start/README.md), the reference,
 [the scenarios](docs/scenarios/README.md), [concepts](docs/concepts.md),
 [guarantees](docs/guarantees.md), [interop](docs/interop.md),

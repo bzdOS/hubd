@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.84 — 2026-11-21
+
+- **Team organization, as runnable examples.** `examples/team/` holds eight scripts, each one
+  rule of how a team of agents is run and the scar it came from: laws a head dictates, the role
+  registry and lint, handing a project to a new head, the head's sensor without a model, the
+  queue as the channel, readiness by heartbeat `--ttl`, the audit with `rules.json`, and
+  `hub watch --exec` deleting a branch once its ACCEPT is merged. `sh examples/team/run.sh` runs
+  them all, each on a fresh `hub demo` in a temporary folder; `npm test` runs them too. They ship
+  in the package.
+- **`hub task update`.** Reassigning a task had no verb outside MCP, while `hub lint` told the
+  reader to run exactly this. `hub task update <id> --assignee <role> --by <you>` now does, with
+  `-i`, `-d`, `--text`, `--status` and `--needs` as `hub_task_update` takes them.
+- **A head switched off has handed its project over.** It no longer rules on the project's laws
+  (`hub reflect --law`, `hub_law`); the live head does. An open task assigned to any role with
+  `status: off` is flagged by `hub lint` (`assignee-outside-roster`) like one assigned to no
+  role: no loop reads it.
+
 ## 0.9.83 — 2026-11-21
 
 - **The tips are said once.** Over stdio every tool result carried two tips, to call

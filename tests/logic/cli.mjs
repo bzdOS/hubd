@@ -184,6 +184,12 @@ const HL = mktmp();
   const tid = (/^Task #(\S+) added/m.exec(cli(['task', 'add', 'close me', '-p', 'smokeproj', '--by', 'smoke'], { env }).out) || [])[1];
   const td = cli(['task', 'done', '--by', 'smoke', String(tid)], { env });
   ok(tid && td.code === 0 && /closed/.test(td.out), 'task done: --by before the id closes the id, not the word --by');
+  const uid = (/^Task #(\S+) added/m.exec(cli(['task', 'add', 'move me', '-p', 'smokeproj', '--assignee', 'old-role', '--by', 'smoke'], { env }).out) || [])[1];
+  const tu = cli(['task', 'update', '--by', 'smoke', String(uid), '--assignee', 'new-role', '-i', 'high'], { env });
+  const tg = cli(['task', 'get', String(uid)], { env });
+  ok(uid && tu.code === 0 && /@new-role/.test(tu.out) && /high · @new-role/.test(tg.out), 'task update: --assignee and -i change the task, flags in any order');
+  const tn = cli(['task', 'update', String(uid), '--by', 'smoke'], { env });
+  ok(tn.code !== 0 && /nothing to change/.test(tn.out), 'task update: nothing to change is an error, not a silent no-op');
 }
 
 // ── presence and the log have a machine-readable form ──

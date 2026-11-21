@@ -23,6 +23,7 @@ Find what you want to do; the link is the place to read about it.
 | several agent sessions on one project, not stepping on each other | [1. Three clients, one project](scenarios/01-three-clients.md) |
 | an agent that waits for work and does it | [3. Queues](start/3-queues.md) · [2. A night worker](scenarios/02-night-worker.md) |
 | an orchestrator with workers under it | [5. Roles](start/5-roles.md) · [3. A track with a head](scenarios/03-track-with-a-head.md) |
+| organize a team of agents: laws, roster, head handover, sensor, queues, readiness, audit, reactions | [examples/team](../examples/team/README.md), eight scripts that run on `hub demo` |
 | see only what waits for me | [6. The owner's day](scenarios/06-owners-day.md) |
 | turn a long chat into tasks and decisions | [11. Harvest](scenarios/11-harvest.md) · [HARVEST.md](../HARVEST.md) |
 | keep machines, services and their links as cards | [10. Infrastructure as cards](scenarios/10-infrastructure-as-cards.md) |

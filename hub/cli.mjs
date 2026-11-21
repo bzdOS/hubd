@@ -893,6 +893,22 @@ command('task', () => {
     let c = null; try { c = taskCost(t.id); } catch {}
     if (c) console.log(`cost: ${costLine(c)}` + (c.outcome ? ` · ${c.outcome}ed` : '') + '  (hub stats --task ' + t.id + ' for the attempts)');
     if (r.standing) printThread(r);
+  } else if (sub === 'update') {
+    // One task's fields, as hub_task_update sets them. Reassigning had no verb outside MCP, while
+    // lint told the reader to run exactly this to move work off a role nobody runs.
+    const UU = 'Usage: hub task update <id> [--assignee <role>] [-i high|med|normal] [-d <date>|+Nd] [--text "<text>"] [--status open|done] [--needs <ids>] --by <you>';
+    let pos; try { pos = positionals(2, { values: ['--assignee', '-i', '-d', '--text', '--status', '--needs', '--by'] }); } catch (e) { die(e.message + '\n' + UU); }
+    const id = pos[0];
+    if (!id) die(UU);
+    const str = (f) => { const v = getFlag(f); return typeof v === 'string' ? v : undefined; };
+    const needs = str('--needs');
+    const patch = { assignee: str('--assignee'), importance: str('-i'), deadline: str('-d'), text: str('--text'), status: str('--status'),
+      depends_on: needs != null ? needs.split(',').map(s => s.trim()).filter(Boolean).map(s => { const n = parseInt(s, 10); return String(n) === s ? n : s; }) : undefined };
+    if (Object.values(patch).every(v => v == null)) die('nothing to change\n' + UU);
+    let r; try { r = runTaskUpdate({ id, ...patch, by: authorOrDie('--by') }); } catch (e) { die(e.message); }
+    const t = r.task || {};
+    console.log(`Task #${id} updated` + (patch.assignee != null ? ` → @${t.assignee || patch.assignee}` : ''));
+    for (const w of r.warnings || []) console.log('  warning: ' + w);
   } else if (sub === 'retag') {
     const apply = args.includes('--apply');
     const r = runTaskRetag({ apply, by: apply ? authorOrDie('--by') : undefined });
@@ -902,7 +918,7 @@ command('task', () => {
       ? `Moved ${r.moved}/${r.count} off-enum categories into tags${r.failed.length ? ' (failed: #' + r.failed.join(' #') + ')' : ''}`
       : `${r.count} task(s) carry an off-enum cat. Re-run with --apply --by <you> to move them into tags (append-only, nothing is rewritten).`);
   } else {
-    die('task subcommands: add, get, done, list, retag');
+    die('task subcommands: add, get, update, done, list, retag');
   }
   done(0);
 });
@@ -2436,6 +2452,7 @@ const HELP = [
   ['decide "<what>" --why "<why>" -p <proj>', 'append a decision to ## Decisions'],
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
+  ['task update <id> [--assignee <role>] [-i <imp>] [-d <date>] [--text <t>] [--needs <ids>] --by <you>', 'change one task (reassign it)'],
   ['task done <id> --by <you>', 'close a task'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
   ['task get <id> [--json]', 'one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts'],
