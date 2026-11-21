@@ -38,6 +38,17 @@ answers, trying direct first and a proxied egress second.
 > frame changed constantly and the monitor read all three as *working*. The
 > fleet's two heads were dead and looked healthy.
 
+**A death moves the role, it does not park it.** On an explicit refusal or a
+silence, the spawner takes the next rung of the ladder at once. A role that waits
+for its quota to reset while another rung answers is down by choice. Backing off
+on capacity for more than an hour, on work the goal is blocked by, is an
+incident to fix, not a normal state to report.
+
+> **Scar.** One evening the free rungs of three workers ran out; the loop parked
+> them until the nightly reset and they were down for nine hours with other
+> rungs answering. The same night a worker kept retrying a model that refused
+> with "not available in your region" instead of stepping down.
+
 **Consequence:** liveness at the model level can only be established by asking
 and getting something back. Probe before you place work, and treat "busy
 indicator plus no output and no hub call" as a stall, not as work.

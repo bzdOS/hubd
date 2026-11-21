@@ -105,6 +105,28 @@ For decisions only the owner can make: state what each possible answer unblocks,
 group them into one package, and hand that package up. A decision presented
 alone, repeatedly, trains the owner to ignore you.
 
+## The goal's blockers come first, every cycle
+
+Start every cycle with the goal itself: open the epic the owner is waiting on and
+walk its open dependencies. For each one, find who holds it and when it last
+moved (a branch, a report, an attempt). Then act in the same cycle:
+
+- the holder is off, out of quota, backing off on capacity, or on a model that
+  answers with a refusal — lift that role on another working rung now, or hand
+  the blocker to a live worker of the same project. Waiting for tomorrow's quota
+  reset while other rungs answer is a defect, not a policy;
+- a blocker that has not moved for a day — cut it smaller, give it another path,
+  or change the worker, and check next cycle that it moved;
+- a blocker outranks tools, calibrations and debts: while it is open, someone is on it.
+
+Report only what moved and what you reassigned. Counts of live turns, running
+processes and green timers are not progress: a fleet can be fully alive for
+three days while the goal does not move at all.
+
+> **Scar.** For three days the release blockers and the next step of a
+> transport track sat with no live holder. Every report said the fleet was
+> alive — the turn counts were real — and it was the owner who found the stall.
+
 ## An empty queue is your dispatch cycle, not a rest
 
 When nothing arrives, run the cycle anyway: read the hub, classify every one of
