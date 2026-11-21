@@ -816,6 +816,7 @@ command('report', () => {
     console.error('  warning: NOT closed: ' + r.doneMissed.map(id => '#' + id + (amb.has(id) ? ' (several end in it: ' + amb.get(id).join(', ') + ')' : ' (no such task)')).join(', ') +
       ' — check the id with `hub task list`. ' + r.doneForm);
   }
+  if (r.doneGround) console.error('  warning: ' + r.doneGround);
   const onlyNote = r.note && !r.reflect && !r.decisions && !r.facts && !r.hypos && !r.comms && !r.next && !r.handoff && !r.done.length && !r.tasks.length;
   if (onlyNote) console.error('  hint: a note-only report is usually coordination — "I\'m on it" is a `hub claim`, not a report (see HUBD.md).');
   done(0);
@@ -877,10 +878,11 @@ command('task', () => {
   } else if (sub === 'done') {
     // bare number or node-scoped string (task #194) — runTaskUpdate compares by String();
     // read past flags in any order, so `hub task done --by x 42` closes 42, not "--by".
-    let pos; try { pos = positionals(2, { values: ['--by'] }); } catch (e) { die(e.message + '\nUsage: hub task done <id> --by <you>'); }
+    let pos; try { pos = positionals(2, { values: ['--by', '--why'] }); } catch (e) { die(e.message + '\nUsage: hub task done <id> --why "<what was checked, what it showed>" --by <you>'); }
     const id = pos[0];
-    if (!id) die('Id required: hub task done <id>');
-    const r = runTaskUpdate({ id, status: 'done', by: authorOrDie('--by') });
+    if (!id) die('Id required: hub task done <id> --why "<what was checked, what it showed>"');
+    const why = getFlag('--why');
+    let r; try { r = runTaskUpdate({ id, status: 'done', why: typeof why === 'string' ? why : undefined, by: authorOrDie('--by') }); } catch (e) { die(e.message); }
     console.log(r.noop === 'already-done'
       ? `Task #${id} was already closed${r.closedAt ? ' ' + r.closedAt : ''} — nothing changed`
       : `Task #${id} closed`);
@@ -911,6 +913,7 @@ command('task', () => {
     if ((t.resources || []).length) console.log('resources: ' + t.resources.map(x => '⛬' + x).join(' '));
     if (t.note) console.log('note: ' + t.note);
     console.log(`created ${t.created || '?'} by ${t.by || '?'}${t.done ? ' · closed ' + t.done : ''}`);
+    if (t.done && t.why) console.log(`why closed: ${t.why}`);
     if (r.holding && r.holding.length) {
       console.log(`held by (${r.holding.length} open):`);
       for (const x of r.holding) console.log(`  #${x.id} ${x.assignee ? '@' + x.assignee : 'NOBODY'} · last moved ${x.lastMoved || 'never'} · ${x.text}`);
@@ -924,8 +927,8 @@ command('task', () => {
   } else if (sub === 'update') {
     // One task's fields, as hub_task_update sets them. Reassigning had no verb outside MCP, while
     // lint told the reader to run exactly this to move work off a role nobody runs.
-    const UU = 'Usage: hub task update <id> [--assignee <role>] [-i high|med|normal] [-d <date>|+Nd] [--text "<text>"] [--status open|done] [--needs <ids>] --by <you>';
-    let pos; try { pos = positionals(2, { values: ['--assignee', '-i', '-d', '--text', '--status', '--needs', '--by'] }); } catch (e) { die(e.message + '\n' + UU); }
+    const UU = 'Usage: hub task update <id> [--assignee <role>] [-i high|med|normal] [-d <date>|+Nd] [--text "<text>"] [--status open|done --why "<ground>"] [--needs <ids>] --by <you>';
+    let pos; try { pos = positionals(2, { values: ['--assignee', '-i', '-d', '--text', '--status', '--why', '--needs', '--by'] }); } catch (e) { die(e.message + '\n' + UU); }
     const id = pos[0];
     if (!id) die(UU);
     const str = (f) => { const v = getFlag(f); return typeof v === 'string' ? v : undefined; };
@@ -933,7 +936,7 @@ command('task', () => {
     const patch = { assignee: str('--assignee'), importance: str('-i'), deadline: str('-d'), text: str('--text'), status: str('--status'),
       depends_on: needs != null ? needs.split(',').map(s => s.trim()).filter(Boolean).map(s => { const n = parseInt(s, 10); return String(n) === s ? n : s; }) : undefined };
     if (Object.values(patch).every(v => v == null)) die('nothing to change\n' + UU);
-    let r; try { r = runTaskUpdate({ id, ...patch, by: authorOrDie('--by') }); } catch (e) { die(e.message); }
+    let r; try { r = runTaskUpdate({ id, ...patch, why: str('--why'), by: authorOrDie('--by') }); } catch (e) { die(e.message); }
     const t = r.task || {};
     console.log(`Task #${id} updated` + (patch.assignee != null ? ` → @${t.assignee || patch.assignee}` : ''));
     for (const w of r.warnings || []) console.log('  warning: ' + w);
@@ -2483,7 +2486,7 @@ const HELP = [
   ['next "<the one next action>" -p <proj>', 'set ## Next step'],
   ['task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>', 'a new task'],
   ['task update <id> [--assignee <role>] [-i <imp>] [-d <date>] [--text <t>] [--needs <ids>] --by <you>', 'change one task (reassign it)'],
-  ['task done <id> --by <you>', 'close a task'],
+  ['task done <id> --why "<ground>" --by <you>', 'close a task on a ground: what was checked, what it showed'],
   ['task list [-p proj] [--status open|done|all] [--json]', 'tasks'],
   ['task get <id> [--json]', 'one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts'],
   ['attempt <task> -o dead|lead|partial|claim|review --lens "<approach>" [--tried ..] [--result ..] [--why ..] [--next ..] [--covered ..] [--builds-on <id>] [--artifact <url>] [--commitment <sha256>] [--of <id> --check <c> --verdict pass|fail] --by <you> [--json]', 'record what you tried on a task and what came of it'],

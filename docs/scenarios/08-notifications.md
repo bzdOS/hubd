@@ -116,22 +116,25 @@ The relay worker finishes the retry fix and hits a wall on the next task. Its he
 decides around the wall and cuts the release. The atlas worker finishes a task:
 
 ```bash
-hub report -p relay --agent relay-dev -m "DONE: pine-2"
+hub report -p relay --agent relay-dev -m "DONE: pine-2
+FACT: retries capped at 5, tests 41 passed"
 hub report -p relay --agent relay-dev -k blocked <<'EOF'
 FACT: the API gateway drops response headers above 8 KB
 pine-4: the rate-limit headers never reach the client; blocked until the gateway is patched
 EOF
 hub decide "ship relay 2.4.1 without the rate-limit headers" --why "the gateway patch is a week out; the retry fix should not wait for it" -p relay --by relay-head
-hub report -p relay --agent relay-head -m "DONE: pine-3"
-hub report -p atlas --agent atlas-dev -m "DONE: fir-1"
+hub report -p relay --agent relay-head -m "DONE: pine-3
+FACT: relay 2.4.1 tagged, CI green"
+hub report -p atlas --agent atlas-dev -m "DONE: fir-1
+FACT: the ranking job reran, 0 errors"
 ```
 
 ```text
-Reported to relay: closed #pine-2
+Reported to relay: 1 fact, closed #pine-2
 Reported to relay: 1 fact, note
 Decided on relay: +1 → ## Decisions
-Reported to relay: closed #pine-3
-Reported to atlas: closed #fir-1
+Reported to relay: 1 fact, closed #pine-3
+Reported to atlas: 1 fact, closed #fir-1
 ```
 
 Five journal entries. Each feed takes what is new to it:
@@ -143,9 +146,9 @@ for f in matrix slack phone; do hub watch --as $f --exec $B/to-$f; done
 ```text
 matrix | [relay/relay-dev] blocked: pine-4: the rate-limit headers never reach the client; blocked until the gateway is patched
 matrix | [relay/relay-head] decision: ship relay 2.4.1 without the rate-limit headers — the gateway patch is a week out; the retry fix should not wait for it
-slack  | relay-dev done: #pine-2 Retry webhook delivery with backoff
+slack  | relay-dev done: #pine-2 Retry webhook delivery with backoff — why: retries capped at 5, tests 41 passed
 slack  | relay-head decision: ship relay 2.4.1 without the rate-limit headers — the gateway patch is a week out; the retry fix should not wait for it
-slack  | relay-head done: #pine-3 Cut release 2.4.1
+slack  | relay-head done: #pine-3 Cut release 2.4.1 — why: relay 2.4.1 tagged, CI green
 ntfy   | blocked | relay/relay-dev: pine-4: the rate-limit headers never reach the client; blocked until the gateway is patched
 ```
 

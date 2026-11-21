@@ -733,7 +733,7 @@ core.setHubBase(WK); core.ensureHubDirs();
   ok(w4.changed && w4.offered.join(',') === String(a1), 'work: when the claim lapses — a dead session, an abandoned turn — the task is offered again');
   queueLib.queueSend('w1', 'clarification: use the staging db', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
   queueLib.queueSend('w1', 'ORDER: do the second job now', { from: 'head-x', root: WK, node: 'n1', task: String(a2) });
-  core.runTaskUpdate({ id: a2, status: 'done', by: 'head-x' });   // the cancellation
+  core.runTaskUpdate({ id: a2, status: 'done', why: 'test: closed on what the test checked', by: 'head-x' });   // the cancellation
   queueLib.queueSend('w1', 'general note, no task', { from: 'head-x', root: WK, node: 'n1' });
   const w5 = await queueLib.queueWait('w1', { timeout: 0, root: WK, work: true });
   ok(w5.changed && !/second job now/.test(w5.text) && /general note/.test(w5.text) && w5.skipped.length === 2 && w5.skipped[0].status[0] === 'done',
@@ -980,7 +980,7 @@ const AK = mktmp();
   const t = core.runTaskAdd({ project: 'cg', by: 'dev-t', text: 'a task in prose' }).task;
   ok(/^task text refused: it carries a base64/.test(err(() => core.runTaskUpdate({ id: t.id, by: 'dev-t', text: b64(2300) }))),
     'cargo: a task update that pastes base64 into the text is refused');
-  ok(err(() => core.runTaskUpdate({ id: t.id, by: 'dev-t', status: 'done' })) === '', 'cargo: an update that leaves the text alone is not checked');
+  ok(err(() => core.runTaskUpdate({ id: t.id, by: 'dev-t', status: 'done', why: 'test: closed on what the test checked' })) === '', 'cargo: an update that leaves the text alone is not checked');
 }
 
 // ── a queue nobody reads takes no more ──

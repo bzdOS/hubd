@@ -23,7 +23,7 @@ core.setHubBase(BD); core.ensureHubDirs();
   core.runTaskAdd({ project: 'web', text: 'on nobody we know', assignee: 'ghost', by: 'dev-t' });
   core.runTaskAdd({ project: 'web', text: 'press the button', assignee: 'boss', by: 'dev-t' });
   core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-dev', kind: 'note', text: `login page done, see #${tDone}` });
-  core.runTaskUpdate({ id: tDone, status: 'done', by: 'web-dev' });
+  core.runTaskUpdate({ id: tDone, status: 'done', why: 'test: closed on what the test checked', by: 'web-dev' });
   core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-head', kind: 'decision', text: 'ACCEPT 0123456789abcdef task/login → main: reviewed' });
   core.journalAppend({ ts: core.now(), project: 'web', agent: 'web-head', kind: 'decision', text: 'REJECT fedcba9876 task/other: tests missing' });
   core.runHeartbeat({ agent: 'web-dev', state: 'turn', turn: 3, turn_started: 'now', task_id: String(tDep) });

@@ -304,6 +304,7 @@ Update a task: close it (status=done), reassign, reprioritise, edit text/deadlin
 | --- | --- | --- | --- |
 | `id` | integer or string | yes | bare number or a node-scoped id like "pine-3" |
 | `status` | one of `open`, `done` |  |  |
+| `why` | string |  | required with status=done: the ground for closing, what was checked and what it showed ("5 of 5 frames in showcase/, check_frames OK"). Kept on the task and in the journal. |
 | `importance` | one of `high`, `med`, `normal` |  |  |
 | `text` | string |  |  |
 | `deadline` | string |  | YYYY-MM-DD, or +Nd for N days from today (UTC) |

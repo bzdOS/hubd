@@ -3230,6 +3230,9 @@ export function runReport(a) {
     for (const e of decisions) journalAppend(e);
   }
   const doneTasks = b.done.length ? knownTasks() : [];
+  // A DONE: line closes on the ground the rest of the report gives: its facts, decisions, notes.
+  const reportGround = String(a.text || '').split('\n').filter(l => l.trim() && !/^\s*(DONE|TASK|NEXT|TO)\s*:/i.test(l))
+    .map(l => l.replace(/^\s*[A-Za-z]+\s*:\s*/, m => REPORT_PREFIX[m.replace(/[\s:]/g, '').toUpperCase()] ? '' : m).trim()).join('; ');
   for (const list of b.done) for (const part of list.split(',')) {
     // id may be a bare number OR a node-scoped string (task #194); resolveDoneId reads "#" and a node left out
     const { id, ambiguous } = resolveDoneId(part, doneTasks, slug);
@@ -3242,13 +3245,17 @@ export function runReport(a) {
     // report work this session did not do.
     if (id) {
       try {
-        const r = runTaskUpdate({ id, status: 'done', by });
+        const r = runTaskUpdate({ id, status: 'done', by, why: reportGround });
         (r.noop === 'already-done' ? summary.doneAlready : summary.done).push(id);
         if (r.released) summary.released = (summary.released || 0) + r.released;
-      } catch { summary.doneMissed.push(id); }
+      } catch (e) {
+        if (/needs a ground/.test(e.message)) (summary.doneNoGround ||= []).push(id);
+        else summary.doneMissed.push(id);
+      }
     }
   }
   if (summary.doneMissed.length) summary.doneForm = DONE_FORM;
+  if (summary.doneNoGround) summary.doneGround = `not closed: ${summary.doneNoGround.join(', ')} — a DONE: line closes on the ground the report gives; add a FACT: line with what was checked and what it showed.`;
   for (const t of b.task) { try { summary.tasks.push(runTaskAdd({ project: slug, text: t, by }).task.id); } catch {} }
   /* A verdict is its own entry, filed under the task's project: the stats read the outcome of an
    * attempt from it, and nothing else about the task changes. Its text opens with the word in
@@ -4009,7 +4016,33 @@ export function normalizeCat(cat, tags) {
 function requireTaskText(text) {
   if (typeof text !== 'string' || !text.trim())
     throw new Error('text required: what the task is, in a line or two, e.g. "fix the checkout timeout on carts of 50+ items"');
+  /* A text that is nothing but a task id ("pine-1473") was filed to have an open task to hang a
+   * done report on, when the task it names was already closed. A report needs no open task: a
+   * DONE: line on a closed one is taken as "already closed", and its FACT: lines are written. */
+  const ids = text.trim().replace(/[.;:]+$/, '').split(/[\s,]+/).filter(Boolean);
+  if (ids.every(w => TASK_ID_ONLY_RE.test(w))) {
+    const id = ids[0].replace(/^#/, '');
+    throw new Error(`task text "${text.trim().slice(0, 80)}" is only a task id: a task is the work, in words. ` +
+      `To report on #${id} when it is closed, report with a line "DONE: ${id}" (taken as already closed; ` +
+      `the report's FACT:/NOTE: lines are written) or name "#${id}" in a note; to work on it again, ` +
+      `hub_task_update {id: "${id}", status: "open"}.`);
+  }
 }
+/* A task is closed on a ground: what was measured and what it showed. Heads closed sixteen tasks
+ * in one minute with nothing said, one of them with two of its five frames made; a rule in their
+ * prompt to "close by measurement" did not stop it, so the hub asks for the ground and keeps it on
+ * the task and in the journal, where the next reader checks it. */
+export const CLOSE_WHY_MIN = 12;
+function requireCloseWhy(why, id) {
+  const w = typeof why === 'string' ? why.trim().replace(/\s+/g, ' ') : '';
+  if (w.length < CLOSE_WHY_MIN || ids_only(w))
+    throw new Error(`closing #${id} needs a ground: why, what was checked and what it showed, ` +
+      `e.g. why: "ls showcase/ = 5 frames, check_frames.py OK". From the CLI: hub task done ${id} --why "<...>" --by <you>; ` +
+      `in a report the report's other lines are the ground, so a DONE: line goes with a FACT: line.`);
+  return w.slice(0, 2000);
+}
+const ids_only = (w) => w.replace(/[.;:]+$/, '').split(/[\s,]+/).filter(Boolean).every(x => TASK_ID_ONLY_RE.test(x) || /^(done|ok|closed|fixed)$/i.test(x));
+const TASK_ID_ONLY_RE = /^#?(?:[a-z][a-z0-9]*(?:-[a-z0-9]+)*-)?\d+$/i;
 
 /* A deadline as a task keeps it: a date stays as given, and `+Nd` becomes the date N days from today,
  * on the same UTC calendar "overdue" and "due soon" are counted on. A page or a script that names a
@@ -4536,7 +4569,8 @@ export function runTaskUpdate(a) {
      * still worth a line in the journal: it says two sessions believed they owned it. */
     const reclose = a.status === 'done' && t.status === 'done';
     if (reclose) delete patch.status;
-    else if (a.status === 'done') patch.done = now();
+    else if (a.status === 'done') { patch.done = now(); patch.why = requireCloseWhy(a.why, t.id); }
+    else if (a.status != null && t.status === 'done') patch.why = null;   // reopened: the old ground no longer holds
     if (reclose && !Object.keys(patch).length) {
       journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',
         text: '= task #' + t.id + ' already closed' + (t.done ? ' ' + t.done : '') + ' — no-op' });
@@ -4594,9 +4628,9 @@ export function runTaskUpdate(a) {
       const bits = [];
       if (a.status && a.status !== 'done') bits.push(a.status);
       if (patch.assignee != null) bits.push('@' + patch.assignee);
-      if (a.status === 'done') {
-        journalAppend({ ts: now(), project: t.project, agent: author, kind: 'done',
-          text: '#' + t.id + ' ' + String(t.text || '').slice(0, 160) });
+      if (patch.done) {
+        journalAppend({ ts: now(), project: t.project, agent: author, kind: 'done', task: t.id, why: patch.why,
+          text: '#' + t.id + ' ' + String(t.text || '').slice(0, 160) + ' — why: ' + (patch.why.length > 160 ? patch.why.slice(0, 159) + '…' : patch.why) });
       }
       if (bits.length) {
         journalAppend({ ts: now(), project: t.project, agent: author, kind: 'task',

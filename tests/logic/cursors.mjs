@@ -107,7 +107,7 @@ fs.rmSync(PK, { recursive: true, force: true });
 const DM = mktmp();
 core.setHubBase(DM); core.ensureHubDirs();
 const dmT = core.runTaskAdd({ project: 'p', text: 'real work', by: 'test' });
-const dmR = core.runReport({ project: 'p', by: 'test', text: `DONE: ${dmT.task.id}, nope-99` });
+const dmR = core.runReport({ project: 'p', by: 'test', text: `DONE: ${dmT.task.id}, nope-99\nFACT: checked by the test` });
 ok(dmR.done.length === 1 && String(dmR.done[0]) === String(dmT.task.id),
   `report: the real id still closes (got ${JSON.stringify(dmR.done)})`);
 ok(JSON.stringify(dmR.doneMissed) === JSON.stringify(['nope-99']),
@@ -126,11 +126,11 @@ const dnEv = (node, n, project) => JSON.stringify({ ts: '2026-10-06 08:00', node
 fs.writeFileSync(path.join(DN, 'tasks.fir.events.jsonl'), dnEv('fir', 471, 'p') + dnEv('fir', 500, 'p') + dnEv('fir', 600, 'p'));
 fs.writeFileSync(path.join(DN, 'tasks.oak.events.jsonl'), dnEv('oak', 500, 'q') + dnEv('oak', 600, 'p'));
 const dnSt = (id) => core.runTaskList({ status: 'all' }).tasks.find(t => t.id === id).status;
-const d1 = core.runReport({ project: 'p', by: 'test', text: 'DONE: #471' });
+const d1 = core.runReport({ project: 'p', by: 'test', text: 'DONE: #471\nFACT: checked by the test' });
 ok(d1.done.join() === 'fir-471' && dnSt('fir-471') === 'done', `report: "DONE: #471" closes fir-471, the one task ending in -471 (${JSON.stringify(d1.done)})`);
-const d2 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 500' });
+const d2 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 500\nFACT: checked by the test' });
 ok(d2.done.join() === 'fir-500' && dnSt('oak-500') === 'open', `report: of two ending in -500, the one in the report's project (${JSON.stringify(d2.done)})`);
-const d3 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 600' });
+const d3 = core.runReport({ project: 'p', by: 'test', text: 'DONE: 600\nFACT: checked by the test' });
 ok(!d3.done.length && d3.doneMissed.join() === '600' && d3.doneAmbiguous[0].tasks.sort().join() === 'fir-600,oak-600' &&
   /Write "DONE: <id>\[, <id>\]"/.test(d3.doneForm) && dnSt('fir-600') === 'open' && dnSt('oak-600') === 'open',
   `report: two in the project ending in -600 close neither, and the reply names both and the form (${JSON.stringify(d3.doneAmbiguous)})`);
@@ -144,7 +144,7 @@ for (const line of ['#600 DONE', 'fir-600 done', 'fir-600: DONE', 'DONE #600', '
 ok(core.journalTail('p', 1000).length === dnLen && dnSt('fir-600') === 'open', 'report: and a refused report writes nothing');
 for (const line of ['3 done, 2 left', 'phase-2 done', 'DONE 3 of 5 steps', 'Done with the build'])
   ok(dnRefused(line) === null, `report: "${line}" is prose, filed as a note`);
-const dnC = cli(['report', '-p', 'p', '--agent', 'test', '-m', 'DONE: 600, nope-1'], { env: { HUBD_DIR: DN }, cwd: DN });
+const dnC = cli(['report', '-p', 'p', '--agent', 'test', '-m', 'DONE: 600, nope-1\nFACT: checked by the test'], { env: { HUBD_DIR: DN }, cwd: DN });
 ok(/NOT closed: #600 \(several end in it: (fir-600, oak-600|oak-600, fir-600)\), #nope-1 \(no such task\).*Write "DONE: <id>/.test(dnC.stderr),
   `CLI: the misses, which kind each is, and the form (${dnC.stderr.trim().slice(0, 120)})`);
 fs.rmSync(DN, { recursive: true, force: true });

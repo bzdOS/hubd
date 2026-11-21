@@ -180,7 +180,7 @@ Task #oak-2 added: bring shop-db up on db-2 from last night's dump  [⛬db-2 ⛬
 An hour later the shop takes orders again, and the task is closed:
 
 ```bash
-hub task done oak-2 --by alice
+hub task done oak-2 --why "orders 12:40-13:40 = 37, checkout 200 OK on db-2" --by alice
 ```
 
 ```text

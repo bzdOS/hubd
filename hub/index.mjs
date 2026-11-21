@@ -164,7 +164,7 @@ const TOOLS = [
   { name: 'hub_task_update',
     description: 'Update a task: close it (status=done), reassign, reprioritise, edit text/deadline/cat.',
     inputSchema: { type: 'object', properties: {
-      id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' }, status: { type: 'string', enum: ['open', 'done'] },
+      id: { type: ['integer', 'string'], description: 'bare number or a node-scoped id like "pine-3"' }, status: { type: 'string', enum: ['open', 'done'] }, why: { type: 'string', description: 'required with status=done: the ground for closing, what was checked and what it showed ("5 of 5 frames in showcase/, check_frames OK"). Kept on the task and in the journal.' },
       importance: { type: 'string', enum: ['high', 'med', 'normal'] },
       text: { type: 'string' }, deadline: { type: 'string', description: 'YYYY-MM-DD, or +Nd for N days from today (UTC)' },
       cat: { type: 'string', description: 'technical | communicative | decision | chore — anything else is kept as a tag instead' },

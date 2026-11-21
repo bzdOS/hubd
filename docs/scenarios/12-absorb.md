@@ -155,10 +155,10 @@ Wrote 5 new file(s); nothing here is rewritten. Next mesh-sync carries them to e
   #pine-2 [shop] Rotate the payment webhook secret
   #pine-stray-2 [shop] Cache the shipping rates: 40% of the cart time now
 (3 tasks)
-2026-10-08 15:37 [shop/head-shop] task: + task #pine-stray-1: Fix the slow cart query the load test found
-2026-10-08 15:37 [shop/worker] done: #pine-stray-1 Fix the slow cart query the load test found
-2026-10-08 15:37 [shop/worker] card: card reported: FACT — with pine-stray-1 in, checkout p95 is 310 ms at 200 orders a minute (840 ms before) [card Facts & hypotheses: 606 B, +26]
-2026-10-08 15:37 [shop/head-shop] task: + task #pine-stray-2: Cache the shipping rates: 40% of the cart time now
+2026-11-21 12:28 [shop/head-shop] task: + task #pine-stray-1: Fix the slow cart query the load test found
+2026-11-21 12:28 [shop/worker] done: #pine-stray-1 Fix the slow cart query the load test found — why: with pine-stray-1 in, checkout p95 is 310 ms at 200 orders a minute (840 ms before)
+2026-11-21 12:28 [shop/worker] card: card reported: FACT — with pine-stray-1 in, checkout p95 is 310 ms at 200 orders a minute (840 ms before) [card Facts & hypotheses: 606 B, +26]
+2026-11-21 12:28 [shop/head-shop] task: + task #pine-stray-2: Cache the shipping rates: 40% of the cart time now
 ```
 
 The three days are in the team hub's history, under their own ids: `pine-1` is the

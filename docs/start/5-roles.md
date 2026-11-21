@@ -75,17 +75,17 @@ Heartbeat: dev-shop -> /tmp/hub-tour/presence/dev-shop.json
 Heartbeat: worker -> /tmp/hub-tour/presence/worker.json
 
 ── shop · head head-shop · done 7d 2 · next 4 · blocked 0
-    ● head-shop         head   alive, seen 1m…               ·
-    ● dev-shop          worker alive, seen 1m… #oak-2        10-07 12:59 queue full: reviewer holds 1 unread message(s), 82 bytes; a message f…
-    ● worker            worker alive, seen 1m…               ·
+    ● head-shop         head   alive, seen 0m…               ·
+    ● dev-shop          worker alive, seen 0m… #oak-2        11-21 12:26 queue full: reviewer holds 1 unread message(s), 82 bytes; a message f…
+    ● worker            worker alive, seen 0m…               ·
   DONE (2)
-    10-07 12:56  #oak-1  choose the payment provider  ← alice: #oak-1 choose the payment provider
-    10-07 12:56  #oak-3  fix the 30 s checkout timeout on big carts  ← dev-shop: #oak-3 fix the 30 s checkout timeout on big carts
+    11-21 12:26  #oak-1  choose the payment provider  ← alice: #oak-1 choose the payment provider — why: decided: PayCo ho…
+    11-21 12:26  #oak-3  fix the 30 s checkout timeout on big carts  ← dev-shop: #oak-3 fix the 30 s checkout timeout on big carts — why: th…
   NEXT (4)
     #oak-2  wire the hosted payment page into checkout
+    #elm-1  write the refund policy page
     #oak-4  load-test checkout with 200 items
     #oak-5  rotate the staging API key @worker
-    #elm-1  write the refund policy page
 
 ── WAITING FOR YOU
   owner queue (1)

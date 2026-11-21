@@ -74,7 +74,7 @@ const foldedOrigin = core.foldTasks();
 ok(foldedOrigin.tasks.find(t => t.id === 7 && t.text === 'peer task'), 'origin fix: peer keeps canonical id 7 (added first)');
 ok(foldedOrigin.tasks.find(t => t.id === 8 && t.text === 'cedar task'), 'origin fix: cedar remapped to 8 on collision (got ' + JSON.stringify(foldedOrigin.tasks.map(t => t.id)) + ')');
 core.rebuildTaskCache();   // runTaskUpdate reads via loadTasks() -> must see the fresh fold, not a stale cache
-core.runTaskUpdate({ id: 7, status: 'done', by: 'test' });   // "cedar" node closing canonical #7 (peer's task)
+core.runTaskUpdate({ id: 7, status: 'done', why: 'test: closed on what the test checked', by: 'test' });   // "cedar" node closing canonical #7 (peer's task)
 const afterOrigin = core.runTaskList({ status: 'all' }).tasks;
 ok(afterOrigin.find(t => t.id === 7).status === 'done', 'origin fix: closing #7 marks the CANONICAL (peer) task done');
 ok(afterOrigin.find(t => t.id === 8).status === 'open', 'origin fix: cedar\'s own remapped task #8 is untouched — the historical mis-close this fix prevents');
@@ -96,20 +96,20 @@ const foldedIds = core.foldTasks().tasks.map(t => t.id);
 ok(new Set(foldedIds).size === foldedIds.length, `id-fix: no collisions even though both nodes started counting from 1 independently (ids: ${JSON.stringify(foldedIds)})`);
 ok(foldedIds.includes('pine-1') && foldedIds.includes('pine-2'), 'id-fix: the offline peer\'s tasks are untouched, no remap needed');
 
-const repDone = core.runReport({ project: 'x', by: 'test', text: `DONE: ${addA.task.id}` });
+const repDone = core.runReport({ project: 'x', by: 'test', text: `DONE: ${addA.task.id}\nFACT: checked by the test` });
 ok(repDone.done.includes(addA.task.id), `id-fix: report DONE: accepts a node-scoped id, not just parseInt-able numbers (got ${JSON.stringify(repDone.done)})`);
 ok(core.runTaskList({ project: 'x', status: 'all' }).tasks.find(t => t.id === addA.task.id).status === 'done', 'id-fix: the node-scoped task is actually closed');
 
 fs.writeFileSync(path.join(idRoot1, 'tasks.legacy.events.jsonl'),
   JSON.stringify({ ts: '2020-01-01 00:00', node: 'legacy', ev: 'add', id: 500, t: { id: 500, project: 'x', text: 'old numeric task', status: 'open' } }) + '\n');
-core.runTaskUpdate({ id: 500, status: 'done', by: 'test' });
+core.runTaskUpdate({ id: 500, status: 'done', why: 'test: closed on what the test checked', by: 'test' });
 ok(core.runTaskList({ project: 'x', status: 'all' }).tasks.find(t => t.id === 500).status === 'done', 'id-fix: legacy bare-numeric ids still resolve end-to-end (backward compatible)');
 
 const dependent = core.runTaskAdd({ project: 'x', text: 'blocked on cedar-2', by: 'test', depends_on: [addB.task.id] });
 const kanban1 = core.runKanban();
 const depRow1 = [...kanban1.queued, ...kanban1.inProgress].find(t => t.id === dependent.task.id);
 ok(depRow1 && depRow1.blocked === true, `id-fix: depends_on a node-scoped id correctly flags blocked (got ${JSON.stringify(depRow1)})`);
-core.runTaskUpdate({ id: addB.task.id, status: 'done', by: 'test' });
+core.runTaskUpdate({ id: addB.task.id, status: 'done', why: 'test: closed on what the test checked', by: 'test' });
 const kanban2 = core.runKanban();
 const depRow2 = [...kanban2.queued, ...kanban2.inProgress].find(t => t.id === dependent.task.id);
 ok(depRow2 && depRow2.blocked === false, 'id-fix: unblocks once the node-scoped dependency closes');
@@ -139,6 +139,50 @@ for (const [what, text] of [['an absent', undefined], ['a blank', '  \n '], ['a 
   ok(/^text required: what the task is/.test(m || ''), `task add: ${what} text is refused (got ${m})`);
 }
 ok(core.runTaskList({ status: 'all' }).tasks.length === 0, 'task add: and nothing was filed');
+// A task whose whole text is another task's id was filed to hang a report on a task already closed.
+for (const text of ['pine-1473', '#pine-1473', ' pine-1473. ', '1473', 'pine-1473, oak-2']) {
+  const m = threw(() => core.runTaskAdd({ project: 'p', by: 'dev-t', text }));
+  ok(/is only a task id/.test(m || '') && /DONE: pine-1473|DONE: 1473/.test(m || '') && /status.*open/.test(m || ''),
+    `task add: "${text}" is refused and the refusal says how to report on it or reopen it (got ${m})`);
+}
+ok(core.runTaskList({ status: 'all' }).tasks.length === 0, 'task add: no task was filed for an id alone');
+ok(core.runTaskAdd({ project: 'p', by: 'dev-t', text: 'pine-1473: the retry still loops' }).task, 'task add: an id with words is a task');
+{
+  const closed = core.runTaskList({ status: 'all' }).tasks[0].id;
+  core.runTaskUpdate({ id: closed, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
+  const r = core.runReport({ project: 'p', agent: 'dev-t', text: `DONE: ${closed}\nFACT: checked again after the close` });
+  ok(r.ok && r.doneAlready.includes(closed) && r.facts === 1 && core.runTaskList({ status: 'all' }).tasks.length === 1,
+    `a report on a closed task goes through as it is, with no task filed for it (${JSON.stringify(r.doneAlready)})`);
+}
+// A task is closed on a ground. Heads closed sixteen tasks in a minute with nothing said, one of
+// them with two of its five frames made; a prompt rule asking for a measurement did not stop it.
+{
+  const g = core.runTaskAdd({ project: 'p', by: 'dev-t', text: 'five showcase frames' }).task;
+  for (const why of [undefined, '', '   ', 'done', g.id, 'ok.']) {
+    const m = threw(() => core.runTaskUpdate({ id: g.id, status: 'done', why, by: 'dev-t' }));
+    ok(/needs a ground: why, what was checked and what it showed/.test(m || '') && /--why/.test(m || ''),
+      `close: why ${JSON.stringify(why)} is refused and the refusal says what is wanted (got ${m})`);
+  }
+  ok(core.runTaskGet({ id: g.id }).task.status === 'open', 'close: and the task stays open');
+  const why = 'ls showcase/ = 5 frames, check_frames.py OK';
+  core.runTaskUpdate({ id: g.id, status: 'done', why, by: 'dev-t' });
+  const got = core.runTaskGet({ id: g.id }).task;
+  ok(got.status === 'done' && got.why === why, `close: with a ground it closes and the task keeps it (${got.why})`);
+  const line = fs.readFileSync(path.join(TE, fs.readdirSync(TE).find(f => /^journal\.[^.]+\.jsonl$/.test(f))), 'utf8')
+    .trim().split('\n').map(l => JSON.parse(l)).filter(e => e.kind === 'done' && e.task === g.id).pop();
+  ok(line && line.why === why && line.text.includes('why: ' + why), 'close: the ground is journaled beside the close');
+  core.runTaskUpdate({ id: g.id, status: 'open', by: 'dev-t' });
+  ok(!core.runTaskGet({ id: g.id }).task.why, 'reopen: the old ground goes with the close it was for');
+  const r1 = core.runReport({ project: 'p', agent: 'dev-t', text: `DONE: ${g.id}` });
+  ok(!r1.done.includes(g.id) && (r1.doneNoGround || []).includes(g.id) && /add a FACT: line/.test(r1.doneGround || '') &&
+    core.runTaskGet({ id: g.id }).task.status === 'open', 'report: a DONE: line alone closes nothing and says what to add');
+  const r2 = core.runReport({ project: 'p', agent: 'dev-t', text: `DONE: ${g.id}\nFACT: 5 of 5 frames, check_frames OK` });
+  ok(r2.done.includes(g.id) && /5 of 5 frames/.test(core.runTaskGet({ id: g.id }).task.why || ''), 'report: with a FACT: line it closes, and that is its ground');
+  // a fresh task: a second reopen in the same minute is the same event line as the first, and is read once
+  const g2 = core.runTaskAdd({ project: 'p', by: 'dev-t', text: 'the cli path' }).task;
+  const cliNo = cli(['task', 'done', g2.id, '--by', 'dev-t'], { env: { HUBD_DIR: TE } });
+  ok(cliNo.code !== 0 && /needs a ground/.test(cliNo.stderr), `cli: task done without --why is refused (${cliNo.code} ${cliNo.out.slice(0, 200)})`);
+}
 const tKeep = core.runTaskAdd({ project: 'p', by: 'dev-t', text: 'keep this text' }).task;
 ok(/^text required/.test(threw(() => core.runTaskUpdate({ id: tKeep.id, by: 'dev-t', text: '' })) || '') &&
   core.runTaskGet({ id: tKeep.id }).task.text === 'keep this text', 'task update: blanking the text is refused and the text stays');
@@ -158,24 +202,24 @@ fs.rmSync(TE, { recursive: true, force: true });
   core.runClaim({ task: a, agent: 'dev-a' }); core.runClaim({ task: a, agent: 'dev-b' });
   core.runClaim({ task: b, agent: 'dev-a' }); core.runClaim({ task: c, agent: 'dev-a' });
   core.runClaim({ project: 'p', area: 'src/**', agent: 'dev-a' });
-  const ua = core.runTaskUpdate({ id: a, status: 'done', by: 'dev-a' });
+  const ua = core.runTaskUpdate({ id: a, status: 'done', why: 'test: closed on what the test checked', by: 'dev-a' });
   ok(ua.released === 2 && live(a) === 0, `task done: every claim on the task is released, whoever held it (released ${ua.released}, left ${live(a)})`);
   ok(live(c) === 1 && core.loadClaims().claims.some(x => x.area === 'src/**'), 'task done: claims on other tasks and on files stay');
-  const rb = core.runReport({ project: 'p', by: 'dev-a', text: `DONE: ${b}` });
+  const rb = core.runReport({ project: 'p', by: 'dev-a', text: `DONE: ${b}\nFACT: checked by the test` });
   ok(rb.done.includes(b) && rb.released === 1 && live(b) === 0, `report DONE: the closed task's claim is released and counted (released ${rb.released})`);
   // A claim that outlived the first close (or was taken by a stale writer) goes with a reclose.
   const db = core.loadClaims(); db.claims.push({ id: 'stale', project: 'p', area: core.taskClaimArea(a), agent: 'dev-c', since: core.now(), ttlMin: 60 });
   fs.writeFileSync(path.join(TR, 'claims.json'), JSON.stringify(db));
-  const re = core.runTaskUpdate({ id: a, status: 'done', by: 'dev-c' });
+  const re = core.runTaskUpdate({ id: a, status: 'done', why: 'test: closed on what the test checked', by: 'dev-c' });
   ok(re.noop === 'already-done' && re.released === 1 && live(a) === 0, 'task done: a reclose is still a no-op on the task, and still releases');
   ok(core.runTaskUpdate({ id: c, importance: 'high', by: 'dev-a' }).released === undefined && live(c) === 1, 'task update: an edit that does not close releases nothing');
   // the CLI says so, on both closing paths
   core.runClaim({ task: c, agent: 'dev-b' });
-  const out1 = cli(['task', 'done', String(c), '--by', 'dev-a'], { env });
+  const out1 = cli(['task', 'done', String(c), '--why', 'test: closed on what the test checked', '--by', 'dev-a'], { env });
   ok(out1.code === 0 && /closed\n  released 2 claims on it/.test(out1.stdout), `hub task done: prints the release (got ${out1.stdout.trim().replace(/\n/g, ' | ')})`);
   const d = core.runTaskAdd({ project: 'p', text: 'close from a shell report', by: 'dev-t' }).task.id;
   core.runClaim({ task: d, agent: 'dev-a' });
-  const out2 = cli(['report', '-p', 'p', '--agent', 'dev-a'], { env, input: `DONE: ${d}\n` });
+  const out2 = cli(['report', '-p', 'p', '--agent', 'dev-a'], { env, input: `DONE: ${d}\nFACT: checked by the test\n` });
   ok(out2.code === 0 && new RegExp(`closed #${d}, released 1 task claim$`, 'm').test(out2.stdout), `hub report: names the release beside the close (got ${out2.stdout.trim().replace(/\n/g, ' | ')})`);
   core.setHubBase(T0); core.ensureHubDirs();
 }
@@ -206,14 +250,14 @@ fs.rmSync(TI, { recursive: true, force: true });
 const ID = mktmp();
 core.setHubBase(ID); core.ensureHubDirs();
 const idT = core.runTaskAdd({ project: 'p', text: 'close me twice', by: 'dev-t' }).task;
-const close1 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'dev-t' });
-const close2 = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'other-t' });
+const close1 = core.runTaskUpdate({ id: idT.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
+const close2 = core.runTaskUpdate({ id: idT.id, status: 'done', why: 'test: closed on what the test checked', by: 'other-t' });
 ok(!close1.noop && close2.noop === 'already-done', 'idempotent done: the second close reports itself as a no-op');
 const idEvents = fs.readFileSync(path.join(ID, `tasks.${core.JOURNAL_NODE}.events.jsonl`), 'utf8')
   .trim().split('\n').map(l => JSON.parse(l)).filter(e => e.patch && e.patch.status === 'done');
 ok(idEvents.length === 1, `idempotent done: exactly one done event on disk (got ${idEvents.length})`);
 ok(core.journalTail('p', 20).some(e => /already closed/.test(e.text)), 'idempotent done: the attempt is still journalled');
-const close3 = core.runTaskUpdate({ id: idT.id, status: 'done', assignee: 'zed', by: 'dev-t' });
+const close3 = core.runTaskUpdate({ id: idT.id, status: 'done', why: 'test: closed on what the test checked', assignee: 'zed', by: 'dev-t' });
 ok(close3.task.assignee === 'zed' && close3.task.done === close1.task.done,
   'idempotent done: a re-close carrying a real edit applies the edit and keeps the original close time');
 
@@ -223,7 +267,7 @@ ok(reopen.task.status === 'open' && !('done' in reopen.task), `reopen: the answe
 const reopened = core.runTaskList({ project: 'p', status: 'all' }).tasks.find(t => t.id === idT.id);
 ok(reopened && reopened.status === 'open' && !('done' in reopened),
   `reopen: the fold drops the close time, so the task does not read as closed (got ${reopened && reopened.done})`);
-const reclosed = core.runTaskUpdate({ id: idT.id, status: 'done', by: 'dev-t' });
+const reclosed = core.runTaskUpdate({ id: idT.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
 ok(!reclosed.noop && !!reclosed.task.done, 'reopen: closing it again is a new close, with its own time');
 
 // ── cat is a closed vocabulary; anything else survives as a tag ──
@@ -317,11 +361,11 @@ ok(/did you mean: acme-io/.test(nearErr), 'hub_get: a near-miss slug is suggeste
 
 // ── closing a task does not silently leave its resources reading "planned" ──
 const rhTask = core.runTaskAdd({ project: 'p', text: 'ship it', resources: ['api-core'], by: 'dev-t' }).task;
-const rhDone = core.runTaskUpdate({ id: rhTask.id, status: 'done', by: 'dev-t' });
+const rhDone = core.runTaskUpdate({ id: rhTask.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
 ok(/api-core \(planned\)/.test(rhDone.resourceHint || ''), 'close: a linked resource still marked planned is reported');
 core.runResourceSet({ slug: 'api-core', status: 'live', by: 'dev-t' });
 const rhTask2 = core.runTaskAdd({ project: 'p', text: 'ship again', resources: ['api-core'], by: 'dev-t' }).task;
-ok(!core.runTaskUpdate({ id: rhTask2.id, status: 'done', by: 'dev-t' }).resourceHint,
+ok(!core.runTaskUpdate({ id: rhTask2.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' }).resourceHint,
   'close: a live resource produces no noise');
 
 // ── a renamed project stops holding two separate backlogs ──
@@ -353,7 +397,7 @@ const nx = core.runNext({});
 ok(String(nx.task.id) === String(nxDep.id),
   `next: a blocked high-importance task never wins over a ready one (${nx.task && nx.task.id})`);
 ok(nx.blockedCount === 1 && nx.eligible === 2, `next: reports what was eligible and what was blocked (${nx.eligible}/${nx.blockedCount})`);
-core.runTaskUpdate({ id: nxDep.id, status: 'done', by: 'dev-t' });
+core.runTaskUpdate({ id: nxDep.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
 const nx2 = core.runNext({});
 ok(String(nx2.task.id) === String(nxBlocked.id) && /importance high/.test(nx2.why),
   'next: closing the dependency unblocks it, and the reason is stated');
@@ -464,7 +508,7 @@ core.setHubBase(JW); core.ensureHubDirs();
 const jwT = core.runTaskAdd({ project: 'p', text: 'the work', by: 'dev-t' }).task;
 core.runTaskUpdate({ id: jwT.id, assignee: 'dev-atlas', by: 'lead-t' });
 core.runTaskUpdate({ id: jwT.id, importance: 'high', deadline: '2026-12-01', by: 'lead-t' });
-core.runTaskUpdate({ id: jwT.id, status: 'done', by: 'dev-atlas' });
+core.runTaskUpdate({ id: jwT.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-atlas' });
 // A deadline in days from today: what a page or a script can say that does not rot.
 {
   const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
@@ -761,7 +805,7 @@ ok(core.loadTasks().tasks.length === 1 && JSON.parse(fs.readFileSync(path.join(F
   const h = Object.fromEntries((g.holding || []).map(x => [String(x.id), x]));
   ok(g.holding && g.holding.length === 2 && h[part.id].assignee === 'w1' && h[said.task.id].assignee === null && h[part.id].lastMoved,
     'links: task get shows what holds an epic: each open task it waits on, who has it (or nobody) and when it last moved');
-  core.runTaskUpdate({ id: part.id, status: 'done', by: 'tester' });
+  core.runTaskUpdate({ id: part.id, status: 'done', why: 'test: closed on what the test checked', by: 'tester' });
   ok(core.runTaskGet({ id: epic.id }).holding.length === 1, 'links: a closed part no longer holds it');
 }
 

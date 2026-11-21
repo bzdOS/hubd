@@ -4,6 +4,23 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.86 — 2026-11-21
+
+- **A task is closed on a ground.** Heads closed sixteen tasks in a minute with nothing said,
+  one of them with two of its five frames made, and a prompt rule asking for a measurement did
+  not stop it. Closing now needs `why`: what was checked and what it showed. `hub task done <id>
+  --why "..."`, `hub task update --status done --why`, and `why` in `hub_task_update`; an empty
+  one, a bare id or a "done" is refused with what is wanted. In a report, a `DONE:` line closes on
+  the ground the report's other lines give (`FACT:`, `DECIDE:`, notes); a report of `DONE:` alone
+  closes nothing and says to add a `FACT:` line (`doneNoGround`). The ground is kept on the task
+  (`task get` shows it), journaled beside the close, and cleared when the task is reopened.
+- **A task whose whole text is a task id is refused.** Agents filed tasks reading only
+  `pine-1473` to have an open task to hang a done report on, after the task they meant was
+  closed. A report needs no open task: a `DONE:` line on a closed one is taken as already
+  closed, and the report's other lines are written. `hub_task_add` (and a text edit in
+  `hub_task_update`) now refuses a text made only of task ids, and the refusal says both ways
+  out: report with `DONE: <id>` or name `#<id>` in a note, or reopen with `status: open`.
+
 ## 0.9.85 — 2026-11-21
 
 - **Reactions, run by the MCP server.** `hub watch --exec` reacts to the journal only while a

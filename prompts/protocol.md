@@ -91,6 +91,11 @@ held back goes with its context. The quoted `'EOF'` keeps `$` and backticks in t
 - Lines with no prefix become a NOTE. A report that is ONLY a NOTE is usually
   coordination — use `hub claim` instead.
 - Shortcuts: `hub decide "<what>" --why "<why>" -p <proj>`, `hub next "<...>" -p <proj>`.
+- **A task closes on a ground.** A `DONE:` line closes on what the rest of the
+  report says, so it goes with a `FACT:` line: what was checked and what it
+  showed. `DONE:` alone closes nothing (`doneNoGround`). Outside a report:
+  `hub task done <id> --why "<what was checked, what it showed>"`. A report on a
+  task already closed needs no new task: `DONE: <id>` reads as already closed.
 - **DONE: closes tasks by id, no per-task confirmation** — check EACH id in the
   list is actually finished before writing the line, not just the ones you're
   most confident about. `DONE: 12, 13, 14` closes all three the instant the

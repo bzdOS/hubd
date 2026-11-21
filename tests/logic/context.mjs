@@ -387,7 +387,7 @@ ok(/nothing to record/.test(usErr),
 usageLib.runUsageAdd({ agent: 'dev-t', project: 'p', seconds: 900, tokensIn: 120000, tokensOut: 8000, costUsd: 1.85, model: 'm' });
 usageLib.runUsageAdd({ agent: 'other-t', project: 'q', costUsd: 0.15 });
 const usTask = core.runTaskAdd({ project: 'p', text: 'closed one', by: 'dev-t' }).task;
-core.runTaskUpdate({ id: usTask.id, status: 'done', by: 'dev-t' });
+core.runTaskUpdate({ id: usTask.id, status: 'done', why: 'test: closed on what the test checked', by: 'dev-t' });
 const us = usageLib.runUsage({ days: 7 });
 ok(us.supplied.calls === 2 && us.supplied.costUsd === 2 && us.supplied.tokensIn === 120000,
   `usage: supplied numbers aggregate (${JSON.stringify({ c: us.supplied.calls, $: us.supplied.costUsd })})`);

@@ -182,7 +182,7 @@ const HL = mktmp();
   const c3 = cli(['claim', 'smokeproj', 'x', '--bogus', '1', '--agent', 'smoke'], { env });
   ok(c3.code !== 0 && /unknown flag --bogus/.test(c3.out), 'claim: an unknown flag is refused, not swallowed as the area');
   const tid = (/^Task #(\S+) added/m.exec(cli(['task', 'add', 'close me', '-p', 'smokeproj', '--by', 'smoke'], { env }).out) || [])[1];
-  const td = cli(['task', 'done', '--by', 'smoke', String(tid)], { env });
+  const td = cli(['task', 'done', '--by', 'smoke', '--why', 'smoke: closed on what the test checked', String(tid)], { env });
   ok(tid && td.code === 0 && /closed/.test(td.out), 'task done: --by before the id closes the id, not the word --by');
   const uid = (/^Task #(\S+) added/m.exec(cli(['task', 'add', 'move me', '-p', 'smokeproj', '--assignee', 'old-role', '--by', 'smoke'], { env }).out) || [])[1];
   const tu = cli(['task', 'update', '--by', 'smoke', String(uid), '--assignee', 'new-role', '-i', 'high'], { env });

@@ -156,19 +156,25 @@ hub recall "contract notice"
 ```text
 Task #oak-7 added: Plan the cut-over weekend with the new provider
 Reported to payments-move: 1 decision, 2 facts, closed #oak-2 #oak-3
-recall "contract notice" — 4 hit(s), top 4
+recall "contract notice" — 6 hit(s), top 6
 
-[section] payments-move card / Facts & hypotheses  as of 2026-10-07 17:08
+[section] payments-move card / Facts & hypotheses  as of 2026-11-21 12:28
   - hypothesis: [?] unconfirmed: the contract allows leaving with 30 days' notice
 
-[section] payments-move card / Facts & hypotheses  as of 2026-10-07 17:08
+[section] payments-move card / Facts & hypotheses  as of 2026-11-21 12:28
   - fact: the contract allows leaving with 30 days' written notice (clause 14.2)
 
-[task] task #oak-4 (open)  as of 2026-10-07 17:08
+[task] task #oak-4 (open)  as of 2026-11-21 12:28
   Give the current provider notice once the new contract is signed
 
-[journal] journal 2026-10-07 17:08 [payments-move/alice]  as of 2026-10-07 17:08
+[journal] journal 2026-11-21 12:28 [payments-move/alice]  as of 2026-11-21 12:28
   + task #oak-4: Give the current provider notice once the new contract is signed
+
+[journal] journal 2026-11-21 12:28 [payments-move/alice]  as of 2026-11-21 12:28
+  #oak-2 Ask two providers for a quote at our volume (about 3,000 payments a month) — why: go with the provider that quoted 1.3% flat | the lowest fee, and it moves stored cards itself; the contract allows leaving with 30
+
+[journal] journal 2026-11-21 12:28 [payments-move/alice]  as of 2026-11-21 12:28
+  #oak-3 Find out whether the new provider moves stored cards, or customers enter them again — why: go with the provider that quoted 1.3% flat | the lowest fee, and it moves stored cards itself; the contract allows leaving
 ```
 
 The guess and the fact that settled it are both on the card, in that order: the

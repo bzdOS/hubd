@@ -26,7 +26,7 @@ Every `hub` command as `hub help` lists it; `hub <command> --help` prints the li
 | [`reflect`](#reflect) | the reflection digest: results and obstacles per role, the latest facts, repeated rules; candidates for the project's laws: a rule said 3 times by one role, or by 2 roles; the head's verdict on a candidate; an accepted one is a law, in hub_context; the head dictates a law: no reflection has to have grown it first; the project's laws, one per line |
 | [`decide`](#decide) | append a decision to ## Decisions |
 | [`next`](#next) | set ## Next step |
-| [`task`](#task) | a new task; change one task (reassign it); close a task; tasks; one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
+| [`task`](#task) | a new task; change one task (reassign it); close a task on a ground: what was checked, what it showed; tasks; one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts; move categories off the fixed list into tags (dry run without --apply) |
 | [`attempt`](#attempt) | record what you tried on a task and what came of it |
 | [`card`](#card) | set a project card without a folder; fix lines of a card, leave the rest byte-for-byte; read a card back: whole, its sections as data, or one section's body (exit 1 when the card does not hold it); union the list hunks of a conflicted card, name the rest; on this node, merge cards by ## section (both versions kept and marked), and snapshot/presence/sense/read-mark files by their time |
 | [`cards`](#cards) | move the overflow of over-long card sections into projects/history/ (dry run without --apply); merge two cards for the same project (dry run without --apply); fold a section a card holds twice (same heading, or two locales) into the live one |
@@ -162,7 +162,7 @@ Also: `hub where`
 
 - `hub task add "<text>" -p <proj> [-i high|med] [-d YYYY-MM-DD|+Nd] [--cat <cat>] [--tag <t>] [--assignee <who>] [--needs 1,2] [--resource <slug>] --by <you>` — a new task
 - `hub task update <id> [--assignee <role>] [-i <imp>] [-d <date>] [--text <t>] [--needs <ids>] --by <you>` — change one task (reassign it)
-- `hub task done <id> --by <you>` — close a task
+- `hub task done <id> --why "<ground>" --by <you>` — close a task on a ground: what was checked, what it showed
 - `hub task list [-p proj] [--status open|done|all] [--json]` — tasks
 - `hub task get <id> [--json]` — one task, where else its id appears, what holds it (who has each task it waits on), and its thread of attempts
 - `hub task retag [--apply --by <you>]` — move categories off the fixed list into tags (dry run without --apply)
@@ -435,5 +435,5 @@ The commands each flag appears with, in their usage lines.
 | `--vars` | [prompts](#prompts) |
 | `--verdict` | [attempt](#attempt) |
 | `--verify` | [setup](#setup) |
-| `--why` | [decide](#decide), [attempt](#attempt) |
+| `--why` | [decide](#decide), [task](#task), [attempt](#attempt) |
 | `--with` | [card](#card) |

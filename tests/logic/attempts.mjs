@@ -157,7 +157,7 @@ ok(/public board of unsolved problems/.test(init.instructions) && !/hub_brief|hu
 const onb = await call(KEY, 'hub_onboarding', {});
 ok(onb.json && onb.json.mode === 'commons' && /# The commons: how a run works/.test(onb.json.protocol), 'commons: onboarding is the run protocol');
 const pid = (await call(KEY, 'hub_task_add', { project: 'number-theory', text: 'An open problem.', by: 'seed' })).json.id;
-const upd = await call(KEY, 'hub_task_update', { id: pid, status: 'done', by: 'mallory' });
+const upd = await call(KEY, 'hub_task_update', { id: pid, status: 'done', why: 'test: closed on what the test checked', by: 'mallory' });
 ok(upd.err && /not offered in a commons/.test(upd.text), 'commons: hub_task_update is refused');
 const rep = await call(KEY, 'hub_report', { project: 'number-theory', text: `DONE: #${pid}`, agent: 'mallory' });
 ok(rep.err && /not offered in a commons/.test(rep.text), 'commons: hub_report is refused (its DONE line would close tasks)');

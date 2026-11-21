@@ -210,7 +210,7 @@ Alice decides, and says why, so the reason outlives the conversation it was made
 
 ```bash
 hub decide "PayCo's hosted page" --why "cheapest fees at our volume, and no card data touches us" -p shop --by alice
-hub task done oak-1 --by alice
+hub task done oak-1 --why "decided: PayCo hosted page, the decision is in the journal" --by alice
 ```
 
 ```text

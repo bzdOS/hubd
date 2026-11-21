@@ -75,8 +75,8 @@ const TASKS = [
 for (const [text, proj, imp, who] of TASKS) {
   hub('task', 'add', text, '-p', proj, ...(imp ? ['-i', imp] : []), ...(who ? ['--assignee', who] : []), '--by', 'product-' + proj);
 }
-hub('task', 'done', 'demo-11', '--by', 'qa-atlas');   // the two already in DONE TODAY when filming starts
-hub('task', 'done', 'demo-12', '--by', 'sre-relay');
+hub('task', 'done', 'demo-11', '--why', 'filmed: closed before the take', '--by', 'qa-atlas');   // the two already in DONE TODAY when filming starts
+hub('task', 'done', 'demo-12', '--why', 'filmed: closed before the take', '--by', 'sre-relay');
 
 // The journal is written directly so the timeline reads like a worked day rather than one minute
 // of scripting. Timestamps are minutes BEFORE NOW, not clock times on a date: filmed in the

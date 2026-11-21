@@ -101,8 +101,8 @@ hub task list -p atlas
 ```
 
 ```text
-2026-10-07 16:55 [atlas/atlas-dev] done: #fir-1 Ship search ranking v2
-2026-10-07 16:55 [atlas/atlas-dev] note: ranking v2 merged in PR 212; the A/B switch defaults to off
+2026-11-21 12:27 [atlas/atlas-dev] done: #fir-1 Ship search ranking v2 — why: ranking v2 merged in PR 212; the A/B switch defaults to off
+2026-11-21 12:27 [atlas/atlas-dev] note: ranking v2 merged in PR 212; the A/B switch defaults to off
   #fir-5 [atlas] Audit third-party scripts on the landing page
   #fir-2 [atlas] @atlas-head Turn ranking v2 on for 10% of traffic
   #fir-4 [atlas] @atlas-dev Rewrite the onboarding copy
