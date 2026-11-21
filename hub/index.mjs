@@ -781,8 +781,10 @@ function envNudge() {
 function nudges(name) {
   if (name === 'hub_onboarding' || name === 'hub_whatsnew') return [];
   const n = [];
-  if (!onboarded && offered('hub_onboarding', 'stdio')) n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' });
-  if (!whatsnewChecked && offered('hub_whatsnew', 'stdio')) n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' });
+  // Each tip is said once per session. Said on every result until the tool was called, it was a
+  // line of noise on every call for an agent that had no reason to call it.
+  if (!onboarded && offered('hub_onboarding', 'stdio')) { onboarded = true; n.push({ type: 'text', text: '💡 New here? Call hub_onboarding first (one-time — how this hub works: claim vs task vs report vs queue).' }); }
+  if (!whatsnewChecked && offered('hub_whatsnew', 'stdio')) { whatsnewChecked = true; n.push({ type: 'text', text: '💡 Call hub_whatsnew({agent:"<you>"}) to see what changed since you last checked in, instead of re-reading from scratch.' }); }
   const e = envNudge();
   if (e) n.push({ type: 'text', text: e });
   return n;

@@ -4,6 +4,13 @@ All notable changes to `@bzdos/hubd`. Dates are release-commit dates.
 The file format (markdown + JSONL, append-only logs) is the stable contract;
 a version here never migrates or deletes data.
 
+## 0.9.83 — 2026-11-21
+
+- **The tips are said once.** Over stdio every tool result carried two tips, to call
+  `hub_onboarding` and `hub_whatsnew`, until the session called them; an agent with no reason to
+  call them read both lines on every call. Each is now said on the first result of a session
+  and not again.
+
 ## 0.9.82 — 2026-11-20
 
 - **Work nobody holds is said apart.** An open high task with no assignee sat four days among

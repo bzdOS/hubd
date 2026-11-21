@@ -485,6 +485,11 @@ ok((fs.readFileSync(path.join(SL, 'AGENTS.md'), 'utf8').match(/## Amendments/g) 
   ok(/\n "openTasks"/.test(all.call(0).content[0].text) && JSON.parse(all.call(0).content[0].text).openTasks.length === 12,
     'preset: unset, hub_context is indented and holds every open task');
 
+  const tips = (r) => r.content.filter(c => /^💡/.test(c.text)).length;
+  const twice = mcp({}, [ctxCall, ctxCall, ctxCall]);
+  ok(tips(twice.call(0)) === 2 && tips(twice.call(1)) === 0 && tips(twice.call(2)) === 0,
+    `nudges: the onboarding and whatsnew tips are said once per session, not on every result (${[0, 1, 2].map(i => tips(twice.call(i))).join(',')})`);
+
   const w = mcp({ HUBD_TOOLS: 'worker' }, [ctxCall, { name: 'hub_brief', arguments: {} }, { name: 'hub_status', arguments: {} }]);
   ok(w.tools.length > 0 && w.tools.length <= 15 && w.tools.includes('hub_queue_wait') && w.tools.includes('hub_report') && !w.tools.includes('hub_task_add'),
     `tools: the worker profile is at most 15 tools, its loop among them (${w.tools.length}: ${w.tools.join(' ')})`);
